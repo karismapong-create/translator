@@ -304,6 +304,7 @@ class MainActivity : Activity() {
         t.translate(src)
             .addOnSuccessListener { tr ->
                 trView.text = tr
+                Pronouncer.attach(this, segments, trView, tr, to.mlkit)
                 scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
                 queueSpeech(id, tr)
             }
