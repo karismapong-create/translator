@@ -3,6 +3,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <queries>
         <intent><action android:name="android.speech.RecognitionService" /></intent>
@@ -36,5 +40,13 @@
             android:label="마이크 진단"
             android:exported="false"
             android:screenOrientation="portrait" />
+        <activity
+            android:name=".ImportActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <service
+            android:name=".BuildService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
