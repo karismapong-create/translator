@@ -6,16 +6,18 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import java.util.concurrent.Executors
 
-// Adds the pronunciation line under a translation. For now it is written in Hangul for Korean speakers.
+// Adds the pronunciation line under a translation:
+// Hangul for Korean speakers, Latin letters for everyone else reading Korean, Japanese or Chinese.
 object Pronunciation {
     private val worker = Executors.newSingleThreadExecutor()
 
     fun attach(activity: Activity, parent: LinearLayout, anchor: TextView, text: String, lang: String, home: String) {
-        if (home != "ko" || lang == "ko") return
-        if (lang != "de") {
+        if (lang == home) return
+        if (home == "ko" && lang != "de") {
             Pronouncer.attach(activity, parent, anchor, text, lang)
             return
         }
+        if (home != "ko" && lang !in setOf("ko", "ja", "zh")) return
         val view = TextView(activity).apply {
             this.text = "…"
             textSize = 18f
@@ -23,7 +25,11 @@ object Pronunciation {
         }
         parent.addView(view, parent.indexOfChild(anchor) + 1)
         worker.execute {
-            val result = try { German.convert(text) } catch (_: Throwable) { "" }
+            val result = try {
+                if (home == "ko") German.convert(text) else Romanizer.convert(text, lang).orEmpty()
+            } catch (_: Throwable) {
+                ""
+            }
             activity.runOnUiThread {
                 if (result.isBlank()) parent.removeView(view) else view.text = "[$result]"
             }
