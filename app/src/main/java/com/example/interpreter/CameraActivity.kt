@@ -75,7 +75,7 @@ class CameraActivity : ComponentActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var frozenImage: ImageView
-    private lateinit var overlay: Overlay
+    private lateinit var textOverlay: TextOverlay
     private lateinit var srcSpinner: Spinner
     private lateinit var tgtSpinner: Spinner
     private lateinit var statusView: TextView
@@ -109,7 +109,7 @@ class CameraActivity : ComponentActivity() {
             scaleType = ImageView.ScaleType.FIT_XY
             visibility = View.GONE
         }
-        overlay = Overlay(this)
+        textOverlay = TextOverlay(this)
 
         val labels = langs.map { it.label }
         srcSpinner = Spinner(this).apply {
@@ -163,10 +163,11 @@ class CameraActivity : ComponentActivity() {
             addView(credit)
             addView(buttonRow)
         }
+        val overlayView: View = textOverlay
         val root = FrameLayout(this).apply {
             addView(previewView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(frozenImage, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-            addView(overlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(overlayView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
         }
         setContentView(root)
@@ -228,7 +229,7 @@ class CameraActivity : ComponentActivity() {
         cache.clear()
         pending.clear()
         blocks = emptyList()
-        overlay.invalidate()
+        textOverlay.invalidate()
         if (src.code == tgt.code) {
             status("서로 다른 두 언어를 고르세요.")
             return
@@ -302,13 +303,13 @@ class CameraActivity : ComponentActivity() {
                     cache[text] = tr
                     if (!frozen) {
                         blocks.filter { it.text == text }.forEach { it.tr = tr }
-                        overlay.invalidate()
+                        textOverlay.invalidate()
                     }
                 }
                 .addOnFailureListener { pending.remove(text) }
         }
         blocks = found
-        overlay.invalidate()
+        textOverlay.invalidate()
     }
 
     /* ---------- Freeze and translate with the chosen engine ---------- */
@@ -321,7 +322,7 @@ class CameraActivity : ComponentActivity() {
         frozenImage.setImageBitmap(bmp)
         frozenImage.visibility = View.VISIBLE
         blocks = emptyList()
-        overlay.invalidate()
+        textOverlay.invalidate()
         freezeButton.text = "다시 실시간"
         status("글자 인식 중…")
         r.process(InputImage.fromBitmap(bmp, 0))
@@ -331,7 +332,7 @@ class CameraActivity : ComponentActivity() {
                 imgH = bmp.height
                 val found = toBlocks(result)
                 blocks = found
-                overlay.invalidate()
+                textOverlay.invalidate()
                 if (found.isEmpty()) status("글자를 찾지 못했어요. 다시 실시간으로 비춰 보세요.")
                 else translateFrozen(found, gen)
             }
@@ -365,7 +366,7 @@ class CameraActivity : ComponentActivity() {
                 runOnUiThread {
                     if (gen == generation) {
                         b.tr = tr
-                        overlay.invalidate()
+                        textOverlay.invalidate()
                     }
                 }
             }
@@ -379,14 +380,14 @@ class CameraActivity : ComponentActivity() {
         val hit = cache[b.text]
         if (hit != null) {
             b.tr = hit
-            overlay.invalidate()
+            textOverlay.invalidate()
             return
         }
         val t = translator ?: return
         t.translate(b.text).addOnSuccessListener { tr ->
             if (gen == generation) {
                 b.tr = tr
-                overlay.invalidate()
+                textOverlay.invalidate()
             }
         }
     }
@@ -397,7 +398,7 @@ class CameraActivity : ComponentActivity() {
         frozenImage.visibility = View.GONE
         frozenImage.setImageBitmap(null)
         blocks = emptyList()
-        overlay.invalidate()
+        textOverlay.invalidate()
         freezeButton.text = "멈추고 정확히 번역"
         status(readyText())
     }
@@ -441,7 +442,7 @@ class CameraActivity : ComponentActivity() {
 
     /* ---------- Drawing ---------- */
 
-    private inner class Overlay(ctx: Context) : View(ctx) {
+    private inner class TextOverlay(ctx: Context) : View(ctx) {
         private val density = resources.displayMetrics.density
         private val minSize = 11 * density
         private val bg = Paint().apply { color = Color.argb(230, 255, 255, 255) }
