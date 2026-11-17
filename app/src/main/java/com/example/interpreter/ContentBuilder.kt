@@ -1,12 +1,16 @@
 package com.example.interpreter
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -24,11 +28,13 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 // Developer tool: builds the built-in phrasebook one combination at a time
-// (one foreign language, meanings in one language), starting from the content already shipped in the app.
-// Resumes where it stopped, and exports shipped + new content together as one zip
+// (one foreign language, meanings in one language) with the engine chosen in settings,
+// starting from the content already shipped in the app. Runs in BuildService so it keeps going in the
+// background, resumes where it stopped, imports zips from other phones, and exports everything as one zip
 // for app/src/main/assets/situations.zip.
 object ContentBuilder {
 
@@ -39,8 +45,14 @@ object ContentBuilder {
     @Volatile var running = false
         private set
     @Volatile private var stopRequested = false
-    @Volatile private var runningCombo = ""
+    @Volatile var runningCombo = ""
+        private set
+    @Volatile var lastMessage = ""
+        private set
+    var places: List<Place> = emptyList()
+        private set
     var listener: ((String) -> Unit)? = null
+    var serviceListener: ((String) -> Unit)? = null
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
@@ -50,14 +62,33 @@ object ContentBuilder {
     private fun english(code: String) = Languages.byCode(code).english
     private fun native(code: String) = Languages.byCode(code).native
 
-    private fun report(msg: String) {
-        main.post { listener?.invoke(msg) }
+    fun report(msg: String) {
+        lastMessage = msg
+        main.post {
+            listener?.invoke(msg)
+            serviceListener?.invoke(msg)
+        }
     }
+
+    /* ---------- Engine: only the one chosen in settings ---------- */
+
+    fun chosenId(prefs: SharedPreferences): String = prefs.getString("engine", null) ?: "mlkit"
+
+    fun selectedEngine(prefs: SharedPreferences): String? {
+        val id = chosenId(prefs)
+        return if (Providers.find(id) != null && Providers.ready(prefs, id)) id else null
+    }
+
+    private fun engineProblem(prefs: SharedPreferences) =
+        "지금 설정된 엔진(${Providers.label(chosenId(prefs))})으로는 만들 수 없어요. " +
+            "설정 → 번역 엔진에서 Gemini 같은 AI 엔진을 골라 '저장하고 사용'을 누르세요."
+
+    /* ---------- Files ---------- */
 
     private fun load(f: File): JSONObject =
         if (f.exists()) try { JSONObject(f.readText()) } catch (_: Exception) { JSONObject() } else JSONObject()
 
-    // Content built on this phone, or else what the app already ships with.
+    // Content built or imported on this phone, or else what the app already ships with.
     private fun current(ctx: Context, lang: String, place: Int): JSONObject {
         val f = file(ctx, lang, place)
         if (f.exists()) return load(f)
@@ -90,9 +121,9 @@ object ContentBuilder {
     private fun dialogueHas(d: JSONObject, home: String) =
         has(d.optJSONArray("lines")?.optJSONObject(0)?.optJSONObject("m"), home)
 
-    fun done(ctx: Context, foreign: String, home: String, places: Int): Int {
+    fun done(ctx: Context, foreign: String, home: String, count: Int): Int {
         var n = 0
-        for (pi in 0 until places) {
+        for (pi in 0 until count) {
             val o = current(ctx, foreign, pi)
             val qs = o.optJSONArray("questions") ?: continue
             if (has(qs.optJSONObject(0)?.optJSONObject("title"), home)) n++
@@ -109,30 +140,39 @@ object ContentBuilder {
         stopRequested = true
     }
 
-    fun start(ctx: Context, prefs: SharedPreferences, places: List<Place>, foreign: String, home: String) {
+    // Starts building on a background thread. Called by BuildService; onFinished runs on the main thread.
+    fun run(ctx: Context, prefs: SharedPreferences, foreign: String, home: String, onFinished: () -> Unit): Boolean {
         if (running) {
             report("이미 만드는 중이에요: $runningCombo")
-            return
+            return false
         }
-        val engine = Providers.llmEngine(prefs)
+        val engine = selectedEngine(prefs)
         if (engine == null) {
-            report("AI 엔진이 설정되지 않았어요. 설정 → 번역 엔진에서 Gemini를 설정하세요.")
-            return
+            report(engineProblem(prefs))
+            return false
+        }
+        val list = places
+        if (list.isEmpty()) {
+            report("장소 목록이 없어요. 상황별 회화 화면에서 생성 창을 다시 열어주세요.")
+            return false
         }
         running = true
         stopRequested = false
-        runningCombo = "${native(foreign)} + ${native(home)} 뜻"
+        runningCombo = "${native(foreign)} + ${native(home)} 뜻 · ${Providers.label(engine)}"
         val app = ctx.applicationContext
         worker.execute {
-            try {
-                build(app, prefs, engine, places, foreign, home)
-                report(if (stopRequested) "멈췄어요." else "✔ $runningCombo 조합을 모두 만들었어요. '내보내기'를 누르세요.")
+            val msg = try {
+                build(app, prefs, engine, list, foreign, home)
+                if (stopRequested) "멈췄어요. '시작 / 이어서'를 누르면 멈춘 곳부터 이어서 만들어요."
+                else "✔ ${native(foreign)} + ${native(home)} 뜻 조합을 모두 만들었어요. '내보내기'를 누르세요."
             } catch (e: Exception) {
-                report("멈췄어요: ${e.message?.take(200)}\n한도에 걸렸다면 나중에 '시작/이어서'를 누르면 멈춘 곳부터 이어서 만들어요.")
-            } finally {
-                running = false
+                "멈췄어요: ${e.message?.take(200)}\n한도에 걸렸다면 나중에 '시작 / 이어서'를 누르면 멈춘 곳부터 이어서 만들어요."
             }
+            running = false
+            report(msg)
+            main.post { onFinished() }
         }
+        return true
     }
 
     /* ---------- Prompts ---------- */
@@ -168,18 +208,19 @@ object ContentBuilder {
 
     private fun build(
         ctx: Context, prefs: SharedPreferences, engine: String,
-        places: List<Place>, foreign: String, home: String
+        list: List<Place>, foreign: String, home: String
     ) {
         val name = english(foreign)
         val mine = english(home)
-        for ((pi, p) in places.withIndex()) {
+        for ((pi, p) in list.withIndex()) {
             if (stopRequested) return
             val f = file(ctx, foreign, pi)
             val o = current(ctx, foreign, pi)
             var qs = o.optJSONArray("questions")
+            val step = "${pi + 1}/${list.size} ${p.name}"
 
             if (qs == null || qs.length() == 0) {
-                report("${p.name} · 질문 목록 만드는 중…")
+                report("$step · 질문 목록 만드는 중…")
                 val r = ask(prefs, engine, questionsPrompt(name, mine), "Place: ${p.name} (${p.desc}). Language of the phrases: $name.")
                 val arr = r.optJSONArray("questions") ?: throw IllegalStateException("질문 목록 형식 오류")
                 val built = JSONArray()
@@ -200,7 +241,7 @@ object ContentBuilder {
                 o.put("dialogues", JSONArray())
                 save(f, o)
             } else if (!has(qs.optJSONObject(0)?.optJSONObject("title"), home)) {
-                report("${p.name} · 질문 목록에 ${native(home)} 뜻 추가 중…")
+                report("$step · 질문 목록에 ${native(home)} 뜻 추가 중…")
                 val items = JSONArray()
                 for (i in 0 until qs.length()) {
                     val q = qs.optJSONObject(i) ?: JSONObject()
@@ -224,7 +265,7 @@ object ContentBuilder {
                 val q = qs.optJSONObject(qi) ?: continue
                 val d = ds.optJSONObject(qi)
                 if (d == null) {
-                    report("${p.name} · 대화 ${qi + 1}/10 만드는 중…")
+                    report("$step · 대화 ${qi + 1}/10 만드는 중…")
                     val title = anyText(q.optJSONObject("title"))
                     val r = ask(prefs, engine, dialoguePrompt(name, mine, p), "Situation: $title — ${q.optString("phrase")}")
                     val lines = r.optJSONArray("lines")
@@ -244,7 +285,7 @@ object ContentBuilder {
                     ds.put(qi, JSONObject().put("lines", built).put("tips", JSONObject().put(home, r.optString("tips"))))
                     save(f, o)
                 } else if (!dialogueHas(d, home)) {
-                    report("${p.name} · 대화 ${qi + 1}/10에 ${native(home)} 뜻 추가 중…")
+                    report("$step · 대화 ${qi + 1}/10에 ${native(home)} 뜻 추가 중…")
                     val lines = d.optJSONArray("lines") ?: continue
                     val texts = JSONArray()
                     for (i in 0 until lines.length()) texts.put(lines.optJSONObject(i)?.optString("text").orEmpty())
@@ -302,8 +343,101 @@ object ContentBuilder {
         }
     }
 
-    // Zips the shipped content plus everything built on this phone into Download/situations.zip.
-    // Files built on this phone replace shipped files with the same name. Runs on a background thread.
+    /* ---------- Import ---------- */
+
+    private fun mergeMap(base: JSONObject?, add: JSONObject?): JSONObject {
+        val out = JSONObject()
+        for (src in listOf(base, add)) {
+            if (src == null) continue
+            val keys = src.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val v = src.optString(k)
+                if (v.isNotBlank()) out.put(k, v)
+            }
+        }
+        return out
+    }
+
+    private fun phrases(qs: JSONArray) = (0 until qs.length()).map { qs.optJSONObject(it)?.optString("phrase").orEmpty() }
+
+    private fun lineTexts(d: JSONObject): List<String> {
+        val ls = d.optJSONArray("lines") ?: return emptyList()
+        return (0 until ls.length()).map { ls.optJSONObject(it)?.optString("text").orEmpty() }
+    }
+
+    // Same sentences: meanings of every language are combined. Different sentences: the imported file wins.
+    private fun merge(base: JSONObject, add: JSONObject): JSONObject {
+        val bq = base.optJSONArray("questions")
+        val aq = add.optJSONArray("questions")
+        if (aq == null || aq.length() == 0) return base
+        if (bq == null || bq.length() == 0 || phrases(bq) != phrases(aq)) return add
+        for (i in 0 until bq.length()) {
+            val b = bq.optJSONObject(i) ?: continue
+            val a = aq.optJSONObject(i) ?: continue
+            b.put("title", mergeMap(b.optJSONObject("title"), a.optJSONObject("title")))
+            b.put("meaning", mergeMap(b.optJSONObject("meaning"), a.optJSONObject("meaning")))
+        }
+        val bd = base.optJSONArray("dialogues") ?: JSONArray().also { base.put("dialogues", it) }
+        val ad = add.optJSONArray("dialogues") ?: JSONArray()
+        for (i in 0 until ad.length()) {
+            val a = ad.optJSONObject(i) ?: continue
+            val b = bd.optJSONObject(i)
+            if (b == null || lineTexts(b) != lineTexts(a)) {
+                bd.put(i, a)
+                continue
+            }
+            val bl = b.optJSONArray("lines") ?: continue
+            val al = a.optJSONArray("lines") ?: continue
+            for (k in 0 until bl.length()) {
+                val x = bl.optJSONObject(k) ?: continue
+                x.put("m", mergeMap(x.optJSONObject("m"), al.optJSONObject(k)?.optJSONObject("m")))
+            }
+            b.put("tips", mergeMap(b.optJSONObject("tips"), a.optJSONObject("tips")))
+        }
+        return base
+    }
+
+    // Merges a zip made by "export" into this phone's content. Returns how many files were merged.
+    // Runs on a background thread.
+    fun importZip(ctx: Context, uri: Uri): Int {
+        if (running) throw IllegalStateException("만드는 중에는 가져올 수 없어요. 먼저 멈추세요.")
+        val codes = Languages.all.map { it.code }.toSet()
+        val fileName = Regex("^(\\d{1,2})\\.json$")
+        var count = 0
+        val input = ctx.contentResolver.openInputStream(uri) ?: throw IllegalStateException("파일을 열지 못했어요")
+        input.use { stream ->
+            ZipInputStream(stream).use { zip ->
+                var e = zip.nextEntry
+                while (e != null) {
+                    if (!e.isDirectory) {
+                        val parts = e.name.replace('\\', '/').split('/').filter { it.isNotEmpty() }
+                        val lang = parts.getOrNull(parts.size - 2)
+                        val match = parts.lastOrNull()?.let { fileName.find(it) }
+                        if (lang != null && lang in codes && match != null) {
+                            val place = match.groupValues[1].toInt()
+                            val incoming = try {
+                                JSONObject(zip.readBytes().toString(Charsets.UTF_8))
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (incoming != null) {
+                                save(file(ctx, lang, place), merge(current(ctx, lang, place), incoming))
+                                count++
+                            }
+                        }
+                    }
+                    e = zip.nextEntry
+                }
+            }
+        }
+        return count
+    }
+
+    /* ---------- Export ---------- */
+
+    // Zips the shipped content plus everything built or imported on this phone into Download/situations.zip.
+    // Files from this phone replace shipped files with the same name. Runs on a background thread.
     fun export(ctx: Context): String? {
         if (Build.VERSION.SDK_INT < 29) return null
         BasePack.prepare(ctx)
@@ -334,7 +468,8 @@ object ContentBuilder {
 
     /* ---------- Developer window ---------- */
 
-    fun openDialog(activity: Activity, prefs: SharedPreferences, places: List<Place>) {
+    fun openDialog(activity: Activity, prefs: SharedPreferences, list: List<Place>) {
+        places = list
         val langs = Languages.all
         val home = Languages.home(prefs).code
         val density = activity.resources.displayMetrics.density
@@ -363,7 +498,17 @@ object ContentBuilder {
         fun foreign() = langs[foreignSpinner.selectedItemPosition].code
         fun meaning() = langs[meaningSpinner.selectedItemPosition].code
 
-        val total = places.size * 11
+        val total = list.size * 11
+        val engineView = TextView(activity).apply {
+            textSize = 13f
+            setPadding(0, px(8), 0, 0)
+        }
+        fun showEngine() {
+            val ok = selectedEngine(prefs) != null
+            engineView.setTextColor(if (ok) Color.DKGRAY else Color.rgb(207, 34, 46))
+            engineView.text = "생성 엔진 (설정에서 고른 엔진): ${Providers.label(chosenId(prefs))}" +
+                if (ok) "" else "\n⚠ " + engineProblem(prefs)
+        }
         val progress = TextView(activity).apply {
             textSize = 15f
             setTypeface(null, Typeface.BOLD)
@@ -373,12 +518,13 @@ object ContentBuilder {
             textSize = 13f
             setTextColor(Color.DKGRAY)
             setPadding(0, px(6), 0, px(6))
+            if (running) text = lastMessage
         }
         fun refresh(msg: String?) {
             val f = foreign()
             val m = meaning()
             Thread {
-                val count = done(activity, f, m, places.size)
+                val count = done(activity, f, m, list.size)
                 activity.runOnUiThread {
                     progress.text = "${native(f)} + ${native(m)} 뜻 · 완료 $count / $total (${count * 100 / total}%)" +
                         if (running) "\n만드는 중: $runningCombo" else ""
@@ -393,38 +539,53 @@ object ContentBuilder {
         foreignSpinner.onItemSelectedListener = onPick
         meaningSpinner.onItemSelectedListener = onPick
 
-        val engine = Providers.llmEngine(prefs)
         val box = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(px(20), px(8), px(20), 0)
             addView(TextView(activity).apply {
                 text = "고른 조합만 만들어요: 30개 장소의 질문 목록과 대화 예문(장소당 10개). " +
                     "앱에 이미 들어 있는 외국어라면 그 내용에 뜻만 덧붙여요. " +
-                    "앱을 켜고 충전기에 꽂아두세요. 멈춘 곳부터 이어서 만들 수 있어요.\n" +
-                    "엔진: " + (engine?.let { Providers.label(it) } ?: "없음 (설정 → 번역 엔진에서 설정)")
+                    "백그라운드에서 만들어서 앱을 닫거나 화면을 꺼도 계속돼요. 충전기에 꽂아두는 걸 권해요."
                 textSize = 13f
                 setTextColor(Color.GRAY)
             })
+            addView(engineView)
             addView(label("외국어 (대화 언어)"))
             addView(foreignSpinner)
             addView(label("뜻을 달 언어"))
             addView(meaningSpinner)
             addView(progress)
             addView(status)
-            addView(button("▶ 시작 / 이어서") {
+            addView(button("▶ 시작 / 이어서 (백그라운드)") {
+                showEngine()
                 val f = foreign()
                 val m = meaning()
-                if (f == m) {
-                    status.text = "외국어와 뜻 언어를 서로 다르게 고르세요."
-                    return@button
+                when {
+                    f == m -> status.text = "외국어와 뜻 언어를 서로 다르게 고르세요."
+                    running -> status.text = "이미 만드는 중이에요: $runningCombo"
+                    selectedEngine(prefs) == null -> status.text = engineProblem(prefs)
+                    else -> {
+                        if (Build.VERSION.SDK_INT >= 33 &&
+                            activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
+                        }
+                        prefs.edit().putString("builder_foreign", f).putString("builder_meaning", m).apply()
+                        BuildService.start(activity, f, m)
+                        refresh("시작했어요… 진행 상황은 알림창에서도 볼 수 있어요.")
+                    }
                 }
-                prefs.edit().putString("builder_foreign", f).putString("builder_meaning", m).apply()
-                start(activity, prefs, places, f, m)
-                refresh("시작했어요…")
             })
             addView(button("⏸ 멈추기") {
                 stop()
                 refresh("멈추는 중… (지금 요청이 끝나면 멈춰요)")
+            })
+            addView(button("📥 가져오기 (zip 합치기)") {
+                if (running) {
+                    status.text = "만드는 중에는 가져올 수 없어요. 먼저 멈추세요."
+                } else {
+                    activity.startActivity(Intent(activity, ImportActivity::class.java))
+                }
             })
             addView(button("📦 내보내기 (다운로드 폴더)") {
                 status.text = "압축하는 중…"
@@ -432,7 +593,7 @@ object ContentBuilder {
                     val path = try { export(activity) } catch (_: Exception) { null }
                     activity.runOnUiThread {
                         status.text = if (path != null) {
-                            "✔ $path 에 저장했어요. 앱에 이미 들어 있던 콘텐츠와 이 폰에서 만든 콘텐츠가 모두 들어 있어요. " +
+                            "✔ $path 에 저장했어요. 앱에 이미 들어 있던 콘텐츠와 이 폰에서 만들거나 가져온 콘텐츠가 모두 들어 있어요. " +
                                 "GitHub의 app/src/main/assets/ 폴더에 situations.zip 이름으로 올려 기존 파일을 바꾸세요. " +
                                 "이름이 'situations (1).zip'처럼 바뀌었다면 situations.zip으로 바꿔서 올리세요."
                         } else {
@@ -443,6 +604,7 @@ object ContentBuilder {
             })
         }
         listener = { msg -> refresh(msg) }
+        showEngine()
         refresh(null)
         AlertDialog.Builder(activity)
             .setTitle("🛠 콘텐츠 일괄 생성")
