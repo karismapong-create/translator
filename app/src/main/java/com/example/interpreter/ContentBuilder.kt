@@ -27,7 +27,8 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 // Developer tool: builds the built-in phrasebook one combination at a time
-// (one foreign language, meanings in one language), resumes where it stopped, and exports a zip
+// (one foreign language, meanings in one language), starting from the content already shipped in the app.
+// Resumes where it stopped, and exports shipped + new content together as one zip
 // for app/src/main/assets/situations.zip.
 object ContentBuilder {
 
@@ -44,6 +45,7 @@ object ContentBuilder {
     private val main = Handler(Looper.getMainLooper())
 
     fun dir(ctx: Context) = File(ctx.filesDir, "bundle")
+    private fun shipped(ctx: Context) = File(ctx.filesDir, "basepack")
     private fun file(ctx: Context, lang: String, place: Int) = File(dir(ctx), "$lang/$place.json")
     private fun english(code: String) = Languages.byCode(code).english
     private fun native(code: String) = Languages.byCode(code).native
@@ -54,6 +56,14 @@ object ContentBuilder {
 
     private fun load(f: File): JSONObject =
         if (f.exists()) try { JSONObject(f.readText()) } catch (_: Exception) { JSONObject() } else JSONObject()
+
+    // Content built on this phone, or else what the app already ships with.
+    private fun current(ctx: Context, lang: String, place: Int): JSONObject {
+        val f = file(ctx, lang, place)
+        if (f.exists()) return load(f)
+        BasePack.prepare(ctx)
+        return load(File(shipped(ctx), "$lang/$place.json"))
+    }
 
     private fun save(f: File, o: JSONObject) {
         f.parentFile?.mkdirs()
@@ -83,7 +93,7 @@ object ContentBuilder {
     fun done(ctx: Context, foreign: String, home: String, places: Int): Int {
         var n = 0
         for (pi in 0 until places) {
-            val o = load(file(ctx, foreign, pi))
+            val o = current(ctx, foreign, pi)
             val qs = o.optJSONArray("questions") ?: continue
             if (has(qs.optJSONObject(0)?.optJSONObject("title"), home)) n++
             val ds = o.optJSONArray("dialogues") ?: continue
@@ -165,7 +175,7 @@ object ContentBuilder {
         for ((pi, p) in places.withIndex()) {
             if (stopRequested) return
             val f = file(ctx, foreign, pi)
-            val o = load(f)
+            val o = current(ctx, foreign, pi)
             var qs = o.optJSONArray("questions")
 
             if (qs == null || qs.length() == 0) {
@@ -292,11 +302,19 @@ object ContentBuilder {
         }
     }
 
-    // Zips everything built so far into Download/situations.zip. Runs on a background thread.
+    // Zips the shipped content plus everything built on this phone into Download/situations.zip.
+    // Files built on this phone replace shipped files with the same name. Runs on a background thread.
     fun export(ctx: Context): String? {
-        val root = dir(ctx)
-        val files = root.walkTopDown().filter { it.isFile }.toList()
-        if (files.isEmpty() || Build.VERSION.SDK_INT < 29) return null
+        if (Build.VERSION.SDK_INT < 29) return null
+        BasePack.prepare(ctx)
+        val entries = LinkedHashMap<String, File>()
+        for (root in listOf(shipped(ctx), dir(ctx))) {
+            if (!root.exists()) continue
+            root.walkTopDown()
+                .filter { it.isFile && it.extension == "json" }
+                .forEach { entries[it.relativeTo(root).path] = it }
+        }
+        if (entries.isEmpty()) return null
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, "situations.zip")
             put(MediaStore.Downloads.MIME_TYPE, "application/zip")
@@ -304,8 +322,8 @@ object ContentBuilder {
         val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
         ctx.contentResolver.openOutputStream(uri)?.use { os ->
             ZipOutputStream(os).use { zip ->
-                for (f in files) {
-                    zip.putNextEntry(ZipEntry(f.relativeTo(root).path))
+                for ((path, f) in entries) {
+                    zip.putNextEntry(ZipEntry(path))
                     f.inputStream().use { it.copyTo(zip) }
                     zip.closeEntry()
                 }
@@ -381,7 +399,7 @@ object ContentBuilder {
             setPadding(px(20), px(8), px(20), 0)
             addView(TextView(activity).apply {
                 text = "고른 조합만 만들어요: 30개 장소의 질문 목록과 대화 예문(장소당 10개). " +
-                    "이미 만든 외국어에 다른 뜻 언어를 고르면, 대화는 그대로 두고 뜻만 덧붙여요. " +
+                    "앱에 이미 들어 있는 외국어라면 그 내용에 뜻만 덧붙여요. " +
                     "앱을 켜고 충전기에 꽂아두세요. 멈춘 곳부터 이어서 만들 수 있어요.\n" +
                     "엔진: " + (engine?.let { Providers.label(it) } ?: "없음 (설정 → 번역 엔진에서 설정)")
                 textSize = 13f
@@ -414,8 +432,8 @@ object ContentBuilder {
                     val path = try { export(activity) } catch (_: Exception) { null }
                     activity.runOnUiThread {
                         status.text = if (path != null) {
-                            "✔ $path 에 저장했어요. 지금까지 만든 모든 조합이 들어 있어요. " +
-                                "GitHub의 app/src/main/assets/ 폴더에 situations.zip 이름으로 올리세요. " +
+                            "✔ $path 에 저장했어요. 앱에 이미 들어 있던 콘텐츠와 이 폰에서 만든 콘텐츠가 모두 들어 있어요. " +
+                                "GitHub의 app/src/main/assets/ 폴더에 situations.zip 이름으로 올려 기존 파일을 바꾸세요. " +
                                 "이름이 'situations (1).zip'처럼 바뀌었다면 situations.zip으로 바꿔서 올리세요."
                         } else {
                             "내보낼 콘텐츠가 없거나 저장하지 못했어요."
