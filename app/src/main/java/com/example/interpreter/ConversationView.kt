@@ -380,6 +380,16 @@ class ConversationView(
         ask()
     }
 
+    // Phone back button: leaves a chat, or steps back inside the phrasebook. Returns false when nothing is left.
+    fun back(): Boolean {
+        if (situationView.visibility == View.VISIBLE) return situationView.back()
+        if (chatPanel.visibility == View.VISIBLE) {
+            endSession()
+            return true
+        }
+        return false
+    }
+
     private fun endSession() {
         stopListening()
         stopSpeaking()

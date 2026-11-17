@@ -40,6 +40,7 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import android.window.OnBackInvokedDispatcher
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
@@ -101,6 +102,7 @@ class MainActivity : Activity() {
     private lateinit var pages: List<View>
     private lateinit var tabViews: List<TextView>
     private var hint: TextView? = null
+    private var currentTab = 0
 
     private var recognizer: SpeechRecognizer? = null
     private var translator: Translator? = null
@@ -304,6 +306,7 @@ class MainActivity : Activity() {
         }
         setContentView(root)
         showTab(0)
+        setupBack()
 
         fromSpinner.onItemSelectedListener = onChange
         toSpinner.onItemSelectedListener = onChange
@@ -336,7 +339,41 @@ class MainActivity : Activity() {
         builder.show()
     }
 
+    /* ---------- Phone back button ---------- */
+
+    // Steps back inside the current tab, then to the interpret tab, then leaves the app.
+    private fun handleBack(): Boolean {
+        val handled = when (currentTab) {
+            1 -> convPage.back()
+            2 -> vocabPage.back()
+            else -> false
+        }
+        if (handled) return true
+        if (currentTab != 0) {
+            showTab(0)
+            return true
+        }
+        return false
+    }
+
+    private fun setupBack() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) {
+                if (!handleBack()) finish()
+            }
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (!handleBack()) {
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+        }
+    }
+
     private fun showTab(i: Int) {
+        currentTab = i
         pages.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
         tabViews.forEachIndexed { k, t ->
             t.setTextColor(if (k == i) Color.rgb(47, 91, 234) else Color.GRAY)
