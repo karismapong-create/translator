@@ -10,16 +10,20 @@ android {
         applicationId = "com.example.interpreter"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    packaging {
+        resources { excludes += setOf("META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/DEPENDENCIES") }
+    }
 }
 
 dependencies {
     implementation("com.google.mlkit:translate:17.0.3")
+    implementation("com.atilika.kuromoji:kuromoji-ipadic:0.9.0")
 }
