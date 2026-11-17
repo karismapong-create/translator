@@ -2,15 +2,18 @@ package com.example.interpreter
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -20,12 +23,17 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
@@ -34,6 +42,12 @@ import java.util.Locale
 class MainActivity : Activity() {
 
     private data class Lang(val label: String, val speechTag: String, val mlkit: String)
+    private data class Term(val names: Map<String, String>, val variants: List<String>)
+
+    companion object {
+        const val DEFAULT_TERMS =
+            "마운자로 | 마운 자로 | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro"
+    }
 
     private val langs = listOf(
         Lang("한국어", "ko-KR", TranslateLanguage.KOREAN),
@@ -42,6 +56,11 @@ class MainActivity : Activity() {
         Lang("Français", "fr-FR", TranslateLanguage.FRENCH),
         Lang("Español", "es-ES", TranslateLanguage.SPANISH),
         Lang("中文", "zh-CN", TranslateLanguage.CHINESE)
+    )
+    private val aliases = mapOf(
+        "한국어" to TranslateLanguage.KOREAN, "일본어" to TranslateLanguage.JAPANESE,
+        "영어" to TranslateLanguage.ENGLISH, "프랑스어" to TranslateLanguage.FRENCH,
+        "스페인어" to TranslateLanguage.SPANISH, "중국어" to TranslateLanguage.CHINESE
     )
 
     private lateinit var fromSpinner: Spinner
@@ -62,6 +81,9 @@ class MainActivity : Activity() {
     private var seq = 0
     private var nextToSpeak = 1
     private val speechBuf = HashMap<Int, String?>()
+    private var terms: List<Term> = emptyList()
+    private val repaired = HashSet<String>()
+    private val prefs by lazy { getSharedPreferences("interpreter", MODE_PRIVATE) }
 
     private val from: Lang get() = langs[fromSpinner.selectedItemPosition]
     private val to: Lang get() = langs[toSpinner.selectedItemPosition]
@@ -72,6 +94,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        terms = parseTerms(prefs.getString("terms", DEFAULT_TERMS) ?: DEFAULT_TERMS)
 
         val labels = langs.map { it.label }
         fromSpinner = Spinner(this).apply {
@@ -109,7 +132,7 @@ class MainActivity : Activity() {
 
         segments = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         hint = TextView(this).apply {
-            text = "언어를 고르고 시작을 누르세요. 상대가 말하는 도중에도 구절 단위로 바로 번역합니다."
+            text = "언어를 고르고 시작을 누르세요. 번역문을 길게 누르면 선택해서 복사할 수 있어요."
             textSize = 16f
             setTextColor(Color.GRAY)
         }
@@ -126,6 +149,10 @@ class MainActivity : Activity() {
             setTextColor(Color.GRAY)
         }
         speakBox = CheckBox(this).apply { text = "음성으로 읽기" }
+        val dictButton = Button(this).apply {
+            text = "단어장"
+            setOnClickListener { openDictionary() }
+        }
         micButton = Button(this).apply {
             text = "시작"
             textSize = 18f
@@ -135,7 +162,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(speakBox, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            addView(micButton, LinearLayout.LayoutParams(dp(140), dp(64)))
+            addView(dictButton, LinearLayout.LayoutParams(WRAP_CONTENT, dp(64)))
+            addView(micButton, LinearLayout.LayoutParams(dp(120), dp(64)))
         }
 
         val pad = dp(16)
@@ -154,6 +182,116 @@ class MainActivity : Activity() {
         toSpinner.onItemSelectedListener = onChange
         tts = TextToSpeech(this) { }
     }
+
+    /* ---------- Word list ---------- */
+
+    private fun parseTerms(text: String): List<Term> = text.lines().mapNotNull { line ->
+        val parts = line.split("|").map { it.trim() }
+        val key = parts.getOrNull(0).orEmpty()
+        if (key.isEmpty() || key.startsWith("#")) return@mapNotNull null
+        val variants = parts.getOrNull(1).orEmpty().split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val names = HashMap<String, String>()
+        names[TranslateLanguage.KOREAN] = key
+        parts.getOrNull(2).orEmpty().split(",").forEach { pair ->
+            val kv = pair.split("=", limit = 2)
+            if (kv.size == 2) {
+                val label = kv[0].trim()
+                val value = kv[1].trim()
+                val code = aliases[label]
+                    ?: langs.firstOrNull { it.label.equals(label, true) || it.mlkit == label.lowercase() }?.mlkit
+                if (code != null && value.isNotEmpty()) names[code] = value
+            }
+        }
+        Term(names, variants)
+    }
+
+    // Matches a Korean word even if the recognizer split it with spaces.
+    private fun flex(word: String) = Regex(
+        word.replace(" ", "").map { Regex.escape(it.toString()) }.joinToString("\\s*"),
+        RegexOption.IGNORE_CASE
+    )
+
+    // Returns the corrected source to show, and the text to send to the translator.
+    private fun applyTerms(src: String): Pair<String, String> {
+        var shown = src
+        if (from.mlkit == TranslateLanguage.KOREAN) {
+            for (t in terms) {
+                val key = t.names[TranslateLanguage.KOREAN] ?: continue
+                for (w in t.variants + key) shown = flex(w).replace(shown) { key }
+            }
+        }
+        var input = shown
+        for (t in terms) {
+            val a = t.names[from.mlkit] ?: continue
+            val b = t.names[to.mlkit] ?: continue
+            input = input.replace(a, b, ignoreCase = true)
+        }
+        return shown to input
+    }
+
+    private fun openDictionary() {
+        val edit = EditText(this).apply {
+            setText(prefs.getString("terms", DEFAULT_TERMS))
+            textSize = 15f
+            minLines = 6
+            gravity = Gravity.TOP or Gravity.START
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            setHorizontallyScrolling(false)
+        }
+        val box = FrameLayout(this).apply {
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(edit)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("단어장")
+            .setMessage(
+                "한 줄에 단어 하나씩 적어요.\n" +
+                "한국어 단어 | 잘못 들리는 말 | 언어=번역\n" +
+                "잘못 들리는 말은 쉼표로 여러 개 적을 수 있고, 가운데·끝 칸은 비워도 돼요."
+            )
+            .setView(box)
+            .setPositiveButton("저장") { _, _ ->
+                val text = edit.text.toString()
+                prefs.edit().putString("terms", text).apply()
+                terms = parseTerms(text)
+                if (listening) { stop(); start() }
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    /* ---------- Language pack check ---------- */
+
+    private fun looksLike(text: String, lang: String): Boolean {
+        val letters = text.filter { it.isLetter() }
+        if (letters.length < 3) return true
+        val hangul = letters.count { it in '\uAC00'..'\uD7A3' }
+        val kana = letters.count { it in '\u3040'..'\u30FF' }
+        val han = letters.count { it in '\u4E00'..'\u9FFF' }
+        val latin = letters.count { it in 'a'..'z' || it in 'A'..'Z' || it in '\u00C0'..'\u024F' }
+        return when (lang) {
+            TranslateLanguage.KOREAN -> hangul > 0
+            TranslateLanguage.JAPANESE -> kana + han > 0
+            TranslateLanguage.CHINESE -> han > 0
+            else -> latin * 2 > letters.length
+        }
+    }
+
+    // Deletes and re-downloads the language packs once if output comes back in the wrong language.
+    private fun repairLanguagePack() {
+        if (!repaired.add(from.mlkit + ">" + to.mlkit)) return
+        stop()
+        translator?.close()
+        translator = null
+        status("번역 결과가 이상해서 언어팩을 다시 받는 중이에요…")
+        val mm = RemoteModelManager.getInstance()
+        val tasks = listOf(from.mlkit, to.mlkit)
+            .filter { it != TranslateLanguage.ENGLISH }
+            .map { mm.deleteDownloadedModel(TranslateRemoteModel.Builder(it).build()) }
+        Tasks.whenAllComplete(tasks).addOnCompleteListener { start() }
+    }
+
+    /* ---------- Start / stop ---------- */
 
     private fun start() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -209,6 +347,8 @@ class MainActivity : Activity() {
         else status("마이크 권한을 허용해야 통역할 수 있어요.")
     }
 
+    /* ---------- Speech recognition ---------- */
+
     private fun startRecognizer() {
         recognizer?.destroy()
         committed = 0
@@ -240,6 +380,10 @@ class MainActivity : Activity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, from.speechTag)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+            if (Build.VERSION.SDK_INT >= 33) {
+                val words = terms.mapNotNull { it.names[from.mlkit] }
+                if (words.isNotEmpty()) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(words))
+            }
         }
         r.startListening(intent)
     }
@@ -282,29 +426,42 @@ class MainActivity : Activity() {
         return words.dropLast(4).joinToString(" ") + " "
     }
 
-    private fun translate(src: String) {
+    /* ---------- Translation ---------- */
+
+    private fun translate(raw: String) {
         val t = translator ?: return
         val id = ++seq
         hint?.let { segments.removeView(it); hint = null }
+        val (shown, input) = applyTerms(raw)
+        val source = from.mlkit
+        val target = to.mlkit
 
         val trView = TextView(this).apply {
             text = "…"
             textSize = 24f
             setTypeface(null, Typeface.BOLD)
+            setTextIsSelectable(true)
         }
         val srcView = TextView(this).apply {
-            text = src
+            text = shown
             textSize = 14f
             setTextColor(Color.GRAY)
+            setTextIsSelectable(true)
         }
         segments.addView(trView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(14) })
         segments.addView(srcView)
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
 
-        t.translate(src)
+        t.translate(input)
             .addOnSuccessListener { tr ->
+                if (!looksLike(tr, target) && looksLike(input, source)) {
+                    trView.text = "$tr\n(언어팩 오류 · 다시 받는 중)"
+                    queueSpeech(id, null)
+                    repairLanguagePack()
+                    return@addOnSuccessListener
+                }
                 trView.text = tr
-                Pronouncer.attach(this, segments, trView, tr, to.mlkit)
+                Pronouncer.attach(this, segments, trView, tr, target)
                 scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
                 queueSpeech(id, tr)
             }
