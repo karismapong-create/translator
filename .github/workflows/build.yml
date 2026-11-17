@@ -14,6 +14,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
+      - name: Download English pronunciation dictionary
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fsSL -o app/src/main/assets/cmudict.dict https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
       - run: gradle assembleDebug -Pandroid.useAndroidX=true --no-daemon
       - uses: actions/upload-artifact@v4
         with:
