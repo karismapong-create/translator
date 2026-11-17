@@ -31,52 +31,55 @@ class SituationView(
     private val onRolePlay: (LangInfo, String, String, String) -> Unit
 ) : LinearLayout(activity) {
 
-    private class Place(val emoji: String, val ko: String, val en: String, val role: String, val staff: String)
-    private class Question(val ko: String, val phrase: String, val phraseKo: String)
-    private class Line(val who: String, val text: String, val ko: String) {
+    // names: "ko|ja|en|fr|es|de|zh"
+    private class Place(val emoji: String, val names: String, val en: String, val role: String, val staff: String)
+    private class Question(val title: String, val phrase: String, val meaning: String)
+    private class Line(val who: String, val text: String, val meaning: String) {
         val me: Boolean get() = who.equals("A", true)
     }
 
     private val places = listOf(
-        Place("✈️", "공항 체크인", "an airport check-in counter", "an airline check-in agent", "항공사 직원"),
-        Place("🛂", "출입국심사대", "immigration passport control", "an immigration officer", "심사관"),
-        Place("🧳", "세관", "customs inspection at the airport", "a customs officer", "세관 직원"),
-        Place("🛍️", "면세점", "a duty-free shop", "a duty-free shop clerk", "점원"),
-        Place("💱", "환전소·은행", "a currency exchange and bank", "a bank teller", "은행 직원"),
-        Place("🚇", "지하철", "a subway station", "a station staff member", "역무원"),
-        Place("🚌", "버스 정류장", "a bus stop and city bus", "a bus driver", "버스 기사"),
-        Place("🚆", "기차역", "a train station ticket office", "a ticket office clerk", "매표 직원"),
-        Place("🚕", "택시", "a taxi ride", "a taxi driver", "택시 기사"),
-        Place("🚗", "렌터카 업체", "a car rental counter", "a car rental agent", "렌터카 직원"),
-        Place("🏨", "호텔", "a hotel front desk", "a hotel front desk clerk", "프런트 직원"),
-        Place("🍽️", "음식점", "a restaurant", "a restaurant server", "점원"),
-        Place("☕", "카페", "a café", "a barista", "바리스타"),
-        Place("🏪", "편의점", "a convenience store", "a convenience store clerk", "점원"),
-        Place("🛒", "슈퍼마켓", "a supermarket", "a supermarket staff member", "직원"),
-        Place("👕", "옷가게", "a clothing store", "a clothing store clerk", "점원"),
-        Place("💊", "약국", "a pharmacy", "a pharmacist", "약사"),
-        Place("🏥", "병원", "a hospital or clinic, from reception to the doctor", "a hospital receptionist and doctor", "병원 직원"),
-        Place("🚻", "화장실 찾기", "finding and using public restrooms", "a passerby or shop staff member", "현지인"),
-        Place("ℹ️", "관광안내소", "a tourist information center", "a tourist information staff member", "안내 직원"),
-        Place("🏛️", "박물관", "a museum", "a museum staff member", "직원"),
-        Place("🎢", "놀이공원", "an amusement park", "an amusement park staff member", "직원"),
-        Place("🏊", "수영장", "a swimming pool", "a pool staff member", "직원"),
-        Place("♨️", "온천", "a hot spring bath", "a hot spring staff member", "직원"),
-        Place("🏖️", "해변", "a beach with rentals", "a lifeguard or beach rental staff member", "직원"),
-        Place("⛰️", "산", "a mountain hiking area", "a mountain hut staff member", "산장 직원"),
-        Place("🥾", "트레킹 코스", "a trekking trail", "a trail guide", "가이드"),
-        Place("🏞️", "호수", "a lake with boat rentals", "a boat rental staff member", "직원"),
-        Place("👮", "경찰서·분실물", "a police station and lost and found office", "a police officer", "경찰관"),
-        Place("💇", "미용실", "a hair salon", "a hairdresser", "미용사")
+        Place("✈️", "공항 체크인|空港チェックイン|Airport check-in|Enregistrement à l'aéroport|Facturación en el aeropuerto|Flughafen-Check-in|机场值机", "an airport check-in counter", "an airline check-in agent", "항공사 직원"),
+        Place("🛂", "출입국심사대|入国審査|Immigration|Contrôle des passeports|Control de inmigración|Passkontrolle|出入境检查", "immigration passport control", "an immigration officer", "심사관"),
+        Place("🧳", "세관|税関|Customs|Douane|Aduana|Zoll|海关", "customs inspection at the airport", "a customs officer", "세관 직원"),
+        Place("🛍️", "면세점|免税店|Duty-free shop|Boutique hors taxes|Tienda libre de impuestos|Duty-free-Shop|免税店", "a duty-free shop", "a duty-free shop clerk", "점원"),
+        Place("💱", "환전소·은행|両替所・銀行|Exchange & bank|Change et banque|Cambio y banco|Wechselstube & Bank|换汇处·银行", "a currency exchange and bank", "a bank teller", "은행 직원"),
+        Place("🚇", "지하철|地下鉄|Subway|Métro|Metro|U-Bahn|地铁", "a subway station", "a station staff member", "역무원"),
+        Place("🚌", "버스 정류장|バス停|Bus stop|Arrêt de bus|Parada de autobús|Bushaltestelle|公交车站", "a bus stop and city bus", "a bus driver", "버스 기사"),
+        Place("🚆", "기차역|駅|Train station|Gare|Estación de tren|Bahnhof|火车站", "a train station ticket office", "a ticket office clerk", "매표 직원"),
+        Place("🚕", "택시|タクシー|Taxi|Taxi|Taxi|Taxi|出租车", "a taxi ride", "a taxi driver", "택시 기사"),
+        Place("🚗", "렌터카 업체|レンタカー|Car rental|Location de voiture|Alquiler de coches|Autovermietung|租车公司", "a car rental counter", "a car rental agent", "렌터카 직원"),
+        Place("🏨", "호텔|ホテル|Hotel|Hôtel|Hotel|Hotel|酒店", "a hotel front desk", "a hotel front desk clerk", "프런트 직원"),
+        Place("🍽️", "음식점|レストラン|Restaurant|Restaurant|Restaurante|Restaurant|餐厅", "a restaurant", "a restaurant server", "점원"),
+        Place("☕", "카페|カフェ|Café|Café|Cafetería|Café|咖啡馆", "a café", "a barista", "바리스타"),
+        Place("🏪", "편의점|コンビニ|Convenience store|Supérette|Tienda de conveniencia|Kiosk|便利店", "a convenience store", "a convenience store clerk", "점원"),
+        Place("🛒", "슈퍼마켓|スーパー|Supermarket|Supermarché|Supermercado|Supermarkt|超市", "a supermarket", "a supermarket staff member", "직원"),
+        Place("👕", "옷가게|洋服店|Clothing store|Magasin de vêtements|Tienda de ropa|Bekleidungsgeschäft|服装店", "a clothing store", "a clothing store clerk", "점원"),
+        Place("💊", "약국|薬局|Pharmacy|Pharmacie|Farmacia|Apotheke|药店", "a pharmacy", "a pharmacist", "약사"),
+        Place("🏥", "병원|病院|Hospital|Hôpital|Hospital|Krankenhaus|医院", "a hospital or clinic, from reception to the doctor", "a hospital receptionist and doctor", "병원 직원"),
+        Place("🚻", "화장실 찾기|トイレを探す|Finding a restroom|Trouver des toilettes|Buscar un baño|Toilette finden|找洗手间", "finding and using public restrooms", "a passerby or shop staff member", "현지인"),
+        Place("ℹ️", "관광안내소|観光案内所|Tourist information|Office de tourisme|Oficina de turismo|Touristeninformation|游客服务中心", "a tourist information center", "a tourist information staff member", "안내 직원"),
+        Place("🏛️", "박물관|博物館|Museum|Musée|Museo|Museum|博物馆", "a museum", "a museum staff member", "직원"),
+        Place("🎢", "놀이공원|遊園地|Amusement park|Parc d'attractions|Parque de atracciones|Freizeitpark|游乐园", "an amusement park", "an amusement park staff member", "직원"),
+        Place("🏊", "수영장|プール|Swimming pool|Piscine|Piscina|Schwimmbad|游泳池", "a swimming pool", "a pool staff member", "직원"),
+        Place("♨️", "온천|温泉|Hot spring|Source chaude|Aguas termales|Therme|温泉", "a hot spring bath", "a hot spring staff member", "직원"),
+        Place("🏖️", "해변|ビーチ|Beach|Plage|Playa|Strand|海滩", "a beach with rentals", "a lifeguard or beach rental staff member", "직원"),
+        Place("⛰️", "산|山|Mountain|Montagne|Montaña|Berg|山", "a mountain hiking area", "a mountain hut staff member", "산장 직원"),
+        Place("🥾", "트레킹 코스|トレッキングコース|Trekking trail|Sentier de randonnée|Ruta de senderismo|Wanderweg|徒步路线", "a trekking trail", "a trail guide", "가이드"),
+        Place("🏞️", "호수|湖|Lake|Lac|Lago|See|湖", "a lake with boat rentals", "a boat rental staff member", "직원"),
+        Place("👮", "경찰서·분실물|警察・遺失物|Police & lost and found|Police et objets trouvés|Policía y objetos perdidos|Polizei & Fundbüro|警察局·失物招领", "a police station and lost and found office", "a police officer", "경찰관"),
+        Place("💇", "미용실|美容院|Hair salon|Salon de coiffure|Peluquería|Friseur|理发店", "a hair salon", "a hairdresser", "미용사")
     )
-    private val englishName = mapOf(
-        "ja" to "Japanese", "en" to "English", "fr" to "French", "es" to "Spanish", "zh" to "Simplified Chinese"
-    )
+    private val nameOrder = listOf("ko", "ja", "en", "fr", "es", "de", "zh")
+
+    private val home: Lang = Languages.home(prefs)
     private val blue = Color.rgb(47, 91, 234)
     private val highlightColor = Color.argb(80, 255, 200, 0)
     private val density = resources.displayMetrics.density
     private val net = Executors.newSingleThreadExecutor()
     private val cacheDir = File(activity.filesDir, "situations").apply { mkdirs() }
+    // Korean speakers keep the files saved by earlier versions; other languages get their own.
+    private val cachePrefix = if (home.code == "ko") "" else "${home.code}_"
 
     private var place: Place? = null
     private var questions: List<Question> = emptyList()
@@ -108,7 +111,7 @@ class SituationView(
         orientation = VERTICAL
 
         backButton = Button(activity).apply {
-            text = "← 뒤로"
+            text = TalkText.t("back")
             visibility = View.GONE
             setOnClickListener { goBack() }
         }
@@ -133,9 +136,7 @@ class SituationView(
         }
 
         val grid = LinearLayout(activity).apply { orientation = VERTICAL }
-        grid.addView(note(
-            "장소를 고르면 자주 하는 질문과 대화 예문을 보여줘요. 처음 열 때 AI가 만들어 저장하고, 다음부터는 바로 열려요."
-        ))
+        grid.addView(note(TalkText.t("s_help")))
         places.chunked(3).forEach { row ->
             val rowLayout = LinearLayout(activity).apply { orientation = HORIZONTAL }
             row.forEach { p ->
@@ -173,6 +174,12 @@ class SituationView(
 
     private fun dp(v: Int) = (v * density).toInt()
     private fun toast(msg: String) = Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
+    private fun englishName(l: LangInfo) = Languages.byCode(l.code).english
+
+    private fun placeName(p: Place): String {
+        val parts = p.names.split("|")
+        return parts.getOrNull(nameOrder.indexOf(home.code).coerceAtLeast(0)) ?: parts[2]
+    }
 
     private fun note(text: String, color: Int = Color.GRAY) = TextView(activity).apply {
         this.text = text
@@ -204,7 +211,7 @@ class SituationView(
     }
 
     private fun placeButton(p: Place) = TextView(activity).apply {
-        text = "${p.emoji}\n${p.ko}"
+        text = "${p.emoji}\n${placeName(p)}"
         textSize = 14f
         gravity = Gravity.CENTER
         setPadding(dp(4), dp(14), dp(4), dp(14))
@@ -221,7 +228,7 @@ class SituationView(
         questionsScroll.visibility = if (n == 1) View.VISIBLE else View.GONE
         dialogueScroll.visibility = if (n == 2) View.VISIBLE else View.GONE
         backButton.visibility = if (n == 0) View.GONE else View.VISIBLE
-        if (n == 0) titleView.text = "📍 어디에 계세요?"
+        if (n == 0) titleView.text = TalkText.t("s_where")
     }
 
     private fun goBack() {
@@ -239,10 +246,14 @@ class SituationView(
 
     /* ---------- Cache ---------- */
 
-    private fun readCache(key: String): String? = File(cacheDir, "$key.json").takeIf { it.exists() }?.readText()
-    private fun writeCache(key: String, text: String) = File(cacheDir, "$key.json").writeText(text)
+    private fun readCache(key: String): String? =
+        File(cacheDir, "$cachePrefix$key.json").takeIf { it.exists() }?.readText()
+
+    private fun writeCache(key: String, text: String) = File(cacheDir, "$cachePrefix$key.json").writeText(text)
+
     private fun clearDialogues(code: String, placeIdx: Int) {
-        cacheDir.listFiles()?.filter { it.name.startsWith("d_${code}_${placeIdx}_") }?.forEach { it.delete() }
+        val start = "${cachePrefix}d_${code}_${placeIdx}_"
+        cacheDir.listFiles()?.filter { it.name.startsWith(start) }?.forEach { it.delete() }
     }
 
     /* ---------- Questions ---------- */
@@ -265,7 +276,7 @@ class SituationView(
         val l = lang
         val placeIdx = places.indexOf(p)
         val key = "q_${l.code}_$placeIdx"
-        titleView.text = "${p.emoji} ${p.ko}"
+        titleView.text = "${p.emoji} ${placeName(p)}"
         questionsBox.removeAllViews()
         if (!force) {
             val cached = readCache(key)?.let { parseQuestions(it) }
@@ -276,20 +287,18 @@ class SituationView(
         }
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
-            questionsBox.addView(note(
-                "⚠ 질문 목록을 만들려면 LLM이 필요해요. 설정 → 번역 엔진에서 Claude, 맥북 LLM, OpenAI 호환 API 중 하나를 설정하세요.",
-                Color.rgb(207, 34, 46)
-            ))
+            questionsBox.addView(note(TalkText.t("s_need_llm"), Color.rgb(207, 34, 46)))
             return
         }
-        questionsBox.addView(note("${p.ko}에서 자주 하는 질문을 만드는 중… (${WordExplainer.label(e)})"))
-        val name = englishName[l.code] ?: l.label
-        val system = "You write travel phrasebooks for Korean speakers. For the given place, list the 10 " +
-            "situations travelers most often need to ask or say there, ordered from most common. For each, give a " +
-            "short Korean title and the single most useful natural $name sentence. Reply with JSON only, no code " +
-            "fences: {\"questions\":[{\"ko\":\"Korean title\",\"phrase\":\"$name sentence\"," +
-            "\"phrase_ko\":\"Korean meaning of the sentence\"}]}"
-        val user = "Place: ${p.ko} (${p.en}). Language: $name."
+        questionsBox.addView(note(TalkText.f("s_making_q", placeName(p), WordExplainer.label(e))))
+        val name = englishName(l)
+        val mine = home.english
+        val system = "You write travel phrasebooks for $mine speakers. For the given place, list the 10 situations " +
+            "travelers most often need to ask or say there, ordered from most common. For each, give a short $mine " +
+            "title and the single most useful natural $name sentence. Reply with JSON only, no code fences: " +
+            "{\"questions\":[{\"ko\":\"short $mine title\",\"phrase\":\"$name sentence\"," +
+            "\"phrase_ko\":\"$mine meaning of the sentence\"}]}"
+        val user = "Place: ${placeName(p)} (${p.en}). Language: $name."
         val token = ++loadToken
         net.execute {
             val r: Any = try { Tutor.send(prefs, e, system, listOf("user" to user)) } catch (ex: Exception) { ex }
@@ -299,8 +308,8 @@ class SituationView(
                 val qs = raw?.let { parseQuestions(it) }
                 questionsBox.removeAllViews()
                 if (raw == null || qs.isNullOrEmpty()) {
-                    questionsBox.addView(note("만들지 못했어요: " + ((r as? Exception)?.message ?: "형식을 읽지 못했어요")))
-                    questionsBox.addView(button("다시 시도") { loadQuestions(true) })
+                    questionsBox.addView(note(TalkText.f("s_failed", (r as? Exception)?.message ?: TalkText.t("s_format"))))
+                    questionsBox.addView(button(TalkText.t("retry")) { loadQuestions(true) })
                     return@post
                 }
                 if (force) clearDialogues(l.code, placeIdx)
@@ -313,7 +322,7 @@ class SituationView(
     private fun renderQuestions(qs: List<Question>) {
         questions = qs
         questionsBox.removeAllViews()
-        questionsBox.addView(note("질문을 누르면 2~3분 분량의 대화 예문이 나와요."))
+        questionsBox.addView(note(TalkText.t("s_q_help")))
         qs.forEachIndexed { i, q ->
             val row = LinearLayout(activity).apply {
                 orientation = VERTICAL
@@ -321,7 +330,7 @@ class SituationView(
                 setBackgroundColor(Color.argb(14, 0, 0, 0))
                 setOnClickListener { openDialogue(i) }
                 addView(TextView(activity).apply {
-                    text = "${i + 1}. ${q.ko}"
+                    text = "${i + 1}. ${q.title}"
                     textSize = 17f
                     setTypeface(null, Typeface.BOLD)
                 })
@@ -330,8 +339,8 @@ class SituationView(
                     textSize = 15f
                     setTextColor(Color.DKGRAY)
                 })
-                if (q.phraseKo.isNotEmpty()) addView(TextView(activity).apply {
-                    text = q.phraseKo
+                if (q.meaning.isNotEmpty()) addView(TextView(activity).apply {
+                    text = q.meaning
                     textSize = 13f
                     setTextColor(blue)
                 })
@@ -340,7 +349,7 @@ class SituationView(
                 setMargins(0, dp(4), 0, dp(4))
             })
         }
-        questionsBox.addView(button("목록 다시 만들기") { loadQuestions(true) })
+        questionsBox.addView(button(TalkText.t("s_regen_list")) { loadQuestions(true) })
     }
 
     /* ---------- Dialogue ---------- */
@@ -368,7 +377,7 @@ class SituationView(
         val placeIdx = places.indexOf(p)
         val key = "d_${l.code}_${placeIdx}_$questionIndex"
         stopPlay()
-        titleView.text = "${p.emoji} ${q.ko}"
+        titleView.text = "${p.emoji} ${q.title}"
         dialogueBox.removeAllViews()
         cards = emptyList()
         if (!force) {
@@ -380,18 +389,19 @@ class SituationView(
         }
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
-            dialogueBox.addView(note("⚠ 대화 예문을 만들려면 LLM이 필요해요.", Color.rgb(207, 34, 46)))
+            dialogueBox.addView(note(TalkText.t("s_need_llm"), Color.rgb(207, 34, 46)))
             return
         }
-        dialogueBox.addView(note("대화 예문을 만드는 중… 30초~1분 정도 걸릴 수 있어요. (${WordExplainer.label(e)})"))
-        val name = englishName[l.code] ?: l.label
-        val system = "You write realistic practice dialogues for Korean travelers. Write a natural spoken $name " +
-            "dialogue of 20 to 30 short lines, about 2 to 3 minutes when spoken, between the traveler (A) and " +
+        dialogueBox.addView(note(TalkText.f("s_making_d", WordExplainer.label(e))))
+        val name = englishName(l)
+        val mine = home.english
+        val system = "You write realistic practice dialogues for $mine-speaking travelers. Write a natural spoken " +
+            "$name dialogue of 20 to 30 short lines, about 2 to 3 minutes when spoken, between the traveler (A) and " +
             "${p.role} (B) at ${p.en}. The traveler is polite; the other person speaks naturally, including the " +
             "questions they typically ask and one small realistic complication. Reply with JSON only, no code " +
-            "fences: {\"lines\":[{\"who\":\"A\",\"text\":\"$name line\",\"ko\":\"Korean translation\"}]," +
-            "\"tips\":\"one or two short Korean tips about local customs or useful points\"}"
-        val user = "Situation: ${q.ko} — ${q.phrase}"
+            "fences: {\"lines\":[{\"who\":\"A\",\"text\":\"$name line\",\"ko\":\"$mine translation\"}]," +
+            "\"tips\":\"one or two short $mine tips about local customs or useful points\"}"
+        val user = "Situation: ${q.title} — ${q.phrase}"
         val token = ++loadToken
         net.execute {
             val r: Any = try { Tutor.send(prefs, e, system, listOf("user" to user)) } catch (ex: Exception) { ex }
@@ -401,8 +411,8 @@ class SituationView(
                 val parsed = raw?.let { parseDialogue(it) }
                 dialogueBox.removeAllViews()
                 if (raw == null || parsed == null) {
-                    dialogueBox.addView(note("만들지 못했어요: " + ((r as? Exception)?.message ?: "형식을 읽지 못했어요")))
-                    dialogueBox.addView(button("다시 시도") { loadDialogue(true) })
+                    dialogueBox.addView(note(TalkText.f("s_failed", (r as? Exception)?.message ?: TalkText.t("s_format"))))
+                    dialogueBox.addView(button(TalkText.t("retry")) { loadDialogue(true) })
                     return@post
                 }
                 writeCache(key, raw)
@@ -416,18 +426,18 @@ class SituationView(
     private fun renderDialogue(p: Place, q: Question, ls: List<Line>, tips: String) {
         lines = ls
         dialogueBox.removeAllViews()
-        val play = button("▶ 전체 듣기") { if (playing) stopPlay() else playAll() }
+        val play = button(TalkText.t("s_play")) { if (playing) stopPlay() else playAll() }
         playButton = play
-        val practice = button("🎭 이 상황으로 연습") {
+        val practice = button(TalkText.t("s_practice")) {
             stopPlay()
-            onRolePlay(lang, "${p.en} — ${q.ko} (${q.phrase})", p.role, "${p.emoji} ${p.ko} · ${q.ko}")
+            onRolePlay(lang, "${p.en} — ${q.title} (${q.phrase})", p.role, "${p.emoji} ${placeName(p)} · ${q.title}")
         }
         dialogueBox.addView(LinearLayout(activity).apply {
             orientation = HORIZONTAL
             addView(play, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(practice, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         })
-        dialogueBox.addView(note("참고용 예문이에요. 실제 절차나 표현은 장소마다 다를 수 있어요."))
+        dialogueBox.addView(note(TalkText.t("s_disclaimer")))
         cards = ls.mapIndexed { i, line -> lineCard(i, line, p) }
         cards.forEachIndexed { i, card ->
             val me = ls[i].me
@@ -443,7 +453,7 @@ class SituationView(
                 setPadding(dp(4), dp(16), dp(4), dp(8))
             })
         }
-        dialogueBox.addView(button("대화 다시 만들기") { loadDialogue(true) })
+        dialogueBox.addView(button(TalkText.t("s_regen_d")) { loadDialogue(true) })
         dialogueScroll.post { dialogueScroll.scrollTo(0, 0) }
     }
 
@@ -454,13 +464,17 @@ class SituationView(
             setBackgroundColor(baseColor(line))
         }
         card.addView(TextView(activity).apply {
-            text = if (line.me) "🙋 나" else "🧑‍💼 ${p.staff}"
+            text = when {
+                line.me -> TalkText.t("s_me")
+                home.code == "ko" -> "🧑‍💼 ${p.staff}"
+                else -> TalkText.t("s_other")
+            }
             textSize = 12f
             setTextColor(Color.GRAY)
         })
         val tv = text(line.text, 19f, Color.BLACK, true)
         card.addView(tv)
-        if (line.ko.isNotEmpty()) card.addView(text(line.ko, 14f, blue))
+        if (line.meaning.isNotEmpty()) card.addView(text(line.meaning, 14f, blue))
         card.addView(LinearLayout(activity).apply {
             orientation = HORIZONTAL
             addView(action("🔊") {
@@ -468,12 +482,12 @@ class SituationView(
                 speak(line, "one")
             })
             addView(action("☆") { v ->
-                save(line.text, line.ko)
+                save(line.text, line.meaning)
                 v.text = "★"
                 v.isEnabled = false
             })
         })
-        Pronouncer.attach(activity, card, tv, line.text, lang.code)
+        Pronunciation.attach(activity, card, tv, line.text, lang.code, home.code)
         return card
     }
 
@@ -482,7 +496,7 @@ class SituationView(
     private fun speak(line: Line, id: String) {
         val t = tts ?: return
         if (!ttsReady) {
-            toast("음성 엔진을 준비하는 중이에요. 잠시 후 다시 눌러주세요.")
+            toast(TalkText.t("tts_wait"))
             return
         }
         t.language = Locale.forLanguageTag(lang.voice)
@@ -502,12 +516,12 @@ class SituationView(
     private fun playAll() {
         if (lines.isEmpty()) return
         if (!ttsReady) {
-            toast("음성 엔진을 준비하는 중이에요. 잠시 후 다시 눌러주세요.")
+            toast(TalkText.t("tts_wait"))
             return
         }
         playing = true
         playIndex = 0
-        playButton?.text = "⏹ 멈추기"
+        playButton?.text = TalkText.t("s_stop")
         playCurrent()
     }
 
@@ -533,7 +547,7 @@ class SituationView(
         playing = false
         if (wasPlaying) tts?.stop()
         if (cards.isNotEmpty()) highlight(-1)
-        playButton?.text = "▶ 전체 듣기"
+        playButton?.text = TalkText.t("s_play")
     }
 
     fun stopPlayback() {
@@ -558,7 +572,7 @@ class SituationView(
                 .put("w", 0)
         )
         prefs.edit().putString("saved", arr.toString()).apply()
-        toast("단어장에 저장했어요")
+        toast(TalkText.t("saved_toast"))
     }
 
     override fun onDetachedFromWindow() {
