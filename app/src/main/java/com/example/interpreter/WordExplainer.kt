@@ -10,8 +10,6 @@ import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executors
 
 // Breaks a saved sentence into words with reading, Hangul pronunciation, part of speech and meaning.
@@ -39,7 +37,6 @@ object WordExplainer {
     private class Piece(val word: String, val base: String, val reading: String, val hangul: String, val pos: String)
 
     const val OFFLINE = "기기 분석"
-    private const val DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val tokenizer by lazy { com.atilika.kuromoji.ipadic.Tokenizer() }
@@ -77,27 +74,9 @@ object WordExplainer {
 
     /* ---------- Which LLM to use ---------- */
 
-    private fun p(prefs: SharedPreferences, key: String) = prefs.getString(key, "").orEmpty().trim()
+    fun llmEngine(prefs: SharedPreferences): String? = Providers.llmEngine(prefs)
 
-    // Prefers the chosen translation engine if it is an LLM, otherwise any LLM that has been set up.
-    fun llmEngine(prefs: SharedPreferences): String? {
-        val ready = mapOf(
-            "claude" to p(prefs, "claude_key").isNotEmpty(),
-            "local" to (p(prefs, "local_url").isNotEmpty() && p(prefs, "local_model").isNotEmpty()),
-            "openai" to (p(prefs, "openai_url").isNotEmpty() && p(prefs, "openai_key").isNotEmpty() &&
-                p(prefs, "openai_model").isNotEmpty())
-        )
-        val active = prefs.getString("engine", null)
-        if (active != null && ready[active] == true) return active
-        return listOf("claude", "local", "openai").firstOrNull { ready[it] == true }
-    }
-
-    fun label(id: String) = when (id) {
-        "claude" -> "Claude"
-        "local" -> "로컬 LLM (맥북)"
-        "openai" -> "OpenAI 호환 API"
-        else -> OFFLINE
-    }
+    fun label(id: String) = if (id.isEmpty()) OFFLINE else Providers.label(id)
 
     /* ---------- LLM explanation ---------- */
 
@@ -118,68 +97,10 @@ object WordExplainer {
 
     // Runs on a background thread. Throws on failure.
     fun explainWithLlm(prefs: SharedPreferences, engine: String, text: String, code: String): Result {
-        val raw = when (engine) {
-            "claude" -> claude(p(prefs, "claude_key"), p(prefs, "claude_model").ifEmpty { DEFAULT_CLAUDE_MODEL }, text, code)
-            "local" -> chat(p(prefs, "local_url"), p(prefs, "local_key"), p(prefs, "local_model"), text, code, 90000)
-            else -> chat(p(prefs, "openai_url"), p(prefs, "openai_key"), p(prefs, "openai_model"), text, code, 40000)
-        }
-        val r = fromJson(raw.replace(Regex("(?s)<think>.*?</think>"), ""))
-            ?: throw IllegalStateException("설명 형식을 읽지 못했어요")
+        val raw = Providers.complete(prefs, engine, prompt(code), listOf("user" to text), 4096, 40000)
+        val r = fromJson(raw) ?: throw IllegalStateException("설명 형식을 읽지 못했어요")
         if (r.words.isEmpty()) throw IllegalStateException("단어 설명이 비어 있어요")
         return Result(r.words, r.grammar, r.natural, label(engine))
-    }
-
-    private fun postJson(url: String, headers: Map<String, String>, body: JSONObject, readTimeout: Int): JSONObject {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = 5000
-        conn.readTimeout = readTimeout
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/json")
-        headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
-        try {
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            if (code !in 200..299) throw IllegalStateException("HTTP $code")
-            return JSONObject(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
-        } finally {
-            conn.disconnect()
-        }
-    }
-
-    private fun claude(key: String, model: String, text: String, code: String): String {
-        val body = JSONObject()
-            .put("model", model)
-            .put("max_tokens", 2048)
-            .put("system", prompt(code))
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", text)))
-        val json = postJson(
-            "https://api.anthropic.com/v1/messages",
-            mapOf("x-api-key" to key, "anthropic-version" to "2023-06-01"),
-            body, 40000
-        )
-        val content = json.getJSONArray("content")
-        val sb = StringBuilder()
-        for (i in 0 until content.length()) {
-            val block = content.getJSONObject(i)
-            if (block.optString("type") == "text") sb.append(block.optString("text"))
-        }
-        return sb.toString()
-    }
-
-    private fun chat(base0: String, key: String, model: String, text: String, code: String, readTimeout: Int): String {
-        var base = base0.trim().trimEnd('/')
-        if (!base.startsWith("http://") && !base.startsWith("https://")) base = "http://$base"
-        if (!base.contains("/v1")) base += "/v1"
-        val body = JSONObject()
-            .put("model", model)
-            .put("stream", false)
-            .put("messages", JSONArray()
-                .put(JSONObject().put("role", "system").put("content", prompt(code)))
-                .put(JSONObject().put("role", "user").put("content", text)))
-        val headers = if (key.isNotEmpty()) mapOf("Authorization" to "Bearer $key") else emptyMap()
-        val json = postJson("$base/chat/completions", headers, body, readTimeout)
-        return json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content")
     }
 
     /* ---------- Offline explanation ---------- */
@@ -224,7 +145,7 @@ object WordExplainer {
 
     private fun addMeanings(text: String, code: String, pieces: List<Piece>, done: (Result) -> Unit) {
         val note = if (code == TranslateLanguage.CHINESE)
-            "중국어는 띄어쓰기가 없어서, 단어별 설명에는 Claude나 맥북 LLM 같은 LLM 엔진이 필요해요." else ""
+            "중국어는 띄어쓰기가 없어서, 단어별 설명에는 Gemini, Claude, 맥북 LLM 같은 LLM 엔진이 필요해요." else ""
         if (code == TranslateLanguage.KOREAN) {
             done(Result(pieces.map { Word(it.word, it.base, it.reading, it.hangul, it.pos, "", "") }, note, text, OFFLINE))
             return
