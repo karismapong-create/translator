@@ -50,9 +50,18 @@ class MainActivity : Activity() {
     private data class Term(val names: Map<String, String>, val variants: List<String>)
     private class DeepLException(val code: Int) : Exception("HTTP $code")
 
+    // Source text with word-list terms swapped for placeholder codes, and how to put them back.
+    private class Prepared(val shown: String, val input: String, val codes: Map<Regex, String>) {
+        fun restore(text: String): String {
+            var out = text
+            for ((re, name) in codes) out = re.replace(out) { name }
+            return out
+        }
+    }
+
     companion object {
         const val DEFAULT_TERMS =
-            "마운자로 | 마운 자로 | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro"
+            "마운자로 | | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro"
     }
 
     private val langs = listOf(
@@ -233,14 +242,14 @@ class MainActivity : Activity() {
     /* ---------- Word list ---------- */
 
     private fun parseTerms(text: String): List<Term> = text.lines().mapNotNull { line ->
-        val parts = line.split("|").map { it.trim() }
+        val parts = line.replace("｜", "|").split("|").map { it.trim() }
         val key = parts.getOrNull(0).orEmpty()
         if (key.isEmpty() || key.startsWith("#")) return@mapNotNull null
         val variants = parts.getOrNull(1).orEmpty().split(",").map { it.trim() }.filter { it.isNotEmpty() }
         val names = HashMap<String, String>()
         names[TranslateLanguage.KOREAN] = key
-        parts.getOrNull(2).orEmpty().split(",").forEach { pair ->
-            val kv = pair.split("=", limit = 2)
+        parts.getOrNull(2).orEmpty().replace("，", ",").split(",").forEach { pair ->
+            val kv = pair.replace("＝", "=").split("=", limit = 2)
             if (kv.size == 2) {
                 val label = kv[0].trim()
                 val value = kv[1].trim()
@@ -258,8 +267,13 @@ class MainActivity : Activity() {
         RegexOption.IGNORE_CASE
     )
 
-    // Returns the corrected source to show, and the text to send to the translator.
-    private fun applyTerms(src: String): Pair<String, String> {
+    // Finds placeholder code XZ<n> in translated text, including full-width forms.
+    private fun codeRegex(n: Int): Regex {
+        val digits = n.toString().map { d -> "[" + d + (d - '0' + 0xFF10).toChar() + "]" }.joinToString("\\s*")
+        return Regex("[XxＸｘ]\\s*[ZzＺｚ]\\s*$digits(?![0-9０-９])")
+    }
+
+    private fun prepare(src: String): Prepared {
         var shown = src
         if (from.mlkit == TranslateLanguage.KOREAN) {
             for (t in terms) {
@@ -268,12 +282,17 @@ class MainActivity : Activity() {
             }
         }
         var input = shown
-        for (t in terms) {
-            val a = t.names[from.mlkit] ?: continue
-            val b = t.names[to.mlkit] ?: continue
-            input = input.replace(a, b, ignoreCase = true)
+        val codes = LinkedHashMap<Regex, String>()
+        terms.forEachIndexed { i, t ->
+            val a = t.names[from.mlkit] ?: return@forEachIndexed
+            val pattern = if (from.mlkit == TranslateLanguage.KOREAN) flex(a)
+                          else Regex(Regex.escape(a), RegexOption.IGNORE_CASE)
+            if (!pattern.containsMatchIn(input)) return@forEachIndexed
+            val n = i + 1
+            input = pattern.replace(input) { "XZ$n" }
+            codes[codeRegex(n)] = t.names[to.mlkit] ?: t.names[TranslateLanguage.ENGLISH] ?: a
         }
-        return shown to input
+        return Prepared(shown, input, codes)
     }
 
     private fun openDictionary() {
@@ -477,7 +496,7 @@ class MainActivity : Activity() {
         val t = translator ?: return
         val id = ++seq
         hint?.let { segments.removeView(it); hint = null }
-        val (shown, input) = applyTerms(raw)
+        val p = prepare(raw)
         val source = from.mlkit
         val target = to.mlkit
 
@@ -488,7 +507,7 @@ class MainActivity : Activity() {
             setTextIsSelectable(true)
         }
         val srcView = TextView(this).apply {
-            text = shown
+            text = p.shown
             textSize = 14f
             setTextColor(Color.GRAY)
             setTextIsSelectable(true)
@@ -498,31 +517,32 @@ class MainActivity : Activity() {
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
 
         val context = recent.joinToString(" ")
-        recent.addLast(shown)
+        recent.addLast(p.shown)
         while (recent.size > 3) recent.removeFirst()
 
         val key = deeplKey
         if (key.isEmpty() || System.currentTimeMillis() < deeplBlockedUntil) {
-            viaMlKit(t, id, trView, input, source, target)
+            viaMlKit(t, id, trView, p, source, target)
             return
         }
         net.execute {
-            val result: Any = try { deepl(input, source, target, key, context) } catch (e: Exception) { e }
+            val result: Any = try { deepl(p.input, source, target, key, context) } catch (e: Exception) { e }
             runOnUiThread {
                 if (result is String) {
-                    showResult(id, trView, result, target)
+                    showResult(id, trView, p.restore(result), target)
                 } else {
                     deeplFailed(result as Exception)
-                    viaMlKit(t, id, trView, input, source, target)
+                    viaMlKit(t, id, trView, p, source, target)
                 }
             }
         }
     }
 
-    private fun viaMlKit(t: Translator, id: Int, trView: TextView, input: String, source: String, target: String) {
-        t.translate(input)
-            .addOnSuccessListener { tr ->
-                if (!looksLike(tr, target) && looksLike(input, source)) {
+    private fun viaMlKit(t: Translator, id: Int, trView: TextView, p: Prepared, source: String, target: String) {
+        t.translate(p.input)
+            .addOnSuccessListener { raw ->
+                val tr = p.restore(raw)
+                if (!looksLike(tr, target) && looksLike(p.shown, source)) {
                     trView.text = "$tr\n(언어팩 오류 · 다시 받는 중)"
                     queueSpeech(id, null)
                     repairLanguagePack()
