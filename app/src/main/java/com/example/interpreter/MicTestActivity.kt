@@ -227,7 +227,8 @@ class MicTestActivity : Activity() {
         val rates = d.sampleRates.takeIf { it.isNotEmpty() }?.joinToString("/") ?: "제한 없음"
         val stereo = d.channelCounts.isEmpty() || d.channelCounts.any { it >= 2 }
         deviceInfo.text = "지원 채널 수: $channels\n샘플레이트: $rates\n" +
-            if (stereo) "스테레오 입력 가능성 있음" else "모노만 지원 · 두 사람 목소리를 나눌 수 없어요"
+            (if (stereo) "스테레오 입력 가능성 있음 (마이크가 하나여도 2로 나올 수 있어요)"
+             else "모노만 지원 · 두 사람 목소리를 나눌 수 없어요")
     }
 
     /* ---------- Speech engines on this phone ---------- */
@@ -322,8 +323,8 @@ class MicTestActivity : Activity() {
             val split = splitFrames.toDouble() / loudFrames > 0.3
             verdict.setTextColor(if (split) green else red)
             verdict.text = if (split) "✔ 왼쪽·오른쪽이 따로 들어와요. 두 사람 구분이 가능해요!"
-                           else "✘ 두 채널 소리가 거의 같아요. 마이크 앱에서 스테레오 모드인지 확인하세요. " +
-                                "그래도 같으면 폰이 모노로 합쳐서 받는 거예요."
+                           else "✘ 두 채널 소리가 거의 같아요. 마이크가 하나이거나, 마이크 앱이 모노 모드이거나, " +
+                                "폰이 모노로 합쳐서 받는 거예요."
         }
     }
 
@@ -506,27 +507,41 @@ class MicTestActivity : Activity() {
         val p = ParcelFileDescriptor.createPipe()
         pipe = p
         var finished = false
+        var lastPartial = ""
+
         fun done(color: Int, msg: String) {
             if (run != testRun || finished) return
             finished = true
             recogResult.setTextColor(color)
             recogResult.text = msg
         }
+        // Some engines only report text as partial results and send an empty final result.
+        fun finishWith(finalText: String?, failure: String) {
+            val best = finalText?.takeIf { it.isNotBlank() } ?: lastPartial
+            when {
+                !finalText.isNullOrBlank() -> done(green, "✔ ${choice.label} 연결 성공\n\"$best\"")
+                best.isNotBlank() -> done(
+                    green,
+                    "✔ ${choice.label} 연결 성공\n\"$best\"\n(최종 결과는 비어 있었지만 중간 결과로 인식이 확인됐어요)"
+                )
+                else -> done(red, "✘ ${choice.label}\n$failure")
+            }
+        }
+
         r.setRecognitionListener(object : RecognitionListener {
             override fun onPartialResults(b: Bundle?) {
                 val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (run == testRun && !finished && !t.isNullOrBlank()) recogResult.text = "인식 중… \"$t\""
+                if (run == testRun && !finished && !t.isNullOrBlank()) {
+                    lastPartial = t
+                    recogResult.text = "인식 중… \"$t\""
+                }
             }
             override fun onResults(b: Bundle?) {
                 val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (t.isNullOrBlank()) {
-                    done(red, "✘ ${choice.label}\n결과가 비어 있어요. 이 엔진은 앱이 넘긴 소리를 듣지 않는 것 같아요.")
-                } else {
-                    done(green, "✔ ${choice.label} 연결 성공\n\"$t\"")
-                }
+                finishWith(t, "결과가 비어 있어요. 이 엔진은 앱이 넘긴 소리를 듣지 않는 것 같아요.")
             }
             override fun onError(error: Int) {
-                done(red, "✘ ${choice.label}\n${errorText(error)} (코드 $error)")
+                finishWith(null, "${errorText(error)} (코드 $error)")
             }
             override fun onReadyForSpeech(b: Bundle?) {}
             override fun onBeginningOfSpeech() {}
@@ -564,7 +579,7 @@ class MicTestActivity : Activity() {
             } catch (_: Exception) {}
         }.start()
         recogResult.postDelayed({
-            done(red, "✘ ${choice.label}\n20초 동안 응답이 없어요. 이 엔진은 앱이 넘긴 소리를 받지 않는 것 같아요.")
+            finishWith(null, "20초 동안 응답이 없어요. 이 엔진은 앱이 넘긴 소리를 받지 않는 것 같아요.")
         }, 20000)
     }
 
