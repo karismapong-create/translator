@@ -1,7 +1,6 @@
 package com.example.interpreter
 
 import android.content.SharedPreferences
-import com.google.mlkit.nl.translate.TranslateLanguage
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -10,13 +9,8 @@ import java.net.URL
 // Online translation for the camera screen. Uses the same settings as the main screen.
 object Engines {
 
-    private val english = mapOf(
-        TranslateLanguage.KOREAN to "Korean", TranslateLanguage.JAPANESE to "Japanese",
-        TranslateLanguage.ENGLISH to "English", TranslateLanguage.FRENCH to "French",
-        TranslateLanguage.SPANISH to "Spanish", TranslateLanguage.CHINESE to "Simplified Chinese"
-    )
-
     private fun p(prefs: SharedPreferences, key: String) = prefs.getString(key, "").orEmpty().trim()
+    private fun name(code: String) = Languages.byCode(code).english
 
     fun active(prefs: SharedPreferences): String {
         val id = prefs.getString("engine", null) ?: if (p(prefs, "deepl").isNotEmpty()) "deepl" else "mlkit"
@@ -28,7 +22,7 @@ object Engines {
         return if (ready) id else "mlkit"
     }
 
-    fun label(id: String) = if (id == "mlkit") "기기 번역" else Providers.label(id)
+    fun label(id: String) = if (id == "mlkit") I18n.t("engine_device") else Providers.label(id)
 
     // Runs on a background thread. Throws on failure.
     fun translate(prefs: SharedPreferences, id: String, text: String, source: String, target: String): String =
@@ -37,8 +31,8 @@ object Engines {
             .trim().trim('"', '“', '”').trim()
 
     private fun prompt(source: String, target: String): String {
-        val s = english[source] ?: source
-        val t = english[target] ?: target
+        val s = name(source)
+        val t = name(target)
         return "You translate text read from a camera image, such as signs, menus, labels and documents, " +
                "from $s to $t. The text comes from OCR, so it may contain odd line breaks or small recognition " +
                "errors; quietly fix obvious errors. Reply with the $t translation only, with no quotes, notes " +
@@ -47,7 +41,7 @@ object Engines {
 
     private fun deepl(key: String, text: String, source: String, target: String): String {
         val host = if (key.endsWith(":fx")) "api-free.deepl.com" else "api.deepl.com"
-        val tgt = if (target == TranslateLanguage.ENGLISH) "EN-US" else target.uppercase()
+        val tgt = if (target == "en") "EN-US" else target.uppercase()
         val body = JSONObject()
             .put("text", JSONArray().put(text))
             .put("source_lang", source.uppercase())
