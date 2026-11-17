@@ -57,8 +57,6 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
-    private data class Term(val names: Map<String, String>, val variants: List<String>)
-
     // One translated line on screen.
     private class Seg(
         val src: String, val voice: String, val view: TextView, val typed: Boolean,
@@ -67,18 +65,7 @@ class MainActivity : Activity() {
         var tr: String = ""
     }
 
-    // Source text with glossary terms swapped for placeholder codes, and how to put them back.
-    private class Prepared(val shown: String, val input: String, val codes: Map<Regex, String>) {
-        fun restore(text: String): String {
-            var out = text
-            for ((re, name) in codes) out = re.replace(out) { name }
-            return out
-        }
-    }
-
     companion object {
-        const val DEFAULT_TERMS =
-            "마운자로 | | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro, 독일어=Mounjaro"
         const val MENU_SAVE_WORD = 1001
         private val SAMPLES = mapOf(
             "ko" to "안녕하세요. 만나서 반갑습니다.",
@@ -93,10 +80,6 @@ class MainActivity : Activity() {
 
     private val langs = Languages.all
     private val latinCodes = setOf("en", "fr", "es", "de")
-    private val aliases = mapOf(
-        "한국어" to "ko", "일본어" to "ja", "영어" to "en", "프랑스어" to "fr",
-        "스페인어" to "es", "중국어" to "zh", "독일어" to "de"
-    )
 
     private lateinit var home: Lang
     private lateinit var foreign: Lang
@@ -131,7 +114,7 @@ class MainActivity : Activity() {
     private val screenLog = ArrayList<Seg>()
     private val utter = HashMap<String, Seg>()
     private var utterCount = 0
-    private var terms: List<Term> = emptyList()
+    private var terms: List<Glossary.Term> = emptyList()
     private val repaired = HashSet<String>()
     private val prefs by lazy { getSharedPreferences("interpreter", MODE_PRIVATE) }
 
@@ -170,7 +153,7 @@ class MainActivity : Activity() {
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        terms = parseTerms(prefs.getString("terms", DEFAULT_TERMS) ?: DEFAULT_TERMS)
+        terms = Glossary.parse(Glossary.text(prefs, home.code), home.code)
 
         val labels = langs.map { it.native }
         fromSpinner = Spinner(this).apply {
@@ -282,8 +265,8 @@ class MainActivity : Activity() {
             { tts?.stop() }
         )
         vocabPage = VocabView(this, prefs, langInfos) { text, voice -> speakNow(text, voice, null, true) }
-        glossaryPage = GlossaryView(this, prefs, langInfos, DEFAULT_TERMS) { text ->
-            terms = parseTerms(text)
+        glossaryPage = GlossaryView(this, prefs, langInfos) { text ->
+            terms = Glossary.parse(text, home.code)
             if (listening) { stop(); start() }
         }
         pages = listOf(interpPage, convPage, vocabPage, glossaryPage)
@@ -773,61 +756,6 @@ class MainActivity : Activity() {
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
-    /* ---------- Glossary matching ---------- */
-
-    private fun parseTerms(text: String): List<Term> = text.lines().mapNotNull { line ->
-        val parts = line.replace("｜", "|").split("|").map { it.trim() }
-        val key = parts.getOrNull(0).orEmpty()
-        if (key.isEmpty() || key.startsWith("#")) return@mapNotNull null
-        val variants = parts.getOrNull(1).orEmpty().split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        val names = HashMap<String, String>()
-        names["ko"] = key
-        parts.getOrNull(2).orEmpty().replace("，", ",").split(",").forEach { pair ->
-            val kv = pair.replace("＝", "=").split("=", limit = 2)
-            if (kv.size == 2) {
-                val label = kv[0].trim()
-                val value = kv[1].trim()
-                val code = aliases[label]
-                    ?: langs.firstOrNull { it.native.equals(label, true) || it.code == label.lowercase() }?.code
-                if (code != null && value.isNotEmpty()) names[code] = value
-            }
-        }
-        Term(names, variants)
-    }
-
-    // Matches a Korean word even if the recognizer split it with spaces.
-    private fun flex(word: String) = Regex(
-        word.replace(" ", "").map { Regex.escape(it.toString()) }.joinToString("\\s*"),
-        RegexOption.IGNORE_CASE
-    )
-
-    // Finds placeholder code XZ<n> in translated text, including full-width forms.
-    private fun codeRegex(n: Int): Regex {
-        val digits = n.toString().map { d -> "[" + d + (d - '0' + 0xFF10).toChar() + "]" }.joinToString("\\s*")
-        return Regex("[XxＸｘ]\\s*[ZzＺｚ]\\s*$digits(?![0-9０-９])")
-    }
-
-    private fun prepare(src: String, sl: Lang, tl: Lang): Prepared {
-        var shown = src
-        if (sl.code == "ko") {
-            for (t in terms) {
-                val key = t.names["ko"] ?: continue
-                for (w in t.variants + key) shown = flex(w).replace(shown) { key }
-            }
-        }
-        var input = shown
-        val codes = LinkedHashMap<Regex, String>()
-        terms.forEachIndexed { i, t ->
-            val a = t.names[sl.code] ?: return@forEachIndexed
-            val pattern = if (sl.code == "ko") flex(a) else Regex(Regex.escape(a), RegexOption.IGNORE_CASE)
-            if (!pattern.containsMatchIn(input)) return@forEachIndexed
-            val n = i + 1
-            input = pattern.replace(input) { "XZ$n" }
-            codes[codeRegex(n)] = t.names[tl.code] ?: t.names["en"] ?: a
-        }
-        return Prepared(shown, input, codes)
-    }
-
     /* ---------- Language pack check ---------- */
 
     private fun looksLike(text: String, code: String): Boolean {
@@ -1050,7 +978,7 @@ class MainActivity : Activity() {
         val t = mt ?: return
         val id = ++seq
         hint?.let { segments.removeView(it); hint = null }
-        val p = prepare(raw, sl, tl)
+        val p = Glossary.prepare(raw, sl.code, tl.code, terms, home.code)
         val source = sl.code
         val target = tl.code
 
@@ -1122,7 +1050,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun viaMlKit(t: Translator, id: Int, seg: Seg, p: Prepared, source: String, target: String) {
+    private fun viaMlKit(t: Translator, id: Int, seg: Seg, p: Glossary.Prepared, source: String, target: String) {
         t.translate(p.input)
             .addOnSuccessListener { raw ->
                 val tr = p.restore(raw)
