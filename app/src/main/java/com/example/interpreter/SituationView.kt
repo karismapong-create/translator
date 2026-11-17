@@ -119,6 +119,15 @@ class SituationView(
             textSize = 16f
             setTypeface(null, Typeface.BOLD)
             setPadding(dp(6), 0, dp(6), 0)
+            setOnLongClickListener {
+                if (screen == 0) {
+                    ContentBuilder.openDialog(
+                        activity, prefs,
+                        places.map { ContentBuilder.Place(it.names.split("|")[2], it.en, it.role) }
+                    )
+                }
+                true
+            }
         }
         langSpinner = Spinner(activity).apply {
             adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, langs.map { it.label })
@@ -167,6 +176,7 @@ class SituationView(
             override fun onDone(utteranceId: String?) { post { lineFinished(utteranceId) } }
             override fun onError(utteranceId: String?) { post { lineFinished(utteranceId) } }
         })
+        net.execute { BasePack.prepare(activity) }
         show(0)
     }
 
@@ -244,7 +254,7 @@ class SituationView(
         }
     }
 
-    /* ---------- Cache ---------- */
+    /* ---------- Cache of content made or remade on this phone ---------- */
 
     private fun readCache(key: String): String? =
         File(cacheDir, "$cachePrefix$key.json").takeIf { it.exists() }?.readText()
@@ -271,6 +281,7 @@ class SituationView(
         }.filter { it.phrase.isNotBlank() }
     }
 
+    // Order: remade on this phone, then built-in content, then a fresh AI request.
     private fun loadQuestions(force: Boolean) {
         val p = place ?: return
         val l = lang
@@ -278,13 +289,27 @@ class SituationView(
         val key = "q_${l.code}_$placeIdx"
         titleView.text = "${p.emoji} ${placeName(p)}"
         questionsBox.removeAllViews()
-        if (!force) {
-            val cached = readCache(key)?.let { parseQuestions(it) }
-            if (!cached.isNullOrEmpty()) {
-                renderQuestions(cached)
-                return
+        val token = ++loadToken
+        if (force) {
+            generateQuestions(p, l, placeIdx, key, true, token)
+            return
+        }
+        val cached = readCache(key)?.let { parseQuestions(it) }
+        if (!cached.isNullOrEmpty()) {
+            renderQuestions(cached)
+            return
+        }
+        net.execute {
+            val base = BasePack.questions(activity, l.code, placeIdx, home.code)?.let { parseQuestions(it) }
+            post {
+                if (token != loadToken) return@post
+                if (!base.isNullOrEmpty()) renderQuestions(base)
+                else generateQuestions(p, l, placeIdx, key, false, token)
             }
         }
+    }
+
+    private fun generateQuestions(p: Place, l: LangInfo, placeIdx: Int, key: String, force: Boolean, token: Int) {
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
             questionsBox.addView(note(TalkText.t("s_need_llm"), Color.rgb(207, 34, 46)))
@@ -299,7 +324,6 @@ class SituationView(
             "{\"questions\":[{\"ko\":\"short $mine title\",\"phrase\":\"$name sentence\"," +
             "\"phrase_ko\":\"$mine meaning of the sentence\"}]}"
         val user = "Place: ${placeName(p)} (${p.en}). Language: $name."
-        val token = ++loadToken
         net.execute {
             val r: Any = try { Tutor.send(prefs, e, system, listOf("user" to user)) } catch (ex: Exception) { ex }
             post {
@@ -375,18 +399,38 @@ class SituationView(
         val q = question ?: return
         val l = lang
         val placeIdx = places.indexOf(p)
-        val key = "d_${l.code}_${placeIdx}_$questionIndex"
+        val index = questionIndex
+        val key = "d_${l.code}_${placeIdx}_$index"
         stopPlay()
         titleView.text = "${p.emoji} ${q.title}"
         dialogueBox.removeAllViews()
         cards = emptyList()
-        if (!force) {
-            val cached = readCache(key)?.let { parseDialogue(it) }
-            if (cached != null) {
-                renderDialogue(p, q, cached.first, cached.second)
-                return
+        val token = ++loadToken
+        if (force) {
+            generateDialogue(p, q, l, key, token)
+            return
+        }
+        val cached = readCache(key)?.let { parseDialogue(it) }
+        if (cached != null) {
+            renderDialogue(p, q, cached.first, cached.second)
+            return
+        }
+        // Built-in dialogues only match the built-in question list.
+        if (readCache("q_${l.code}_$placeIdx") != null) {
+            generateDialogue(p, q, l, key, token)
+            return
+        }
+        net.execute {
+            val base = BasePack.dialogue(activity, l.code, placeIdx, index, home.code)?.let { parseDialogue(it) }
+            post {
+                if (token != loadToken) return@post
+                if (base != null) renderDialogue(p, q, base.first, base.second)
+                else generateDialogue(p, q, l, key, token)
             }
         }
+    }
+
+    private fun generateDialogue(p: Place, q: Question, l: LangInfo, key: String, token: Int) {
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
             dialogueBox.addView(note(TalkText.t("s_need_llm"), Color.rgb(207, 34, 46)))
@@ -402,7 +446,6 @@ class SituationView(
             "fences: {\"lines\":[{\"who\":\"A\",\"text\":\"$name line\",\"ko\":\"$mine translation\"}]," +
             "\"tips\":\"one or two short $mine tips about local customs or useful points\"}"
         val user = "Situation: ${q.title} — ${q.phrase}"
-        val token = ++loadToken
         net.execute {
             val r: Any = try { Tutor.send(prefs, e, system, listOf("user" to user)) } catch (ex: Exception) { ex }
             post {
