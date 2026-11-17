@@ -1,627 +1,96 @@
 package com.example.interpreter
 
-import android.app.AlertDialog
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.content.SharedPreferences
-import android.graphics.Color
-import android.graphics.Typeface
-import android.text.Editable
-import android.text.TextWatcher
-import android.view.Gravity
-import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.EditText
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.Spinner
-import android.widget.TextView
-import android.widget.Toast
-import com.google.mlkit.common.model.DownloadConditions
-import com.google.mlkit.nl.translate.Translation
-import com.google.mlkit.nl.translate.TranslatorOptions
-import org.json.JSONArray
-import org.json.JSONObject
-import java.text.DateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.Executors
+// Screen text for the word list, quizzes and word details. Order in m(): ko, ja, en, fr, es, de, zh.
+object VocabText {
 
-data class LangInfo(val label: String, val code: String, val voice: String)
+    fun t(key: String): String = table[key]?.let { it[I18n.lang] ?: it["en"] ?: it["ko"] } ?: key
 
-// Saved words and sentences: filter by language and date, explain word by word, and test yourself.
-class VocabView(
-    context: Context,
-    private val prefs: SharedPreferences,
-    private val langs: List<LangInfo>,
-    private val speak: (String, String) -> Unit
-) : LinearLayout(context) {
+    fun f(key: String, vararg args: Any): String = String.format(t(key), *args)
 
-    private class Item(
-        val index: Int, val text: String, val meaning: String,
-        val example: String, val exampleMeaning: String,
-        val voice: String, val code: String, val time: Long,
-        val right: Int, val wrong: Int
+    private fun m(ko: String, ja: String, en: String, fr: String, es: String, de: String, zh: String) =
+        mapOf("ko" to ko, "ja" to ja, "en" to en, "fr" to fr, "es" to es, "de" to de, "zh" to zh)
+
+    private val table: Map<String, Map<String, String>> = mapOf(
+        // Word list
+        "all_langs" to m("모든 언어", "すべての言語", "All languages", "Toutes les langues", "Todos los idiomas", "Alle Sprachen", "所有语言"),
+        "all_dates" to m("모든 날짜", "すべての日付", "All dates", "Toutes les dates", "Todas las fechas", "Alle Daten", "所有日期"),
+        "search" to m("검색", "検索", "Search", "Rechercher", "Buscar", "Suchen", "搜索"),
+        "quiz" to m("시험", "テスト", "Quiz", "Quiz", "Prueba", "Quiz", "测验"),
+        "export" to m("내보내기", "共有", "Share", "Partager", "Compartir", "Teilen", "分享"),
+        "empty" to m(
+            "저장한 단어나 문장이 없어요.\n통역 화면에서 ☆를 누르거나, 글자를 길게 눌러 '단어 저장'을 고르세요.",
+            "保存した単語や文がありません。\n通訳画面で☆を押すか、文字を長押しして「単語を保存」を選んでください。",
+            "No saved words yet.\nTap ☆ on the interpret screen, or long-press text and choose “Save word”.",
+            "Aucun mot enregistré.\nTouchez ☆ dans l'écran d'interprétation ou faites un appui long et choisissez « Enregistrer le mot ».",
+            "Aún no hay palabras guardadas.\nToca ☆ en la pantalla de interpretación o mantén pulsado y elige «Guardar palabra».",
+            "Noch keine Wörter gespeichert.\nTippe im Dolmetsch-Bildschirm auf ☆ oder drücke lange auf Text und wähle „Wort speichern“.",
+            "还没有保存的单词。\n在口译界面点 ☆，或长按文字选择“保存单词”。"
+        ),
+        "no_meaning" to m("뜻 없음 · 시험을 시작하면 자동으로 채워요", "意味なし · テスト開始時に自動で補います", "No meaning yet · filled in when you start a quiz", "Pas de sens · ajouté au début du quiz", "Sin significado · se completa al empezar la prueba", "Keine Bedeutung · wird beim Quiz ergänzt", "暂无释义 · 开始测验时自动补全"),
+        "example" to m("예) ", "例) ", "e.g. ", "ex. ", "ej. ", "z. B. ", "例："),
+        "detail_menu" to m("단어별 상세 설명", "単語ごとの詳しい説明", "Word-by-word details", "Détails mot par mot", "Detalles palabra por palabra", "Wort-für-Wort-Erklärung", "逐词详解"),
+        "copy" to m("복사", "コピー", "Copy", "Copier", "Copiar", "Kopieren", "复制"),
+        "delete" to m("삭제", "削除", "Delete", "Supprimer", "Eliminar", "Löschen", "删除"),
+        "deleted" to m("삭제했어요", "削除しました", "Deleted", "Supprimé", "Eliminado", "Gelöscht", "已删除"),
+        "copied" to m("복사했어요", "コピーしました", "Copied", "Copié", "Copiado", "Kopiert", "已复制"),
+        "nothing" to m("내보낼 항목이 없어요.", "共有する項目がありません。", "Nothing to share.", "Rien à partager.", "Nada que compartir.", "Nichts zu teilen.", "没有可分享的项目。"),
+        "export_title" to m("단어장 내보내기", "単語帳を共有", "Share word list", "Partager les mots", "Compartir palabras", "Wortliste teilen", "分享单词本"),
+
+        // Quiz setup
+        "need2" to m("시험을 보려면 단어가 2개 이상 있어야 해요.", "テストには単語が2つ以上必要です。", "You need at least 2 words for a quiz.", "Il faut au moins 2 mots pour un quiz.", "Necesitas al menos 2 palabras.", "Für ein Quiz brauchst du mindestens 2 Wörter.", "测验至少需要 2 个单词。"),
+        "filling" to m("뜻이 없는 단어 %d개의 뜻을 채우는 중…", "意味のない単語%d個を補完中…", "Filling in meanings for %d words…", "Ajout du sens pour %d mots…", "Completando %d significados…", "Bedeutungen für %d Wörter werden ergänzt…", "正在补全 %d 个单词的释义…"),
+        "mode1" to m("외국어 보고 뜻 고르기", "外国語を見て意味を選ぶ", "See the word, pick the meaning", "Voir le mot, choisir le sens", "Ver la palabra, elegir el significado", "Wort sehen, Bedeutung wählen", "看外语选释义"),
+        "mode2" to m("뜻 보고 외국어 고르기", "意味を見て外国語を選ぶ", "See the meaning, pick the word", "Voir le sens, choisir le mot", "Ver el significado, elegir la palabra", "Bedeutung sehen, Wort wählen", "看释义选外语"),
+        "mode3" to m("카드 넘기며 외우기", "カードをめくって覚える", "Flash cards", "Cartes mémoire", "Tarjetas", "Karteikarten", "翻卡记忆"),
+        "mode4" to m("틀렸던 것만 (뜻 고르기, %d개)", "間違えたものだけ (%d個)", "Only mistakes (%d)", "Seulement les erreurs (%d)", "Solo errores (%d)", "Nur Fehler (%d)", "只练错题（%d 个）"),
+        "quiz_title" to m("시험 · %d개", "テスト · %d個", "Quiz · %d", "Quiz · %d", "Prueba · %d", "Quiz · %d", "测验 · %d 个"),
+        "need2m" to m("뜻이 있는 단어가 2개 이상 필요해요.", "意味のある単語が2つ以上必要です。", "You need at least 2 words with meanings.", "Il faut au moins 2 mots avec un sens.", "Necesitas al menos 2 palabras con significado.", "Mindestens 2 Wörter mit Bedeutung nötig.", "至少需要 2 个有释义的单词。"),
+
+        // Quiz
+        "q_quit" to m("그만하기", "やめる", "Quit", "Quitter", "Salir", "Beenden", "退出"),
+        "q_progress" to m("%1\$d / %2\$d   ·   맞힘 %3\$d", "%1\$d / %2\$d   ·   正解 %3\$d", "%1\$d / %2\$d   ·   correct %3\$d", "%1\$d / %2\$d   ·   justes %3\$d", "%1\$d / %2\$d   ·   aciertos %3\$d", "%1\$d / %2\$d   ·   richtig %3\$d", "%1\$d / %2\$d   ·   答对 %3\$d"),
+        "q_show" to m("뜻 보기", "意味を見る", "Show meaning", "Voir le sens", "Ver significado", "Bedeutung zeigen", "查看释义"),
+        "q_know" to m("✔ 알아요", "✔ 知ってる", "✔ I know it", "✔ Je sais", "✔ Lo sé", "✔ Weiß ich", "✔ 认识"),
+        "q_dont" to m("✘ 몰라요", "✘ 知らない", "✘ Don't know", "✘ Je ne sais pas", "✘ No lo sé", "✘ Weiß ich nicht", "✘ 不认识"),
+        "q_correct" to m("정답!", "正解！", "Correct!", "Correct !", "¡Correcto!", "Richtig!", "答对了！"),
+        "q_wrong" to m("오답", "不正解", "Wrong", "Faux", "Incorrecto", "Falsch", "答错了"),
+        "q_next" to m("다음", "次へ", "Next", "Suivant", "Siguiente", "Weiter", "下一题"),
+        "q_result_btn" to m("결과 보기", "結果を見る", "See results", "Voir les résultats", "Ver resultados", "Ergebnis", "查看结果"),
+        "q_result" to m("결과", "結果", "Results", "Résultats", "Resultados", "Ergebnis", "结果"),
+        "q_perfect" to m("모두 맞혔어요! 👏", "全問正解！👏", "All correct! 👏", "Tout juste ! 👏", "¡Todo correcto! 👏", "Alles richtig! 👏", "全部答对！👏"),
+        "q_missed" to m("틀린 단어", "間違えた単語", "Missed words", "Mots ratés", "Palabras falladas", "Falsche Wörter", "答错的单词"),
+        "q_retry_wrong" to m("틀린 것만 다시", "間違えたものだけ再挑戦", "Retry mistakes", "Refaire les erreurs", "Repetir errores", "Fehler wiederholen", "只重做错题"),
+        "q_restart" to m("처음부터 다시", "最初から", "Start over", "Recommencer", "Empezar de nuevo", "Neu starten", "从头再来"),
+
+        // Word details
+        "making_detail" to m("단어 설명을 만드는 중… (%s)", "単語の説明を作成中… (%s)", "Creating word details… (%s)", "Création des détails… (%s)", "Creando detalles… (%s)", "Erklärung wird erstellt… (%s)", "正在生成单词详解…（%s）"),
+        "detail_fallback" to m("%s 설명에 실패해서 기기 분석으로 보여드려요", "%s の説明に失敗したため端末分析で表示します", "%s failed, showing on-device analysis", "%s a échoué, analyse locale affichée", "%s falló, se muestra el análisis local", "%s fehlgeschlagen, Geräteanalyse wird gezeigt", "%s 失败，改为显示设备分析"),
+        "play_sentence" to m("🔊 문장 전체 듣기", "🔊 文全体を聞く", "🔊 Play the sentence", "🔊 Écouter la phrase", "🔊 Escuchar la frase", "🔊 Satz anhören", "🔊 播放整句"),
+        "grammar" to m("문법 포인트", "文法ポイント", "Grammar points", "Points de grammaire", "Gramática", "Grammatik", "语法要点"),
+        "source" to m("설명: %s", "説明: %s", "Explained by: %s", "Explication : %s", "Explicación: %s", "Erklärt von: %s", "讲解：%s"),
+        "offline_tip" to m(
+            "번역 엔진에 Gemini, Claude, 맥북 LLM 등을 설정하면 활용과 문법까지 자세히 설명해요.",
+            "翻訳エンジンにGeminiなどを設定すると、活用や文法まで詳しく説明します。",
+            "Set up Gemini, Claude or a local LLM to get conjugation and grammar notes.",
+            "Configurez Gemini, Claude ou un LLM local pour la conjugaison et la grammaire.",
+            "Configura Gemini, Claude o un LLM local para conjugación y gramática.",
+            "Mit Gemini, Claude oder einem lokalen LLM gibt es Konjugation und Grammatik dazu.",
+            "设置 Gemini、Claude 或本地 LLM 可获得变形和语法讲解。"
+        ),
+        "regen" to m("다시 만들기", "作り直す", "Recreate", "Recréer", "Rehacer", "Neu erstellen", "重新生成"),
+        "base_form" to m("기본형 %s", "基本形 %s", "base form %s", "forme de base %s", "forma base %s", "Grundform %s", "原形 %s"),
+        "add_vocab" to m("+ 단어장", "+ 単語帳", "+ Words", "+ Mots", "+ Palabras", "+ Wörter", "+ 单词本"),
+        "added" to m("✔ 추가됨", "✔ 追加済み", "✔ Added", "✔ Ajouté", "✔ Añadido", "✔ Hinzugefügt", "✔ 已添加"),
+        "added_toast" to m("단어장에 추가: %s", "単語帳に追加: %s", "Added: %s", "Ajouté : %s", "Añadido: %s", "Hinzugefügt: %s", "已添加：%s"),
+        "offline_label" to m("기기 분석", "端末分析", "On-device analysis", "Analyse locale", "Análisis local", "Geräteanalyse", "设备分析"),
+        "zh_note" to m(
+            "중국어는 띄어쓰기가 없어서, 단어별 설명에는 AI 엔진이 필요해요.",
+            "中国語は分かち書きがないため、単語ごとの説明にはAIエンジンが必要です。",
+            "Chinese has no spaces, so word-by-word details need an AI engine.",
+            "Le chinois n'a pas d'espaces : les détails mot par mot nécessitent un moteur IA.",
+            "El chino no tiene espacios: los detalles por palabra necesitan un motor de IA.",
+            "Chinesisch hat keine Leerzeichen; dafür ist eine KI-Engine nötig.",
+            "中文没有空格，逐词讲解需要 AI 引擎。"
+        )
     )
-
-    private val home: Lang = Languages.home(prefs)
-    private val blue = Color.rgb(47, 91, 234)
-    private val density = resources.displayMetrics.density
-    private val dayFormat = DateFormat.getDateInstance(DateFormat.FULL, Locale.forLanguageTag(home.speechTag))
-    private val net = Executors.newSingleThreadExecutor()
-    private var dayOptions: List<String> = emptyList()
-    private var selectedDay: String? = null
-    private var shown: List<Item> = emptyList()
-
-    private val langFilter: Spinner
-    private val dateFilter: Spinner
-    private val search: EditText
-    private val list: LinearLayout
-    private val listPanel: LinearLayout
-    private val quizHolder: FrameLayout
-
-    init {
-        orientation = VERTICAL
-        langFilter = Spinner(context).apply {
-            adapter = ArrayAdapter(
-                context, android.R.layout.simple_spinner_dropdown_item,
-                listOf(VocabText.t("all_langs")) + langs.map { it.label }
-            )
-            onItemSelectedListener = onSelect { refresh() }
-        }
-        dateFilter = Spinner(context).apply {
-            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf(VocabText.t("all_dates")))
-            onItemSelectedListener = onSelect { pos ->
-                val day = if (pos <= 0) null else dayOptions.getOrNull(pos - 1)
-                if (day != selectedDay) {
-                    selectedDay = day
-                    refresh()
-                }
-            }
-        }
-        val filters = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            addView(langFilter, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(dateFilter, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        }
-        search = EditText(context).apply {
-            setHint(VocabText.t("search"))
-            setSingleLine(true)
-            textSize = 15f
-            addTextChangedListener(object : TextWatcher {
-                override fun afterTextChanged(s: Editable?) { refresh() }
-                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            })
-        }
-        val quizButton = Button(context).apply {
-            text = VocabText.t("quiz")
-            setOnClickListener { startQuiz() }
-        }
-        val exportButton = Button(context).apply {
-            text = VocabText.t("export")
-            setOnClickListener { exportShown() }
-        }
-        val actions = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(search, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(quizButton)
-            addView(exportButton)
-        }
-        list = LinearLayout(context).apply { orientation = VERTICAL }
-        val scroll = ScrollView(context).apply { addView(list) }
-        listPanel = LinearLayout(context).apply {
-            orientation = VERTICAL
-            addView(filters, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-            addView(actions, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-            addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
-        }
-        quizHolder = FrameLayout(context).apply { visibility = View.GONE }
-        addView(listPanel, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
-        addView(quizHolder, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
-    }
-
-    private fun onSelect(f: (Int) -> Unit) = object : AdapterView.OnItemSelectedListener {
-        override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) = f(pos)
-        override fun onNothingSelected(p: AdapterView<*>?) {}
-    }
-
-    private fun dp(v: Int) = (v * density).toInt()
-    private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-    private fun day(time: Long): String = dayFormat.format(Date(time))
-
-    /* ---------- Storage ---------- */
-
-    private fun readArray(): JSONArray =
-        try { JSONArray(prefs.getString("saved", "[]")) } catch (_: Exception) { JSONArray() }
-
-    private fun writeArray(arr: JSONArray) = prefs.edit().putString("saved", arr.toString()).apply()
-
-    private fun isKorean(s: String): Boolean {
-        val letters = s.filter { it.isLetter() }
-        val hangul = letters.count { it in '\uAC00'..'\uD7A3' }
-        return hangul > 0 && hangul * 2 >= letters.length
-    }
-
-    private fun voiceFor(s: String): String = when {
-        s.any { it in '\u3040'..'\u30FF' } -> "ja-JP"
-        s.any { it in '\u4E00'..'\u9FFF' } -> "zh-CN"
-        isKorean(s) -> "ko-KR"
-        else -> "en-US"
-    }
-
-    // Converts items saved by the first versions (Korean users) into foreign text + meaning.
-    private fun migrate(o: JSONObject) {
-        val t = o.optString("t")
-        val n = o.optString("n")
-        when {
-            isKorean(t) && n.isNotEmpty() && !isKorean(n) -> {
-                val v = voiceFor(n)
-                o.put("t", n).put("m", t).put("v", v).put("l", v.substringBefore("-"))
-            }
-            !isKorean(t) && isKorean(n) -> o.put("m", n)
-            else -> {
-                o.put("m", "")
-                if (n.isNotEmpty() && n != t) o.put("e", n)
-            }
-        }
-    }
-
-    private fun load(): List<Item> {
-        val arr = readArray()
-        val now = System.currentTimeMillis()
-        var changed = false
-        val items = ArrayList<Item>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            if (!o.has("d")) { o.put("d", now); changed = true }
-            if (!o.has("m")) { migrate(o); changed = true }
-            val voice = o.optString("v", "ja-JP")
-            val code = o.optString("l").ifEmpty { voice.substringBefore("-") }
-            items += Item(
-                i, o.optString("t"), o.optString("m"), o.optString("e"), o.optString("em"),
-                voice, code, o.optLong("d", now), o.optInt("c", 0), o.optInt("w", 0)
-            )
-        }
-        if (changed) writeArray(arr)
-        return items
-    }
-
-    /* ---------- List ---------- */
-
-    fun refresh() {
-        val pos = langFilter.selectedItemPosition
-        val code = if (pos <= 0) null else langs[pos - 1].code
-        val q = search.text.toString().trim()
-        val base = load()
-            .filter { code == null || it.code == code }
-            .filter {
-                q.isEmpty() || it.text.contains(q, true) || it.meaning.contains(q, true) || it.example.contains(q, true)
-            }
-            .sortedByDescending { it.time }
-
-        val days = base.map { day(it.time) }.distinct()
-        if (days != dayOptions) {
-            dayOptions = days
-            if (selectedDay != null && selectedDay !in days) selectedDay = null
-            dateFilter.adapter = ArrayAdapter(
-                context, android.R.layout.simple_spinner_dropdown_item, listOf(VocabText.t("all_dates")) + days
-            )
-            dateFilter.setSelection(selectedDay?.let { days.indexOf(it) + 1 } ?: 0)
-        }
-        shown = base.filter { selectedDay == null || day(it.time) == selectedDay }
-
-        list.removeAllViews()
-        if (shown.isEmpty()) {
-            list.addView(TextView(context).apply {
-                text = VocabText.t("empty")
-                textSize = 15f
-                setTextColor(Color.GRAY)
-                setPadding(0, dp(16), 0, 0)
-            })
-            return
-        }
-        var lastDay = ""
-        for (item in shown) {
-            val d = day(item.time)
-            if (d != lastDay) {
-                lastDay = d
-                list.addView(header(d))
-            }
-            list.addView(row(item))
-        }
-    }
-
-    private fun header(d: String) = TextView(context).apply {
-        text = d
-        textSize = 13f
-        setTypeface(null, Typeface.BOLD)
-        setTextColor(blue)
-        setPadding(0, dp(18), 0, dp(4))
-    }
-
-    private fun iconButton(icon: String, onClick: () -> Unit) = TextView(context).apply {
-        text = icon
-        textSize = 19f
-        setPadding(dp(8), dp(4), dp(8), dp(4))
-        setOnClickListener { onClick() }
-    }
-
-    private fun row(item: Item): View {
-        val label = langs.firstOrNull { it.code == item.code }?.label ?: item.code
-        val texts = LinearLayout(context).apply {
-            orientation = VERTICAL
-            addView(TextView(context).apply {
-                text = item.text
-                textSize = 20f
-                setTypeface(null, Typeface.BOLD)
-                setTextIsSelectable(true)
-            })
-            addView(TextView(context).apply {
-                text = item.meaning.ifEmpty { VocabText.t("no_meaning") }
-                textSize = 16f
-                setTextColor(if (item.meaning.isEmpty()) Color.LTGRAY else blue)
-            })
-            if (item.example.isNotEmpty()) addView(TextView(context).apply {
-                text = VocabText.t("example") + item.example +
-                    if (item.exampleMeaning.isNotEmpty()) "\n     " + item.exampleMeaning else ""
-                textSize = 13f
-                setTextColor(Color.GRAY)
-            })
-            addView(TextView(context).apply {
-                text = "$label  ·  ✔${item.right}  ✘${item.wrong}"
-                textSize = 11f
-                setTextColor(Color.LTGRAY)
-            })
-        }
-        return LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(8), 0, dp(8))
-            addView(texts, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(iconButton("📖") { openDetail(item) })
-            addView(iconButton("🔊") { speak(item.text, item.voice) })
-            addView(iconButton("⋮") { actions(item) })
-        }
-    }
-
-    private fun actions(item: Item) {
-        AlertDialog.Builder(context)
-            .setTitle(item.text)
-            .setItems(arrayOf(VocabText.t("detail_menu"), VocabText.t("copy"), VocabText.t("delete"))) { _, which ->
-                when (which) {
-                    0 -> openDetail(item)
-                    1 -> copy(item.text + if (item.meaning.isNotEmpty()) " = " + item.meaning else "")
-                    else -> delete(item)
-                }
-            }
-            .show()
-    }
-
-    private fun delete(item: Item) {
-        val arr = readArray()
-        if (item.index < arr.length()) arr.remove(item.index)
-        writeArray(arr)
-        toast(VocabText.t("deleted"))
-        refresh()
-    }
-
-    private fun copy(text: String) {
-        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            .setPrimaryClip(ClipData.newPlainText("word", text))
-        toast(VocabText.t("copied"))
-    }
-
-    private fun exportShown() {
-        if (shown.isEmpty()) {
-            toast(VocabText.t("nothing"))
-            return
-        }
-        var lastDay = ""
-        val sb = StringBuilder()
-        for (item in shown) {
-            val d = day(item.time)
-            if (d != lastDay) {
-                lastDay = d
-                if (sb.isNotEmpty()) sb.append("\n")
-                sb.append("■ ").append(d).append("\n")
-            }
-            sb.append(item.text)
-            if (item.meaning.isNotEmpty()) sb.append("  =  ").append(item.meaning)
-            if (item.example.isNotEmpty()) sb.append("\n    ").append(VocabText.t("example")).append(item.example)
-            sb.append("\n")
-        }
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, sb.toString())
-        }
-        context.startActivity(Intent.createChooser(send, VocabText.t("export_title")))
-    }
-
-    /* ---------- Word-by-word explanation ---------- */
-
-    private fun openDetail(item: Item, force: Boolean = false) {
-        if (!force) {
-            val cached = WordExplainer.fromJson(readArray().optJSONObject(item.index)?.optString("x"))
-            if (cached != null) {
-                showDetail(item, cached)
-                return
-            }
-        }
-        val engine = WordExplainer.llmEngine(prefs)
-        val waiting = AlertDialog.Builder(context)
-            .setMessage(VocabText.f("making_detail", WordExplainer.label(engine ?: "")))
-            .show()
-
-        fun deliver(r: WordExplainer.Result) {
-            waiting.dismiss()
-            val arr = readArray()
-            arr.optJSONObject(item.index)?.put("x", r.toJson())
-            writeArray(arr)
-            showDetail(item, r)
-        }
-        fun offline() = WordExplainer.explainOffline(context, item.text, item.code, home.code) { deliver(it) }
-
-        if (engine == null) {
-            offline()
-            return
-        }
-        net.execute {
-            val r: Any = try {
-                WordExplainer.explainWithLlm(prefs, engine, item.text, item.code)
-            } catch (e: Exception) { e }
-            post {
-                if (r is WordExplainer.Result) {
-                    deliver(r)
-                } else {
-                    toast(VocabText.f("detail_fallback", WordExplainer.label(engine)))
-                    offline()
-                }
-            }
-        }
-    }
-
-    private fun showDetail(item: Item, r: WordExplainer.Result) {
-        val box = LinearLayout(context).apply {
-            orientation = VERTICAL
-            setPadding(dp(20), dp(16), dp(20), dp(8))
-        }
-        box.addView(TextView(context).apply {
-            text = item.text
-            textSize = 21f
-            setTypeface(null, Typeface.BOLD)
-            setTextIsSelectable(true)
-        })
-        val natural = r.natural.ifEmpty { item.meaning }
-        if (natural.isNotEmpty()) box.addView(TextView(context).apply {
-            text = natural
-            textSize = 16f
-            setTextColor(blue)
-            setPadding(0, dp(4), 0, 0)
-        })
-        box.addView(TextView(context).apply {
-            text = VocabText.t("play_sentence")
-            textSize = 15f
-            setPadding(0, dp(8), 0, dp(12))
-            setOnClickListener { speak(item.text, item.voice) }
-        })
-        r.words.forEach { w -> box.addView(wordCard(item, w)) }
-        if (r.grammar.isNotEmpty()) {
-            box.addView(TextView(context).apply {
-                text = VocabText.t("grammar")
-                textSize = 15f
-                setTypeface(null, Typeface.BOLD)
-                setPadding(0, dp(16), 0, dp(4))
-            })
-            box.addView(TextView(context).apply {
-                text = r.grammar
-                textSize = 14f
-                setTextColor(Color.DKGRAY)
-                setTextIsSelectable(true)
-            })
-        }
-        val offline = r.source.isEmpty() || r.source == WordExplainer.OFFLINE
-        box.addView(TextView(context).apply {
-            text = VocabText.f("source", r.source.ifEmpty { WordExplainer.OFFLINE }) +
-                if (offline) "\n" + VocabText.t("offline_tip") else ""
-            textSize = 12f
-            setTextColor(Color.GRAY)
-            setPadding(0, dp(16), 0, 0)
-        })
-        AlertDialog.Builder(context)
-            .setView(ScrollView(context).apply { addView(box) })
-            .setPositiveButton(I18n.t("close"), null)
-            .setNeutralButton(VocabText.t("regen")) { _, _ -> openDetail(item, force = true) }
-            .show()
-    }
-
-    private fun wordCard(item: Item, w: WordExplainer.Word): View {
-        val card = LinearLayout(context).apply {
-            orientation = VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundColor(Color.argb(20, 47, 91, 234))
-        }
-        val head = buildString {
-            append(w.word)
-            if (w.reading.isNotEmpty() && w.reading != w.word) append("   ").append(w.reading)
-            if (w.hangul.isNotEmpty()) append("   [").append(w.hangul).append("]")
-        }
-        card.addView(TextView(context).apply {
-            text = head
-            textSize = 18f
-            setTypeface(null, Typeface.BOLD)
-            setTextIsSelectable(true)
-        })
-        val sub = listOf(
-            w.pos,
-            if (w.base.isNotEmpty() && w.base != w.word) VocabText.f("base_form", w.base) else ""
-        ).filter { it.isNotEmpty() }.joinToString("  ·  ")
-        if (sub.isNotEmpty()) card.addView(TextView(context).apply {
-            text = sub
-            textSize = 13f
-            setTextColor(Color.GRAY)
-        })
-        if (w.meaning.isNotEmpty()) card.addView(TextView(context).apply {
-            text = w.meaning
-            textSize = 16f
-            setTextColor(blue)
-        })
-        if (w.note.isNotEmpty()) card.addView(TextView(context).apply {
-            text = w.note
-            textSize = 13f
-            setTextColor(Color.DKGRAY)
-            setPadding(0, dp(2), 0, 0)
-        })
-        val buttons = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            setPadding(0, dp(4), 0, 0)
-            addView(TextView(context).apply {
-                text = TalkText.t("listen")
-                textSize = 14f
-                setPadding(0, dp(4), dp(20), dp(4))
-                setOnClickListener { speak(w.word, item.voice) }
-            })
-            addView(TextView(context).apply {
-                text = VocabText.t("add_vocab")
-                textSize = 14f
-                setTextColor(blue)
-                setPadding(0, dp(4), 0, dp(4))
-                setOnClickListener {
-                    addWord(item, w)
-                    text = VocabText.t("added")
-                    isEnabled = false
-                }
-            })
-        }
-        card.addView(buttons)
-        return FrameLayout(context).apply {
-            setPadding(0, dp(4), 0, dp(4))
-            addView(card)
-        }
-    }
-
-    private fun addWord(item: Item, w: WordExplainer.Word) {
-        val word = w.base.ifEmpty { w.word }
-        val arr = readArray()
-        arr.put(
-            JSONObject()
-                .put("t", word)
-                .put("m", w.meaning)
-                .put("e", item.text)
-                .put("em", item.meaning)
-                .put("v", item.voice)
-                .put("l", item.code)
-                .put("d", System.currentTimeMillis())
-                .put("c", 0)
-                .put("w", 0)
-        )
-        writeArray(arr)
-        toast(VocabText.f("added_toast", word))
-        refresh()
-    }
-
-    /* ---------- Quiz ---------- */
-
-    private fun startQuiz() {
-        if (shown.size < 2) {
-            toast(VocabText.t("need2"))
-            return
-        }
-        val missing = shown.filter { it.meaning.isEmpty() && it.code != home.code }
-        if (missing.isEmpty()) {
-            chooseMode()
-            return
-        }
-        toast(VocabText.f("filling", missing.size))
-        fillMeanings(missing) {
-            refresh()
-            chooseMode()
-        }
-    }
-
-    // Translates words that have no meaning yet into my language, then saves them.
-    private fun fillMeanings(items: List<Item>, done: () -> Unit) {
-        var pending = items.size
-        val results = HashMap<Int, String>()
-        fun finishOne() {
-            pending--
-            if (pending > 0) return
-            val arr = readArray()
-            results.forEach { (i, m) -> arr.optJSONObject(i)?.put("m", m) }
-            writeArray(arr)
-            done()
-        }
-        items.groupBy { it.code }.forEach { (code, group) ->
-            try {
-                val t = Translation.getClient(
-                    TranslatorOptions.Builder()
-                        .setSourceLanguage(code)
-                        .setTargetLanguage(home.code)
-                        .build()
-                )
-                t.downloadModelIfNeeded(DownloadConditions.Builder().build())
-                    .addOnSuccessListener {
-                        group.forEach { item ->
-                            t.translate(item.text)
-                                .addOnSuccessListener { m -> results[item.index] = m }
-                                .addOnCompleteListener { finishOne() }
-                        }
-                    }
-                    .addOnFailureListener { group.forEach { _ -> finishOne() } }
-            } catch (_: Exception) {
-                group.forEach { _ -> finishOne() }
-            }
-        }
-    }
-
-    private fun chooseMode() {
-        val retry = shown.filter { it.wrong > 0 }
-        val options = arrayListOf(VocabText.t("mode1"), VocabText.t("mode2"), VocabText.t("mode3"))
-        if (retry.size >= 2) options += VocabText.f("mode4", retry.size)
-        AlertDialog.Builder(context)
-            .setTitle(VocabText.f("quiz_title", shown.size))
-            .setItems(options.toTypedArray()) { _, which ->
-                if (which == 3) launchQuiz(retry, QuizView.PICK_MEANING) else launchQuiz(shown, which)
-            }
-            .show()
-    }
-
-    private fun launchQuiz(pool: List<Item>, mode: Int) {
-        val cards = pool.filter { it.meaning.isNotEmpty() }.map {
-            QuizView.Card(it.index, it.text, it.meaning, it.example, it.exampleMeaning, it.voice)
-        }
-        if (cards.size < 2) {
-            toast(VocabText.t("need2m"))
-            return
-        }
-        val quiz = QuizView(context, cards, mode, speak, { card, ok -> record(card.key, ok) }, { closeQuiz() })
-        quizHolder.removeAllViews()
-        quizHolder.addView(
-            quiz,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-        )
-        listPanel.visibility = View.GONE
-        quizHolder.visibility = View.VISIBLE
-    }
-
-    private fun record(index: Int, ok: Boolean) {
-        val arr = readArray()
-        val o = arr.optJSONObject(index) ?: return
-        val key = if (ok) "c" else "w"
-        o.put(key, o.optInt(key, 0) + 1)
-        writeArray(arr)
-    }
-
-    private fun closeQuiz() {
-        quizHolder.removeAllViews()
-        quizHolder.visibility = View.GONE
-        listPanel.visibility = View.VISIBLE
-        refresh()
-    }
 }
