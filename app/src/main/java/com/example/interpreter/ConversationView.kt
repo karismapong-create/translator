@@ -21,6 +21,7 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -30,7 +31,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
-// AI conversation partner: role-play in a chosen language and topic, with corrections and hints.
+// Conversation tab: phrasebook by place, and an AI partner for free role-play with corrections and hints.
 class ConversationView(
     private val activity: Activity,
     private val prefs: SharedPreferences,
@@ -79,7 +80,11 @@ class ConversationView(
     private var lastUserBox: LinearLayout? = null
     private var recognizer: SpeechRecognizer? = null
     private var muted = false
+    private var fromSituation = false
 
+    private val modeTabs: List<TextView>
+    private val situationView: SituationView
+    private val aiPanel: LinearLayout
     private val setupPanel: ScrollView
     private val langSpinner: Spinner
     private val topicSpinner: Spinner
@@ -97,6 +102,10 @@ class ConversationView(
 
     init {
         orientation = VERTICAL
+
+        situationView = SituationView(activity, prefs, foreignLangs) { l, scene, role, t ->
+            startFromSituation(l, scene, role, t)
+        }
 
         langSpinner = spinner(foreignLangs.map { it.label })
         topicSpinner = spinner(topics.map { it.label })
@@ -134,7 +143,7 @@ class ConversationView(
             addView(label("주제"))
             addView(topicSpinner)
             addView(customTopic)
-            addView(label("수준"))
+            addView(label("수준 (상황별 회화의 연습에도 적용돼요)"))
             addView(levelSpinner)
             addView(label("AI 역할"))
             addView(roleInput)
@@ -206,9 +215,32 @@ class ConversationView(
             addView(inputRow, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
             addView(micRow, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
+        aiPanel = LinearLayout(activity).apply {
+            orientation = VERTICAL
+            addView(setupPanel, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(chatPanel, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
+        }
 
-        addView(setupPanel, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
-        addView(chatPanel, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
+        modeTabs = listOf("📍 상황별 회화", "🤖 AI 자유 회화").mapIndexed { i, name ->
+            TextView(activity).apply {
+                text = name
+                textSize = 15f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(8), 0, dp(8))
+                setOnClickListener { showMode(i) }
+            }
+        }
+        val modeBar = LinearLayout(activity).apply {
+            orientation = HORIZONTAL
+            modeTabs.forEach { addView(it, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)) }
+        }
+        val body = FrameLayout(activity).apply {
+            addView(situationView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(aiPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+        addView(modeBar, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        addView(body, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
+        showMode(0)
     }
 
     /* ---------- Small helpers ---------- */
@@ -257,7 +289,18 @@ class ConversationView(
         setBackgroundColor(bg)
     }
 
-    /* ---------- Setup ---------- */
+    /* ---------- Modes ---------- */
+
+    private fun showMode(i: Int) {
+        situationView.visibility = if (i == 0) View.VISIBLE else View.GONE
+        aiPanel.visibility = if (i == 1) View.VISIBLE else View.GONE
+        modeTabs.forEachIndexed { k, t ->
+            t.setTextColor(if (k == i) blue else Color.GRAY)
+            t.setTypeface(null, if (k == i) Typeface.BOLD else Typeface.NORMAL)
+        }
+        if (i != 0) situationView.stopPlayback()
+        if (i != 1) stopListening()
+    }
 
     fun onShown() {
         engine = WordExplainer.llmEngine(prefs)
@@ -271,6 +314,8 @@ class ConversationView(
         }
     }
 
+    /* ---------- Starting a session ---------- */
+
     private fun startSession() {
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
@@ -279,15 +324,33 @@ class ConversationView(
             return
         }
         engine = e
-        lang = foreignLangs[langSpinner.selectedItemPosition]
+        fromSituation = false
+        val l = foreignLangs[langSpinner.selectedItemPosition]
         val topic = topics[topicSpinner.selectedItemPosition]
         val custom = topic.role.isEmpty()
         val scene = if (custom) customTopic.text.toString().trim().ifEmpty { "free conversation" } else topic.scene
         val role = roleInput.text.toString().trim()
             .ifEmpty { if (custom) "a friendly conversation partner" else topic.role }
         val level = levels[levelSpinner.selectedItemPosition]
-        val name = englishName[lang.code] ?: lang.label
+        startWith(l, scene, role, level, "${l.label} · ${if (custom) scene else topic.label} · ${level.first}")
+    }
 
+    private fun startFromSituation(l: LangInfo, scene: String, role: String, titleText: String) {
+        val e = WordExplainer.llmEngine(prefs)
+        if (e == null) {
+            toast("먼저 설정 → 번역 엔진에서 LLM을 설정하세요.")
+            return
+        }
+        engine = e
+        fromSituation = true
+        showMode(1)
+        val level = levels[levelSpinner.selectedItemPosition]
+        startWith(l, scene, role, level, "${l.label} · $titleText · ${level.first}")
+    }
+
+    private fun startWith(l: LangInfo, scene: String, role: String, level: Pair<String, String>, titleText: String) {
+        lang = l
+        val name = englishName[l.code] ?: l.label
         system = "You are role-playing as $role in this situation: $scene. You are talking with a Korean " +
             "learner of $name at ${level.second} level. In \"reply\" speak only natural spoken $name, 1 to 3 " +
             "short sentences, and usually end with a question so the conversation keeps going. Stay in character. " +
@@ -304,7 +367,7 @@ class ConversationView(
             "next, in $name at ${level.second} level. Reply with JSON only, no code fences: " +
             "{\"say\":\"...\",\"meaning\":\"Korean translation\"}"
 
-        title.text = "${lang.label} · ${if (custom) scene else topic.label} · ${level.first}"
+        title.text = titleText
         turns.clear()
         messages.removeAllViews()
         lastUserBox = null
@@ -324,6 +387,10 @@ class ConversationView(
         chatPanel.visibility = View.GONE
         setupPanel.visibility = View.VISIBLE
         onShown()
+        if (fromSituation) {
+            fromSituation = false
+            showMode(0)
+        }
     }
 
     /* ---------- Talking to the AI ---------- */
@@ -516,7 +583,7 @@ class ConversationView(
                 firstResult(b)?.let { input.setText(it) }
             }
             override fun onResults(b: Bundle?) {
-                val t = firstResult(b).orEmpty().trim()
+                val t = firstResult(b).orEmpty().trim().ifEmpty { input.text.toString().trim() }
                 finishListen()
                 input.setText("")
                 if (t.isNotEmpty()) sendUser(t)
@@ -554,6 +621,7 @@ class ConversationView(
     }
 
     fun stopListening() {
+        situationView.stopPlayback()
         if (recognizer != null) {
             recognizer?.cancel()
             finishListen()
