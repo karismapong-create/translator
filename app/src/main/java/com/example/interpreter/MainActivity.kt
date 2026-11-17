@@ -123,6 +123,7 @@ class MainActivity : Activity() {
     private lateinit var speakBox: CheckBox
     private lateinit var micButton: Button
     private lateinit var chatInput: EditText
+    private lateinit var convPage: ConversationView
     private lateinit var vocabPage: VocabView
     private lateinit var glossaryPage: GlossaryView
     private lateinit var pages: List<View>
@@ -292,20 +293,25 @@ class MainActivity : Activity() {
         }
 
         val langInfos = langs.map { LangInfo(it.label, it.mlkit, it.speechTag) }
+        convPage = ConversationView(
+            this, prefs, langInfos,
+            { text, voice -> speakNow(text, voice, null, true) },
+            { tts?.stop() }
+        )
         vocabPage = VocabView(this, prefs, langInfos) { text, voice -> speakNow(text, voice, null, true) }
         glossaryPage = GlossaryView(this, prefs, langInfos, DEFAULT_TERMS) { text ->
             terms = parseTerms(text)
             if (listening) { stop(); start() }
         }
-        pages = listOf(interpPage, vocabPage, glossaryPage)
+        pages = listOf(interpPage, convPage, vocabPage, glossaryPage)
         val container = FrameLayout(this).apply {
             pages.forEach { addView(it, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)) }
         }
 
-        tabViews = listOf("통역", "단어장", "용어집").mapIndexed { i, name ->
+        tabViews = listOf("통역", "회화", "단어장", "용어집").mapIndexed { i, name ->
             TextView(this).apply {
                 text = name
-                textSize = 17f
+                textSize = 16f
                 gravity = Gravity.CENTER
                 setPadding(0, dp(10), 0, dp(10))
                 setOnClickListener { showTab(i) }
@@ -353,8 +359,13 @@ class MainActivity : Activity() {
             t.setTextColor(if (k == i) Color.rgb(47, 91, 234) else Color.GRAY)
             t.setTypeface(null, if (k == i) Typeface.BOLD else Typeface.NORMAL)
         }
-        if (i == 1) vocabPage.refresh()
-        if (i == 2) glossaryPage.refresh()
+        if (i != 1) convPage.stopListening()
+        if (i == 1) {
+            if (listening) stop()
+            convPage.onShown()
+        }
+        if (i == 2) vocabPage.refresh()
+        if (i == 3) glossaryPage.refresh()
     }
 
     private fun showHint() {
@@ -370,11 +381,13 @@ class MainActivity : Activity() {
 
     private fun openCamera() {
         if (listening) stop()
+        convPage.stopListening()
         startActivity(Intent(this, CameraActivity::class.java))
     }
 
     private fun openMicTest() {
         if (listening) stop()
+        convPage.stopListening()
         startActivity(Intent(this, MicTestActivity::class.java))
     }
 
@@ -1050,12 +1063,14 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {
         super.onRequestPermissionsResult(rc, perms, res)
+        if (rc != 1) return
         if (res.firstOrNull() == PackageManager.PERMISSION_GRANTED) start()
         else status("마이크 권한을 허용해야 통역할 수 있어요.")
     }
 
     override fun onStop() {
         if (listening) stop()
+        convPage.stopListening()
         super.onStop()
     }
 
@@ -1283,6 +1298,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         listening = false
         recognizer?.destroy()
+        convPage.stopListening()
         setQuiet(false)
         translator?.close()
         translators.values.forEach { it.close() }
