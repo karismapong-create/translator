@@ -37,12 +37,18 @@ import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
+import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
     private data class Lang(val label: String, val speechTag: String, val mlkit: String)
     private data class Term(val names: Map<String, String>, val variants: List<String>)
+    private class DeepLException(val code: Int) : Exception("HTTP $code")
 
     companion object {
         const val DEFAULT_TERMS =
@@ -85,9 +91,14 @@ class MainActivity : Activity() {
     private val repaired = HashSet<String>()
     private val prefs by lazy { getSharedPreferences("interpreter", MODE_PRIVATE) }
 
+    private val net = Executors.newSingleThreadExecutor()
+    private var deeplBlockedUntil = 0L
+    private val recent = ArrayDeque<String>()
+
     private val from: Lang get() = langs[fromSpinner.selectedItemPosition]
     private val to: Lang get() = langs[toSpinner.selectedItemPosition]
     private val noSpaces: Boolean get() = from.speechTag.startsWith("ja") || from.speechTag.startsWith("zh")
+    private val deeplKey: String get() = prefs.getString("deepl", "").orEmpty().trim()
 
     private val restartRunnable = Runnable { if (listening) { stop(); start() } }
 
@@ -149,9 +160,9 @@ class MainActivity : Activity() {
             setTextColor(Color.GRAY)
         }
         speakBox = CheckBox(this).apply { text = "음성으로 읽기" }
-        val dictButton = Button(this).apply {
-            text = "단어장"
-            setOnClickListener { openDictionary() }
+        val settingsButton = Button(this).apply {
+            text = "설정"
+            setOnClickListener { openSettings() }
         }
         micButton = Button(this).apply {
             text = "시작"
@@ -162,7 +173,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(speakBox, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            addView(dictButton, LinearLayout.LayoutParams(WRAP_CONTENT, dp(64)))
+            addView(settingsButton, LinearLayout.LayoutParams(WRAP_CONTENT, dp(64)))
             addView(micButton, LinearLayout.LayoutParams(dp(120), dp(64)))
         }
 
@@ -181,6 +192,42 @@ class MainActivity : Activity() {
         fromSpinner.onItemSelectedListener = onChange
         toSpinner.onItemSelectedListener = onChange
         tts = TextToSpeech(this) { }
+    }
+
+    /* ---------- Settings ---------- */
+
+    private fun openSettings() {
+        AlertDialog.Builder(this)
+            .setTitle("설정")
+            .setItems(arrayOf("단어장", "DeepL API 키")) { _, which ->
+                if (which == 0) openDictionary() else openDeeplKey()
+            }
+            .show()
+    }
+
+    private fun dialogBox(edit: EditText) = FrameLayout(this).apply {
+        setPadding(dp(20), dp(8), dp(20), 0)
+        addView(edit)
+    }
+
+    private fun openDeeplKey() {
+        val edit = EditText(this).apply {
+            setText(prefs.getString("deepl", ""))
+            setHint("예: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx")
+            textSize = 15f
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("DeepL API 키")
+            .setMessage("키를 넣으면 인터넷이 될 때 DeepL로 번역하고, 안 될 때는 기기 번역으로 자동 전환해요. 비워두면 기기 번역만 써요.")
+            .setView(dialogBox(edit))
+            .setPositiveButton("저장") { _, _ ->
+                prefs.edit().putString("deepl", edit.text.toString().trim()).apply()
+                deeplBlockedUntil = 0L
+                if (listening) { stop(); start() }
+            }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     /* ---------- Word list ---------- */
@@ -238,10 +285,6 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             setHorizontallyScrolling(false)
         }
-        val box = FrameLayout(this).apply {
-            setPadding(dp(20), dp(8), dp(20), 0)
-            addView(edit)
-        }
         AlertDialog.Builder(this)
             .setTitle("단어장")
             .setMessage(
@@ -249,7 +292,7 @@ class MainActivity : Activity() {
                 "한국어 단어 | 잘못 들리는 말 | 언어=번역\n" +
                 "잘못 들리는 말은 쉼표로 여러 개 적을 수 있고, 가운데·끝 칸은 비워도 돼요."
             )
-            .setView(box)
+            .setView(dialogBox(edit))
             .setPositiveButton("저장") { _, _ ->
                 val text = edit.text.toString()
                 prefs.edit().putString("terms", text).apply()
@@ -308,6 +351,7 @@ class MainActivity : Activity() {
         }
         listening = true
         micButton.text = "정지"
+        recent.clear()
         tts?.language = Locale.forLanguageTag(to.speechTag)
 
         translator?.close()
@@ -322,7 +366,8 @@ class MainActivity : Activity() {
         t.downloadModelIfNeeded(DownloadConditions.Builder().build())
             .addOnSuccessListener {
                 if (listening && translator === t) {
-                    status("듣는 중 · ${from.label} → ${to.label}")
+                    val engine = if (deeplKey.isNotEmpty()) "DeepL" else "기기 번역"
+                    status("듣는 중 · ${from.label} → ${to.label} · $engine")
                     startRecognizer()
                 }
             }
@@ -452,6 +497,29 @@ class MainActivity : Activity() {
         segments.addView(srcView)
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
 
+        val context = recent.joinToString(" ")
+        recent.addLast(shown)
+        while (recent.size > 3) recent.removeFirst()
+
+        val key = deeplKey
+        if (key.isEmpty() || System.currentTimeMillis() < deeplBlockedUntil) {
+            viaMlKit(t, id, trView, input, source, target)
+            return
+        }
+        net.execute {
+            val result: Any = try { deepl(input, source, target, key, context) } catch (e: Exception) { e }
+            runOnUiThread {
+                if (result is String) {
+                    showResult(id, trView, result, target)
+                } else {
+                    deeplFailed(result as Exception)
+                    viaMlKit(t, id, trView, input, source, target)
+                }
+            }
+        }
+    }
+
+    private fun viaMlKit(t: Translator, id: Int, trView: TextView, input: String, source: String, target: String) {
         t.translate(input)
             .addOnSuccessListener { tr ->
                 if (!looksLike(tr, target) && looksLike(input, source)) {
@@ -460,16 +528,66 @@ class MainActivity : Activity() {
                     repairLanguagePack()
                     return@addOnSuccessListener
                 }
-                trView.text = tr
-                Pronouncer.attach(this, segments, trView, tr, target)
-                scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-                queueSpeech(id, tr)
+                showResult(id, trView, tr, target)
             }
             .addOnFailureListener {
                 trView.text = "번역 실패"
                 queueSpeech(id, null)
             }
     }
+
+    private fun showResult(id: Int, trView: TextView, tr: String, target: String) {
+        trView.text = tr
+        Pronouncer.attach(this, segments, trView, tr, target)
+        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        queueSpeech(id, tr)
+    }
+
+    /* ---------- DeepL ---------- */
+
+    private fun deeplCode(lang: String, asTarget: Boolean): String =
+        if (lang == TranslateLanguage.ENGLISH && asTarget) "EN-US" else lang.uppercase()
+
+    // Runs on a background thread.
+    private fun deepl(text: String, source: String, target: String, key: String, context: String): String {
+        val host = if (key.endsWith(":fx")) "api-free.deepl.com" else "api.deepl.com"
+        val conn = URL("https://$host/v2/translate").openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.connectTimeout = 3000
+        conn.readTimeout = 6000
+        conn.doOutput = true
+        conn.setRequestProperty("Authorization", "DeepL-Auth-Key $key")
+        conn.setRequestProperty("Content-Type", "application/json")
+        val body = JSONObject()
+            .put("text", JSONArray().put(text))
+            .put("source_lang", deeplCode(source, false))
+            .put("target_lang", deeplCode(target, true))
+            .put("formality", "prefer_more")
+        if (context.isNotBlank()) body.put("context", context)
+        try {
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code != 200) throw DeepLException(code)
+            val json = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            return JSONObject(json).getJSONArray("translations").getJSONObject(0).getString("text")
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun deeplFailed(e: Exception) {
+        val code = (e as? DeepLException)?.code
+        val (wait, msg) = when (code) {
+            401, 403 -> Long.MAX_VALUE to "DeepL 키가 올바르지 않아요. 설정에서 확인하세요. 지금은 기기 번역을 써요."
+            456 -> Long.MAX_VALUE to "이번 달 DeepL 무료 한도를 다 썼어요. 기기 번역으로 전환했어요."
+            429 -> 10_000L to "DeepL 요청이 많아 잠시 기기 번역을 써요."
+            else -> 30_000L to "DeepL에 연결하지 못해 잠시 기기 번역을 써요."
+        }
+        deeplBlockedUntil = if (wait == Long.MAX_VALUE) Long.MAX_VALUE else System.currentTimeMillis() + wait
+        status(msg)
+    }
+
+    /* ---------- Speech output ---------- */
 
     // Speak translations in the order the phrases were heard.
     private fun queueSpeech(id: Int, text: String?) {
@@ -491,6 +609,7 @@ class MainActivity : Activity() {
         recognizer?.destroy()
         translator?.close()
         tts?.shutdown()
+        net.shutdown()
         super.onDestroy()
     }
 }
