@@ -2,20 +2,24 @@ package com.example.interpreter
 
 import android.Manifest
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
+import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.view.View
@@ -32,11 +36,14 @@ import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.sqrt
 
-// Shows connected microphones, live left/right levels, and whether speech recognition accepts app-recorded audio.
+// Shows connected microphones, live left/right levels, and which speech engines accept app-recorded audio.
 class MicTestActivity : Activity() {
+
+    private class EngineChoice(val label: String, val component: ComponentName?, val onDevice: Boolean)
 
     private val audio by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private var devices: List<AudioDeviceInfo> = emptyList()
+    private var engines: List<EngineChoice> = emptyList()
     private lateinit var deviceSpinner: Spinner
     private lateinit var deviceInfo: TextView
     private lateinit var routedText: TextView
@@ -46,6 +53,8 @@ class MicTestActivity : Activity() {
     private lateinit var rightText: TextView
     private lateinit var verdict: TextView
     private lateinit var meterButton: Button
+    private lateinit var engineSpinner: Spinner
+    private lateinit var sampleInfo: TextView
     private lateinit var recogResult: TextView
 
     @Volatile private var metering = false
@@ -54,9 +63,13 @@ class MicTestActivity : Activity() {
     private var splitFrames = 0
     private var recognizer: SpeechRecognizer? = null
     private var pipe: Array<ParcelFileDescriptor>? = null
+    private var lastPcm: ByteArray? = null
+    private var player: AudioTrack? = null
+    private var testRun = 0
 
     private val green = Color.rgb(46, 160, 67)
     private val red = Color.rgb(207, 34, 46)
+    private val sampleRate = 16000
     private val hidden = setOf(
         AudioDeviceInfo.TYPE_TELEPHONY, AudioDeviceInfo.TYPE_REMOTE_SUBMIX,
         AudioDeviceInfo.TYPE_FM_TUNER, 28
@@ -110,17 +123,33 @@ class MicTestActivity : Activity() {
 
         box.addView(section("3. 음성 인식 연결 시험"))
         box.addView(label(
-            "앱이 녹음한 소리를 음성 인식에 넘길 수 있는지 시험해요. 버튼을 누르고 5초 동안 한국어로 말하세요.",
+            "앱이 녹음한 소리를 음성 인식 엔진에 넘길 수 있는지 시험해요.\n" +
+            "① '5초 녹음 후 시험'을 누르고 한국어로 말하세요.\n" +
+            "② 녹음된 소리 크기를 확인하고, '녹음 다시 듣기'로 직접 들어보세요.\n" +
+            "③ 엔진을 바꿔가며 '같은 녹음으로 시험'을 눌러 어느 엔진이 되는지 찾으세요.",
             14f, false, Color.DKGRAY
         ))
+        box.addView(label("음성 인식 엔진", 13f, false, Color.GRAY))
+        engineSpinner = Spinner(this)
+        box.addView(engineSpinner)
         box.addView(Button(this).apply {
-            text = "시험 · 기본 음성 인식"
-            setOnClickListener { recognitionTest(false) }
+            text = "5초 녹음 후 시험"
+            setOnClickListener { recordAndTest() }
         })
-        box.addView(Button(this).apply {
-            text = "시험 · 기기 내 음성 인식"
-            setOnClickListener { recognitionTest(true) }
-        })
+        sampleInfo = label("", 14f, false, Color.DKGRAY)
+        box.addView(sampleInfo)
+        val replayRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(Button(this@MicTestActivity).apply {
+                text = "녹음 다시 듣기"
+                setOnClickListener { playLast() }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(Button(this@MicTestActivity).apply {
+                text = "같은 녹음으로 시험"
+                setOnClickListener { retestLast() }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        box.addView(replayRow)
         recogResult = label("", 15f, false)
         recogResult.setTextIsSelectable(true)
         box.addView(recogResult)
@@ -143,6 +172,7 @@ class MicTestActivity : Activity() {
         }
         if (!hasMic()) requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 3)
         loadDevices()
+        loadEngines()
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -198,6 +228,24 @@ class MicTestActivity : Activity() {
         val stereo = d.channelCounts.isEmpty() || d.channelCounts.any { it >= 2 }
         deviceInfo.text = "지원 채널 수: $channels\n샘플레이트: $rates\n" +
             if (stereo) "스테레오 입력 가능성 있음" else "모노만 지원 · 두 사람 목소리를 나눌 수 없어요"
+    }
+
+    /* ---------- Speech engines on this phone ---------- */
+
+    private fun loadEngines() {
+        val list = ArrayList<EngineChoice>()
+        list += EngineChoice("시스템 기본 음성 인식", null, false)
+        if (Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+            list += EngineChoice("기기 내 음성 인식 (오프라인)", null, true)
+        }
+        val found = packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+        for (info in found) {
+            val si = info.serviceInfo
+            val name = info.loadLabel(packageManager).toString()
+            list += EngineChoice("$name · ${si.packageName}", ComponentName(si.packageName, si.name), false)
+        }
+        engines = list
+        engineSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, list.map { it.label })
     }
 
     /* ---------- Left / right levels ---------- */
@@ -286,45 +334,42 @@ class MicTestActivity : Activity() {
         meterButton.text = "소리 측정 시작"
     }
 
-    /* ---------- Speech recognition with app-recorded audio ---------- */
+    /* ---------- Recording a sample ---------- */
 
-    private fun recognitionTest(onDevice: Boolean) {
-        if (Build.VERSION.SDK_INT < 33) {
-            recogResult.text = "안드로이드 13 이상에서만 시험할 수 있어요."
-            return
-        }
+    private fun recordAndTest() {
         if (!hasMic()) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 3)
             return
         }
-        if (onDevice && !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-            recogResult.setTextColor(red)
-            recogResult.text = "이 폰에는 기기 내 음성 인식이 없어요."
-            return
-        }
         if (metering) stopMeter()
+        stopPlayback()
+        cancelRecognizer()
         recogResult.setTextColor(Color.BLACK)
-        recogResult.text = "🔴 5초 동안 한국어로 말하세요…"
+        recogResult.text = ""
+        sampleInfo.setTextColor(Color.BLACK)
+        sampleInfo.text = "🔴 5초 동안 한국어로 말하세요…"
         val device = selected
         Thread {
-            val pcm = recordMono(16000, 5, device)
+            val pcm = recordMono(5, device)
             runOnUiThread {
                 if (pcm == null) {
-                    recogResult.setTextColor(red)
-                    recogResult.text = "녹음을 시작하지 못했어요."
+                    sampleInfo.setTextColor(red)
+                    sampleInfo.text = "녹음을 시작하지 못했어요."
                 } else {
-                    recognize(pcm, onDevice)
+                    lastPcm = pcm
+                    describeSample(pcm)
+                    runTest(pcm)
                 }
             }
         }.start()
     }
 
-    private fun recordMono(rate: Int, seconds: Int, device: AudioDeviceInfo?): ByteArray? {
-        val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+    private fun recordMono(seconds: Int, device: AudioDeviceInfo?): ByteArray? {
+        val min = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = try {
             AudioRecord(
-                MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT, maxOf(min, rate)
+                MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, maxOf(min, sampleRate)
             )
         } catch (_: Exception) {
             return null
@@ -336,7 +381,7 @@ class MicTestActivity : Activity() {
         device?.let { rec.setPreferredDevice(it) }
         val out = ByteArrayOutputStream()
         val buf = ByteArray(3200)
-        val total = rate * 2 * seconds
+        val total = sampleRate * 2 * seconds
         rec.startRecording()
         while (out.size() < total) {
             val n = rec.read(buf, 0, buf.size)
@@ -345,6 +390,74 @@ class MicTestActivity : Activity() {
         try { rec.stop() } catch (_: Exception) {}
         rec.release()
         return out.toByteArray()
+    }
+
+    // Shows how loud the recorded sample is, so silent recordings are easy to spot.
+    private fun describeSample(pcm: ByteArray) {
+        var sum = 0.0
+        var peak = 0
+        var i = 0
+        while (i + 1 < pcm.size) {
+            val s = (pcm[i].toInt() and 0xFF) or (pcm[i + 1].toInt() shl 8)
+            val v = s.toShort().toInt()
+            sum += (v * v).toDouble()
+            peak = maxOf(peak, abs(v))
+            i += 2
+        }
+        val samples = (pcm.size / 2).coerceAtLeast(1)
+        val rmsDb = db(sqrt(sum / samples))
+        val peakDb = db(peak.toDouble())
+        val heard = peakDb > -30
+        sampleInfo.setTextColor(if (heard) green else red)
+        sampleInfo.text = "녹음된 소리: 평균 %.0f dB · 최대 %.0f dB · %.1f초\n".format(rmsDb, peakDb, samples / sampleRate.toDouble()) +
+            if (heard) "말소리가 녹음됐어요. 녹음 자체는 문제없어요."
+            else "거의 무음이에요. 마이크 선택이나 연결을 확인하세요."
+    }
+
+    private fun playLast() {
+        val pcm = lastPcm ?: run {
+            sampleInfo.text = "먼저 '5초 녹음 후 시험'을 눌러주세요."
+            return
+        }
+        stopPlayback()
+        val track = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setTransferMode(AudioTrack.MODE_STATIC)
+            .setBufferSizeInBytes(pcm.size)
+            .build()
+        track.write(pcm, 0, pcm.size)
+        track.play()
+        player = track
+    }
+
+    private fun stopPlayback() {
+        player?.let {
+            try { it.stop() } catch (_: Exception) {}
+            it.release()
+        }
+        player = null
+    }
+
+    /* ---------- Feeding the sample to a speech engine ---------- */
+
+    private fun retestLast() {
+        val pcm = lastPcm ?: run {
+            recogResult.text = "먼저 '5초 녹음 후 시험'을 눌러주세요."
+            return
+        }
+        runTest(pcm)
     }
 
     private fun errorText(code: Int) = when (code) {
@@ -361,50 +474,82 @@ class MicTestActivity : Activity() {
         else -> "알 수 없는 오류"
     }
 
-    private fun recognize(pcm: ByteArray, onDevice: Boolean) {
-        if (Build.VERSION.SDK_INT < 33) return
-        recogResult.setTextColor(Color.BLACK)
-        recogResult.text = "인식 중…"
+    private fun cancelRecognizer() {
         recognizer?.destroy()
+        recognizer = null
         pipe?.forEach { try { it.close() } catch (_: Exception) {} }
-        val engine = if (onDevice) "기기 내 음성 인식" else "기본 음성 인식"
-        val r = if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-                else SpeechRecognizer.createSpeechRecognizer(this)
+        pipe = null
+    }
+
+    private fun runTest(pcm: ByteArray) {
+        if (Build.VERSION.SDK_INT < 33) {
+            recogResult.text = "안드로이드 13 이상에서만 시험할 수 있어요."
+            return
+        }
+        val choice = engines.getOrNull(engineSpinner.selectedItemPosition) ?: return
+        cancelRecognizer()
+        val run = ++testRun
+        recogResult.setTextColor(Color.BLACK)
+        recogResult.text = "인식 중… (${choice.label})"
+        val r = try {
+            when {
+                choice.onDevice -> SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+                choice.component != null -> SpeechRecognizer.createSpeechRecognizer(this, choice.component)
+                else -> SpeechRecognizer.createSpeechRecognizer(this)
+            }
+        } catch (e: Exception) {
+            recogResult.setTextColor(red)
+            recogResult.text = "✘ 이 엔진을 열지 못했어요: ${e.message}"
+            return
+        }
         recognizer = r
         val p = ParcelFileDescriptor.createPipe()
         pipe = p
+        var finished = false
+        fun done(color: Int, msg: String) {
+            if (run != testRun || finished) return
+            finished = true
+            recogResult.setTextColor(color)
+            recogResult.text = msg
+        }
         r.setRecognitionListener(object : RecognitionListener {
+            override fun onPartialResults(b: Bundle?) {
+                val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                if (run == testRun && !finished && !t.isNullOrBlank()) recogResult.text = "인식 중… \"$t\""
+            }
             override fun onResults(b: Bundle?) {
-                val text = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (text.isNullOrBlank()) {
-                    recogResult.setTextColor(red)
-                    recogResult.text = "✘ $engine: 결과가 비어 있어요."
+                val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                if (t.isNullOrBlank()) {
+                    done(red, "✘ ${choice.label}\n결과가 비어 있어요. 이 엔진은 앱이 넘긴 소리를 듣지 않는 것 같아요.")
                 } else {
-                    recogResult.setTextColor(green)
-                    recogResult.text = "✔ $engine 연결 성공\n\"$text\""
+                    done(green, "✔ ${choice.label} 연결 성공\n\"$t\"")
                 }
             }
             override fun onError(error: Int) {
-                recogResult.setTextColor(red)
-                recogResult.text = "✘ $engine: ${errorText(error)} (코드 $error)"
+                done(red, "✘ ${choice.label}\n${errorText(error)} (코드 $error)")
             }
             override fun onReadyForSpeech(b: Bundle?) {}
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(v: Float) {}
             override fun onBufferReceived(b: ByteArray?) {}
             override fun onEndOfSpeech() {}
-            override fun onPartialResults(b: Bundle?) {}
             override fun onEvent(type: Int, b: Bundle?) {}
         })
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, p[0])
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, sampleRate)
         }
-        r.startListening(intent)
+        try {
+            r.startListening(intent)
+        } catch (e: Exception) {
+            done(red, "✘ ${choice.label}\n시작하지 못했어요: ${e.message}")
+            return
+        }
         Thread {
             try {
                 ParcelFileDescriptor.AutoCloseOutputStream(p[1]).use { out ->
@@ -418,17 +563,21 @@ class MicTestActivity : Activity() {
                 }
             } catch (_: Exception) {}
         }.start()
+        recogResult.postDelayed({
+            done(red, "✘ ${choice.label}\n20초 동안 응답이 없어요. 이 엔진은 앱이 넘긴 소리를 받지 않는 것 같아요.")
+        }, 20000)
     }
 
     override fun onPause() {
         if (metering) stopMeter()
+        stopPlayback()
         super.onPause()
     }
 
     override fun onDestroy() {
         metering = false
-        recognizer?.destroy()
-        pipe?.forEach { try { it.close() } catch (_: Exception) {} }
+        cancelRecognizer()
+        stopPlayback()
         super.onDestroy()
     }
 }
