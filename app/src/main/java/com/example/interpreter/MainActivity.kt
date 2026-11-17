@@ -373,6 +373,11 @@ class MainActivity : Activity() {
         startActivity(Intent(this, CameraActivity::class.java))
     }
 
+    private fun openMicTest() {
+        if (listening) stop()
+        startActivity(Intent(this, MicTestActivity::class.java))
+    }
+
     /* ---------- Silent mode ---------- */
 
     private fun adjust(stream: Int, mute: Boolean) {
@@ -535,7 +540,7 @@ class MainActivity : Activity() {
 
     private fun openSettings() {
         val items = arrayOf(
-            "📷 카메라 번역", "화면 지우기", "화면 내용 내보내기",
+            "📷 카메라 번역", "🎙 마이크 진단", "화면 지우기", "화면 내용 내보내기",
             "번역 엔진 (지금: ${engineLabel(activeEngine)})",
             "무음 모드 (지금: ${if (silent) "켜짐" else "꺼짐"})"
         )
@@ -544,9 +549,10 @@ class MainActivity : Activity() {
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> openCamera()
-                    1 -> clearScreen()
-                    2 -> exportScreen()
-                    3 -> openEngines()
+                    1 -> openMicTest()
+                    2 -> clearScreen()
+                    3 -> exportScreen()
+                    4 -> openEngines()
                     else -> toggleSilent()
                 }
             }
