@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
@@ -64,7 +65,6 @@ class MainActivity : Activity() {
     private data class Lang(val label: String, val speechTag: String, val mlkit: String, val english: String)
     private data class Term(val names: Map<String, String>, val variants: List<String>)
     private data class Engine(val id: String, val label: String)
-    private class Field(val key: String, val label: String, val hint: String, val default: String = "")
     private class HttpException(val code: Int, val body: String) : Exception("HTTP $code")
 
     // One translated line on screen.
@@ -88,7 +88,7 @@ class MainActivity : Activity() {
         const val DEFAULT_TERMS =
             "마운자로 | | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro"
         const val MENU_SAVE_WORD = 1001
-        const val DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
+        const val DEEPL_KEY_URL = "https://www.deepl.com/pro-api"
     }
 
     private val langs = listOf(
@@ -106,13 +106,8 @@ class MainActivity : Activity() {
         "영어" to TranslateLanguage.ENGLISH, "프랑스어" to TranslateLanguage.FRENCH,
         "스페인어" to TranslateLanguage.SPANISH, "중국어" to TranslateLanguage.CHINESE
     )
-    private val engines = listOf(
-        Engine("mlkit", "기기 번역만"),
-        Engine("deepl", "DeepL"),
-        Engine("claude", "Claude"),
-        Engine("openai", "OpenAI 호환 API"),
-        Engine("local", "로컬 LLM (맥북)")
-    )
+    private val engines = listOf(Engine("mlkit", "기기 번역만"), Engine("deepl", "DeepL")) +
+        Providers.llms.map { Engine(it.id, it.label) }
 
     private lateinit var fromSpinner: Spinner
     private lateinit var toSpinner: Spinner
@@ -170,13 +165,11 @@ class MainActivity : Activity() {
     private fun p(key: String) = prefs.getString(key, "").orEmpty().trim()
     private val engineId: String
         get() = prefs.getString("engine", null) ?: if (p("deepl").isNotEmpty()) "deepl" else "mlkit"
-    private fun engineLabel(id: String) = engines.firstOrNull { it.id == id }?.label ?: id
+    private fun engineLabel(id: String) = Providers.label(id)
     private fun engineReady(id: String): Boolean = when (id) {
         "deepl" -> p("deepl").isNotEmpty()
-        "claude" -> p("claude_key").isNotEmpty()
-        "openai" -> p("openai_url").isNotEmpty() && p("openai_key").isNotEmpty() && p("openai_model").isNotEmpty()
-        "local" -> p("local_url").isNotEmpty() && p("local_model").isNotEmpty()
-        else -> false
+        "mlkit" -> false
+        else -> Providers.ready(prefs, id)
     }
     private val activeEngine: String
         get() = engineId.let { if (it != "mlkit" && engineReady(it)) it else "mlkit" }
@@ -185,6 +178,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Providers.migrate(prefs)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         terms = parseTerms(prefs.getString("terms", DEFAULT_TERMS) ?: DEFAULT_TERMS)
@@ -624,66 +618,95 @@ class MainActivity : Activity() {
         if (listening) { stop(); start() } else status("번역 엔진: " + engineLabel(activeEngine))
     }
 
-    private fun fieldsFor(id: String): List<Field> = when (id) {
-        "deepl" -> listOf(Field("deepl", "API 키", "xxxxxxxx-…:fx"))
-        "claude" -> listOf(
-            Field("claude_key", "API 키", "sk-ant-…"),
-            Field("claude_model", "모델", DEFAULT_CLAUDE_MODEL, DEFAULT_CLAUDE_MODEL)
-        )
-        "openai" -> listOf(
-            Field("openai_url", "API 주소", "https://api.openai.com/v1", "https://api.openai.com/v1"),
-            Field("openai_key", "API 키", "sk-…"),
-            Field("openai_model", "모델", "사용할 모델 이름")
-        )
-        else -> listOf(
-            Field("local_url", "맥북 주소", "http://192.168.0.10:11434/v1"),
-            Field("local_key", "API 키 (없으면 비워두기)", ""),
-            Field("local_model", "모델", "ollama list에 나오는 이름")
-        )
+    private fun openLink(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+            toast("브라우저를 열지 못했어요. 주소를 길게 눌러 복사해서 여세요.")
+        }
     }
 
-    private fun engineHelp(id: String): String = when (id) {
-        "deepl" -> "deepl.com/pro-api에서 받은 키를 넣으세요. 무료 키는 :fx로 끝나요."
-        "claude" -> "console.anthropic.com에서 받은 API 키를 넣으세요. 사용한 만큼 요금이 나가요."
-        "openai" -> "OpenAI나 같은 형식을 쓰는 서비스의 주소, 키, 모델 이름을 넣으세요."
-        else -> "맥북에서 Ollama나 LM Studio 서버를 켜고, 폰과 같은 와이파이에서 맥 주소를 넣으세요."
+    private fun pasteInto(ed: EditText) {
+        val clip = (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
+        val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
+        if (text.isNullOrEmpty()) toast("복사된 내용이 없어요.") else ed.setText(text)
     }
 
     private fun openEngineConfig(e: Engine) {
+        val pr = Providers.find(e.id)
+        val keyPref = if (e.id == "deepl") "deepl" else "${e.id}_key"
+        val keyUrl = if (e.id == "deepl") DEEPL_KEY_URL else pr?.keyUrl.orEmpty()
+        val help = pr?.help ?: (
+            "① 아래 버튼으로 DeepL API 페이지를 열고 'DeepL API Free'로 가입하세요.\n" +
+            "② 로그인 후 계정 메뉴의 'API 키'에서 키를 복사하세요. 무료 키는 :fx로 끝나요.\n" +
+            "③ 아래에 붙여넣으세요."
+        )
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), 0)
         }
-        val edits = fieldsFor(e.id).map { f ->
+        fun field(label: String, value: String, hintText: String): EditText {
             box.addView(TextView(this).apply {
-                text = f.label
+                text = label
                 textSize = 13f
                 setTextColor(Color.GRAY)
-                setPadding(0, dp(8), 0, 0)
+                setPadding(0, dp(10), 0, 0)
             })
             val ed = EditText(this).apply {
-                setText(prefs.getString(f.key, null) ?: f.default)
-                setHint(f.hint)
+                setText(value)
+                setHint(hintText)
                 textSize = 15f
                 setSingleLine(true)
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
             }
             box.addView(ed)
-            f to ed
+            return ed
         }
+
+        if (keyUrl.isNotEmpty()) {
+            box.addView(Button(this).apply {
+                text = if (e.id == "local") "⬇ Ollama 내려받기 (사이트 열기)" else "🔑 키 받으러 가기 (사이트 열기)"
+                setOnClickListener { openLink(keyUrl) }
+            })
+            box.addView(TextView(this).apply {
+                text = keyUrl
+                textSize = 12f
+                setTextColor(Color.GRAY)
+                setTextIsSelectable(true)
+            })
+        }
+        val urlEd = if (pr?.editableUrl == true) {
+            field("주소", Providers.rawUrl(prefs, e.id), if (e.id == "local") "http://192.168.0.10:11434/v1" else "https://…/v1")
+        } else null
+        val keyEd = field(
+            if (pr == null || pr.needsKey) "API 키" else "API 키 (없으면 비워두기)",
+            p(keyPref),
+            pr?.keyHint?.ifEmpty { "API 키" } ?: "xxxxxxxx-…:fx"
+        )
+        box.addView(Button(this).apply {
+            text = "📋 복사한 키 붙여넣기"
+            setOnClickListener { pasteInto(keyEd) }
+        })
+        val modelEd = if (pr != null) field("모델", Providers.model(prefs, e.id), "목록에서 고르거나 직접 입력") else null
+        val listButton = if (pr != null) Button(this).apply { text = "📋 모델 목록 불러오기" }.also { box.addView(it) } else null
+
         fun store() {
             val editor = prefs.edit()
-            edits.forEach { (f, ed) -> editor.putString(f.key, ed.text.toString().trim()) }
+            urlEd?.let { editor.putString("${e.id}_url", it.text.toString().trim()) }
+            editor.putString(keyPref, keyEd.text.toString().trim())
+            modelEd?.let { editor.putString("${e.id}_model", it.text.toString().trim()) }
             editor.apply()
         }
+
         val dialog = AlertDialog.Builder(this)
             .setTitle(e.label)
-            .setMessage(engineHelp(e.id))
-            .setView(box)
+            .setMessage(help)
+            .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("저장하고 사용") { _, _ -> store(); useEngine(e.id) }
             .setNeutralButton("연결 테스트", null)
             .setNegativeButton("취소", null)
             .show()
+
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
             store()
             dialog.setMessage("테스트 중… (로컬 LLM은 처음에 오래 걸릴 수 있어요)")
@@ -699,24 +722,50 @@ class MainActivity : Activity() {
                 }
             }
         }
+
+        listButton?.setOnClickListener {
+            store()
+            dialog.setMessage("모델 목록을 불러오는 중…")
+            net.execute {
+                val r: Any = try { Providers.fetchModels(prefs, e.id) } catch (ex: Exception) { ex }
+                runOnUiThread {
+                    val names = (r as? List<*>)?.map { it.toString() }.orEmpty()
+                    if (names.isEmpty()) {
+                        dialog.setMessage(
+                            "목록을 불러오지 못했어요. 키와 주소를 확인하세요.\n" +
+                            ((r as? Exception)?.let { describe(it) } ?: "모델이 없어요.")
+                        )
+                    } else {
+                        dialog.setMessage("모델 ${names.size}개를 찾았어요. 하나를 고르세요.")
+                        AlertDialog.Builder(this)
+                            .setTitle("모델 선택")
+                            .setItems(names.toTypedArray()) { _, w ->
+                                modelEd?.setText(names[w])
+                                dialog.setMessage("선택한 모델: ${names[w]}\n'연결 테스트'로 확인한 뒤 '저장하고 사용'을 누르세요.")
+                            }
+                            .show()
+                    }
+                }
+            }
+        }
     }
 
     private fun describe(e: Exception): String = when (e) {
         is HttpException -> "HTTP ${e.code}\n${e.body}"
+        is Providers.HttpException -> "HTTP ${e.code}\n${e.body.take(300)}"
         is java.net.SocketTimeoutException -> "응답 시간 초과. 모델이 너무 크거나 주소가 틀렸을 수 있어요."
         is java.net.ConnectException, is java.net.UnknownHostException, is java.net.NoRouteToHostException ->
-            "연결 실패. 주소, 같은 와이파이인지, 맥의 서버와 방화벽 설정을 확인하세요."
+            "연결 실패. 주소, 인터넷 연결, (맥북이라면) 같은 와이파이인지와 방화벽 설정을 확인하세요."
         else -> e.toString()
     }
 
     // Runs on a background thread.
-    private fun remote(id: String, text: String, sl: Lang, tl: Lang, context: String): String = when (id) {
-        "deepl" -> deepl(text, sl.mlkit, tl.mlkit, p("deepl"), context)
-        "claude" -> claude(text, sl, tl, context)
-        "openai" -> chat(p("openai_url"), p("openai_key"), p("openai_model"), text, sl, tl, context, 20000)
-        "local" -> chat(p("local_url"), p("local_key"), p("local_model"), text, sl, tl, context, 45000)
-        else -> throw IllegalStateException("no engine")
-    }
+    private fun remote(id: String, text: String, sl: Lang, tl: Lang, context: String): String =
+        if (id == "deepl") {
+            deepl(text, sl.mlkit, tl.mlkit, p("deepl"), context)
+        } else {
+            clean(Providers.complete(prefs, id, systemPrompt(sl, tl), listOf("user" to userPrompt(text, context)), 1024, 20000))
+        }
 
     private fun systemPrompt(sl: Lang, tl: Lang) =
         "You are a professional simultaneous interpreter. Translate the user's text from ${sl.english} " +
@@ -769,54 +818,14 @@ class MainActivity : Activity() {
         return json.getJSONArray("translations").getJSONObject(0).getString("text")
     }
 
-    private fun claude(text: String, sl: Lang, tl: Lang, context: String): String {
-        val body = JSONObject()
-            .put("model", p("claude_model").ifEmpty { DEFAULT_CLAUDE_MODEL })
-            .put("max_tokens", 1024)
-            .put("system", systemPrompt(sl, tl))
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", userPrompt(text, context))))
-        val json = postJson(
-            "https://api.anthropic.com/v1/messages",
-            mapOf("x-api-key" to p("claude_key"), "anthropic-version" to "2023-06-01"),
-            body, 20000
-        )
-        val content = json.getJSONArray("content")
-        val sb = StringBuilder()
-        for (i in 0 until content.length()) {
-            val block = content.getJSONObject(i)
-            if (block.optString("type") == "text") sb.append(block.optString("text"))
-        }
-        return clean(sb.toString())
-    }
-
-    // OpenAI-style chat completions: OpenAI, compatible services, Ollama and LM Studio.
-    private fun chat(
-        base0: String, key: String, model: String,
-        text: String, sl: Lang, tl: Lang, context: String, readTimeout: Int
-    ): String {
-        var base = base0.trim().trimEnd('/')
-        if (!base.startsWith("http://") && !base.startsWith("https://")) base = "http://$base"
-        if (!base.contains("/v1")) base += "/v1"
-        val body = JSONObject()
-            .put("model", model)
-            .put("stream", false)
-            .put("messages", JSONArray()
-                .put(JSONObject().put("role", "system").put("content", systemPrompt(sl, tl)))
-                .put(JSONObject().put("role", "user").put("content", userPrompt(text, context))))
-        val headers = if (key.isNotEmpty()) mapOf("Authorization" to "Bearer $key") else emptyMap()
-        val json = postJson("$base/chat/completions", headers, body, readTimeout)
-        val msg = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
-        return clean(msg.optString("content"))
-    }
-
     private fun remoteFailed(id: String, e: Exception?) {
         val name = engineLabel(id)
-        val code = (e as? HttpException)?.code
+        val code = (e as? HttpException)?.code ?: (e as? Providers.HttpException)?.code
         val (wait, msg) = when (code) {
             401, 403 -> Long.MAX_VALUE to "$name 키가 올바르지 않아요. 설정에서 확인하세요. 지금은 기기 번역을 써요."
             456 -> Long.MAX_VALUE to "이번 달 DeepL 무료 한도를 다 썼어요. 기기 번역으로 전환했어요."
             400, 404 -> Long.MAX_VALUE to "$name 설정(주소나 모델 이름)을 확인하세요. 지금은 기기 번역을 써요."
-            429 -> 10_000L to "$name 요청이 많아 잠시 기기 번역을 써요."
+            429 -> 10_000L to "$name 사용 한도에 걸려 잠시 기기 번역을 써요."
             else -> 30_000L to "$name 에 연결하지 못해 잠시 기기 번역을 써요."
         }
         remoteBlockedUntil = if (wait == Long.MAX_VALUE) Long.MAX_VALUE else System.currentTimeMillis() + wait
