@@ -129,17 +129,23 @@ internal object Japanese {
         (s.indices step 2).associate { s[it] to s[it + 1].toString() }
     }
 
+    // Particles, auxiliaries, suffixes and dependent words attach to the word before them.
+    private val attachPos1 = setOf("助詞", "助動詞")
+    private val attachPos2 = setOf("非自立", "接尾")
+
     fun convert(text: String): String {
         val out = StringBuilder()
         for (token in tokenizer.tokenize(text)) {
+            if (token.partOfSpeechLevel1 == "記号") continue
             val sound = listOf(token.pronunciation, token.reading, token.surface)
                 .firstOrNull { it != null && it != "*" } ?: continue
-            val part = kana(sound)
+            val part = kana(sound).filter { it !in "。、！？「」『』（）・…" }
             if (part.isBlank()) continue
-            if (out.isNotEmpty() && Hangul.isSyl(part.first())) out.append(' ')
+            val attach = token.partOfSpeechLevel1 in attachPos1 || token.partOfSpeechLevel2 in attachPos2
+            if (out.isNotEmpty() && !attach) out.append(' ')
             out.append(part)
         }
-        return out.toString()
+        return out.toString().trim()
     }
 
     private fun kana(s: String): String {
