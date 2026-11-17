@@ -31,10 +31,11 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 data class LangInfo(val label: String, val code: String, val voice: String)
 
-// Saved words and sentences: filter by language and date, and test yourself.
+// Saved words and sentences: filter by language and date, explain word by word, and test yourself.
 class VocabView(
     context: Context,
     private val prefs: SharedPreferences,
@@ -49,8 +50,10 @@ class VocabView(
         val right: Int, val wrong: Int
     )
 
+    private val blue = Color.rgb(47, 91, 234)
     private val density = resources.displayMetrics.density
     private val dayFormat = SimpleDateFormat("yyyy-MM-dd (E)", Locale.KOREAN)
+    private val net = Executors.newSingleThreadExecutor()
     private var dayOptions: List<String> = emptyList()
     private var selectedDay: String? = null
     private var shown: List<Item> = emptyList()
@@ -238,8 +241,15 @@ class VocabView(
         text = day
         textSize = 13f
         setTypeface(null, Typeface.BOLD)
-        setTextColor(Color.rgb(47, 91, 234))
+        setTextColor(blue)
         setPadding(0, dp(18), 0, dp(4))
+    }
+
+    private fun iconButton(icon: String, onClick: () -> Unit) = TextView(context).apply {
+        text = icon
+        textSize = 19f
+        setPadding(dp(8), dp(4), dp(8), dp(4))
+        setOnClickListener { onClick() }
     }
 
     private fun row(item: Item): View {
@@ -255,7 +265,7 @@ class VocabView(
             addView(TextView(context).apply {
                 text = item.meaning.ifEmpty { "뜻 없음 · 시험을 시작하면 자동으로 채워요" }
                 textSize = 16f
-                setTextColor(if (item.meaning.isEmpty()) Color.LTGRAY else Color.rgb(47, 91, 234))
+                setTextColor(if (item.meaning.isEmpty()) Color.LTGRAY else blue)
             })
             if (item.example.isNotEmpty()) addView(TextView(context).apply {
                 text = "예) " + item.example + if (item.exampleMeaning.isNotEmpty()) "\n     " + item.exampleMeaning else ""
@@ -268,34 +278,26 @@ class VocabView(
                 setTextColor(Color.LTGRAY)
             })
         }
-        val play = TextView(context).apply {
-            text = "🔊"
-            textSize = 18f
-            setPadding(dp(10), dp(4), dp(6), dp(4))
-            setOnClickListener { speak(item.text, item.voice) }
-        }
-        val more = TextView(context).apply {
-            text = "⋮"
-            textSize = 22f
-            setPadding(dp(10), dp(4), dp(4), dp(4))
-            setOnClickListener { actions(item) }
-        }
         return LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(8))
             addView(texts, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(play)
-            addView(more)
+            addView(iconButton("📖") { openDetail(item) })
+            addView(iconButton("🔊") { speak(item.text, item.voice) })
+            addView(iconButton("⋮") { actions(item) })
         }
     }
 
     private fun actions(item: Item) {
         AlertDialog.Builder(context)
             .setTitle(item.text)
-            .setItems(arrayOf("복사", "삭제")) { _, which ->
-                if (which == 0) copy(item.text + if (item.meaning.isNotEmpty()) " = " + item.meaning else "")
-                else delete(item)
+            .setItems(arrayOf("단어별 상세 설명", "복사", "삭제")) { _, which ->
+                when (which) {
+                    0 -> openDetail(item)
+                    1 -> copy(item.text + if (item.meaning.isNotEmpty()) " = " + item.meaning else "")
+                    else -> delete(item)
+                }
             }
             .show()
     }
@@ -338,6 +340,188 @@ class VocabView(
             putExtra(Intent.EXTRA_TEXT, sb.toString())
         }
         context.startActivity(Intent.createChooser(send, "단어장 내보내기"))
+    }
+
+    /* ---------- Word-by-word explanation ---------- */
+
+    private fun openDetail(item: Item, force: Boolean = false) {
+        if (!force) {
+            val cached = WordExplainer.fromJson(readArray().optJSONObject(item.index)?.optString("x"))
+            if (cached != null) {
+                showDetail(item, cached)
+                return
+            }
+        }
+        val engine = WordExplainer.llmEngine(prefs)
+        val waiting = AlertDialog.Builder(context)
+            .setMessage("단어 설명을 만드는 중… (${WordExplainer.label(engine ?: "")})")
+            .show()
+
+        fun deliver(r: WordExplainer.Result) {
+            waiting.dismiss()
+            val arr = readArray()
+            arr.optJSONObject(item.index)?.put("x", r.toJson())
+            writeArray(arr)
+            showDetail(item, r)
+        }
+        fun offline() = WordExplainer.explainOffline(context, item.text, item.code) { deliver(it) }
+
+        if (engine == null) {
+            offline()
+            return
+        }
+        net.execute {
+            val r: Any = try {
+                WordExplainer.explainWithLlm(prefs, engine, item.text, item.code)
+            } catch (e: Exception) { e }
+            post {
+                if (r is WordExplainer.Result) {
+                    deliver(r)
+                } else {
+                    toast("${WordExplainer.label(engine)} 설명에 실패해서 기기 분석으로 보여드려요")
+                    offline()
+                }
+            }
+        }
+    }
+
+    private fun showDetail(item: Item, r: WordExplainer.Result) {
+        val box = LinearLayout(context).apply {
+            orientation = VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(8))
+        }
+        box.addView(TextView(context).apply {
+            text = item.text
+            textSize = 21f
+            setTypeface(null, Typeface.BOLD)
+            setTextIsSelectable(true)
+        })
+        val natural = r.natural.ifEmpty { item.meaning }
+        if (natural.isNotEmpty()) box.addView(TextView(context).apply {
+            text = natural
+            textSize = 16f
+            setTextColor(blue)
+            setPadding(0, dp(4), 0, 0)
+        })
+        box.addView(TextView(context).apply {
+            text = "🔊 문장 전체 듣기"
+            textSize = 15f
+            setPadding(0, dp(8), 0, dp(12))
+            setOnClickListener { speak(item.text, item.voice) }
+        })
+        r.words.forEach { w -> box.addView(wordCard(item, w)) }
+        if (r.grammar.isNotEmpty()) {
+            box.addView(TextView(context).apply {
+                text = "문법 포인트"
+                textSize = 15f
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, dp(16), 0, dp(4))
+            })
+            box.addView(TextView(context).apply {
+                text = r.grammar
+                textSize = 14f
+                setTextColor(Color.DKGRAY)
+                setTextIsSelectable(true)
+            })
+        }
+        box.addView(TextView(context).apply {
+            text = "설명: " + r.source.ifEmpty { WordExplainer.OFFLINE } +
+                if (r.source == WordExplainer.OFFLINE || r.source.isEmpty())
+                    "\n번역 엔진에 Claude나 맥북 LLM을 설정하면 활용과 문법까지 자세히 설명해요." else ""
+            textSize = 12f
+            setTextColor(Color.GRAY)
+            setPadding(0, dp(16), 0, 0)
+        })
+        AlertDialog.Builder(context)
+            .setView(ScrollView(context).apply { addView(box) })
+            .setPositiveButton("닫기", null)
+            .setNeutralButton("다시 만들기") { _, _ -> openDetail(item, force = true) }
+            .show()
+    }
+
+    private fun wordCard(item: Item, w: WordExplainer.Word): View {
+        val card = LinearLayout(context).apply {
+            orientation = VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setBackgroundColor(Color.argb(20, 47, 91, 234))
+        }
+        val head = buildString {
+            append(w.word)
+            if (w.reading.isNotEmpty() && w.reading != w.word) append("   ").append(w.reading)
+            if (w.hangul.isNotEmpty()) append("   [").append(w.hangul).append("]")
+        }
+        card.addView(TextView(context).apply {
+            text = head
+            textSize = 18f
+            setTypeface(null, Typeface.BOLD)
+            setTextIsSelectable(true)
+        })
+        val sub = listOf(
+            w.pos,
+            if (w.base.isNotEmpty() && w.base != w.word) "기본형 ${w.base}" else ""
+        ).filter { it.isNotEmpty() }.joinToString("  ·  ")
+        if (sub.isNotEmpty()) card.addView(TextView(context).apply {
+            text = sub
+            textSize = 13f
+            setTextColor(Color.GRAY)
+        })
+        if (w.meaning.isNotEmpty()) card.addView(TextView(context).apply {
+            text = w.meaning
+            textSize = 16f
+            setTextColor(blue)
+        })
+        if (w.note.isNotEmpty()) card.addView(TextView(context).apply {
+            text = w.note
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(2), 0, 0)
+        })
+        val buttons = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            setPadding(0, dp(4), 0, 0)
+            addView(TextView(context).apply {
+                text = "🔊 듣기"
+                textSize = 14f
+                setPadding(0, dp(4), dp(20), dp(4))
+                setOnClickListener { speak(w.word, item.voice) }
+            })
+            addView(TextView(context).apply {
+                text = "+ 단어장"
+                textSize = 14f
+                setTextColor(blue)
+                setPadding(0, dp(4), 0, dp(4))
+                setOnClickListener {
+                    addWord(item, w)
+                    text = "✔ 추가됨"
+                    isEnabled = false
+                }
+            })
+        }
+        card.addView(buttons)
+        return FrameLayout(context).apply {
+            setPadding(0, dp(4), 0, dp(4))
+            addView(card)
+        }
+    }
+
+    private fun addWord(item: Item, w: WordExplainer.Word) {
+        val word = w.base.ifEmpty { w.word }
+        val arr = readArray()
+        arr.put(
+            JSONObject()
+                .put("t", word)
+                .put("m", w.meaning)
+                .put("e", item.text)
+                .put("em", item.meaning)
+                .put("v", item.voice)
+                .put("l", item.code)
+                .put("d", System.currentTimeMillis())
+                .put("c", 0)
+                .put("w", 0)
+        )
+        writeArray(arr)
+        toast("단어장에 추가: $word")
+        refresh()
     }
 
     /* ---------- Quiz ---------- */
@@ -416,7 +600,10 @@ class VocabView(
         }
         val quiz = QuizView(context, cards, mode, speak, { card, ok -> record(card.key, ok) }, { closeQuiz() })
         quizHolder.removeAllViews()
-        quizHolder.addView(quiz, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        quizHolder.addView(
+            quiz,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
         listPanel.visibility = View.GONE
         quizHolder.visibility = View.VISIBLE
     }
