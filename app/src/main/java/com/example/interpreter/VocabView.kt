@@ -618,6 +618,13 @@ class VocabView(
         writeArray(arr)
     }
 
+    // Phone back button: closes a running quiz. Returns false on the word list.
+    fun back(): Boolean {
+        if (quizHolder.visibility != View.VISIBLE) return false
+        closeQuiz()
+        return true
+    }
+
     private fun closeQuiz() {
         quizHolder.removeAllViews()
         quizHolder.visibility = View.GONE

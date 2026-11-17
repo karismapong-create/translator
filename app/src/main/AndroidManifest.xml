@@ -13,6 +13,8 @@
         <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
     </queries>
     <application
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="동시통역"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">

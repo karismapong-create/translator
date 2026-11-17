@@ -246,6 +246,13 @@ class SituationView(
         if (screen == 2) show(1) else show(0)
     }
 
+    // Phone back button: dialogue → questions → places. Returns false on the places screen.
+    fun back(): Boolean {
+        if (screen == 0) return false
+        goBack()
+        return true
+    }
+
     private fun reloadForLanguage() {
         stopPlay()
         if (screen >= 1 && place != null) {
