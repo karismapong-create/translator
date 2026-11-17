@@ -23,12 +23,11 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import com.google.mlkit.common.model.DownloadConditions
-import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
 import org.json.JSONArray
 import org.json.JSONObject
-import java.text.SimpleDateFormat
+import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -50,9 +49,10 @@ class VocabView(
         val right: Int, val wrong: Int
     )
 
+    private val home: Lang = Languages.home(prefs)
     private val blue = Color.rgb(47, 91, 234)
     private val density = resources.displayMetrics.density
-    private val dayFormat = SimpleDateFormat("yyyy-MM-dd (E)", Locale.KOREAN)
+    private val dayFormat = DateFormat.getDateInstance(DateFormat.FULL, Locale.forLanguageTag(home.speechTag))
     private val net = Executors.newSingleThreadExecutor()
     private var dayOptions: List<String> = emptyList()
     private var selectedDay: String? = null
@@ -70,12 +70,12 @@ class VocabView(
         langFilter = Spinner(context).apply {
             adapter = ArrayAdapter(
                 context, android.R.layout.simple_spinner_dropdown_item,
-                listOf("모든 언어") + langs.map { it.label }
+                listOf(VocabText.t("all_langs")) + langs.map { it.label }
             )
             onItemSelectedListener = onSelect { refresh() }
         }
         dateFilter = Spinner(context).apply {
-            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf("모든 날짜"))
+            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf(VocabText.t("all_dates")))
             onItemSelectedListener = onSelect { pos ->
                 val day = if (pos <= 0) null else dayOptions.getOrNull(pos - 1)
                 if (day != selectedDay) {
@@ -90,7 +90,7 @@ class VocabView(
             addView(dateFilter, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         }
         search = EditText(context).apply {
-            setHint("검색")
+            setHint(VocabText.t("search"))
             setSingleLine(true)
             textSize = 15f
             addTextChangedListener(object : TextWatcher {
@@ -100,11 +100,11 @@ class VocabView(
             })
         }
         val quizButton = Button(context).apply {
-            text = "시험"
+            text = VocabText.t("quiz")
             setOnClickListener { startQuiz() }
         }
         val exportButton = Button(context).apply {
-            text = "내보내기"
+            text = VocabText.t("export")
             setOnClickListener { exportShown() }
         }
         val actions = LinearLayout(context).apply {
@@ -134,6 +134,7 @@ class VocabView(
 
     private fun dp(v: Int) = (v * density).toInt()
     private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    private fun day(time: Long): String = dayFormat.format(Date(time))
 
     /* ---------- Storage ---------- */
 
@@ -155,7 +156,7 @@ class VocabView(
         else -> "en-US"
     }
 
-    // Converts items saved by older versions into foreign text + Korean meaning.
+    // Converts items saved by the first versions (Korean users) into foreign text + meaning.
     private fun migrate(o: JSONObject) {
         val t = o.optString("t")
         val n = o.optString("n")
@@ -205,21 +206,21 @@ class VocabView(
             }
             .sortedByDescending { it.time }
 
-        val days = base.map { dayFormat.format(Date(it.time)) }.distinct()
+        val days = base.map { day(it.time) }.distinct()
         if (days != dayOptions) {
             dayOptions = days
             if (selectedDay != null && selectedDay !in days) selectedDay = null
             dateFilter.adapter = ArrayAdapter(
-                context, android.R.layout.simple_spinner_dropdown_item, listOf("모든 날짜") + days
+                context, android.R.layout.simple_spinner_dropdown_item, listOf(VocabText.t("all_dates")) + days
             )
             dateFilter.setSelection(selectedDay?.let { days.indexOf(it) + 1 } ?: 0)
         }
-        shown = base.filter { selectedDay == null || dayFormat.format(Date(it.time)) == selectedDay }
+        shown = base.filter { selectedDay == null || day(it.time) == selectedDay }
 
         list.removeAllViews()
         if (shown.isEmpty()) {
             list.addView(TextView(context).apply {
-                text = "저장한 단어나 문장이 없어요.\n통역 화면에서 ☆를 누르거나, 글자를 길게 눌러 '단어 저장'을 고르세요."
+                text = VocabText.t("empty")
                 textSize = 15f
                 setTextColor(Color.GRAY)
                 setPadding(0, dp(16), 0, 0)
@@ -228,17 +229,17 @@ class VocabView(
         }
         var lastDay = ""
         for (item in shown) {
-            val day = dayFormat.format(Date(item.time))
-            if (day != lastDay) {
-                lastDay = day
-                list.addView(header(day))
+            val d = day(item.time)
+            if (d != lastDay) {
+                lastDay = d
+                list.addView(header(d))
             }
             list.addView(row(item))
         }
     }
 
-    private fun header(day: String) = TextView(context).apply {
-        text = day
+    private fun header(d: String) = TextView(context).apply {
+        text = d
         textSize = 13f
         setTypeface(null, Typeface.BOLD)
         setTextColor(blue)
@@ -263,12 +264,13 @@ class VocabView(
                 setTextIsSelectable(true)
             })
             addView(TextView(context).apply {
-                text = item.meaning.ifEmpty { "뜻 없음 · 시험을 시작하면 자동으로 채워요" }
+                text = item.meaning.ifEmpty { VocabText.t("no_meaning") }
                 textSize = 16f
                 setTextColor(if (item.meaning.isEmpty()) Color.LTGRAY else blue)
             })
             if (item.example.isNotEmpty()) addView(TextView(context).apply {
-                text = "예) " + item.example + if (item.exampleMeaning.isNotEmpty()) "\n     " + item.exampleMeaning else ""
+                text = VocabText.t("example") + item.example +
+                    if (item.exampleMeaning.isNotEmpty()) "\n     " + item.exampleMeaning else ""
                 textSize = 13f
                 setTextColor(Color.GRAY)
             })
@@ -292,7 +294,7 @@ class VocabView(
     private fun actions(item: Item) {
         AlertDialog.Builder(context)
             .setTitle(item.text)
-            .setItems(arrayOf("단어별 상세 설명", "복사", "삭제")) { _, which ->
+            .setItems(arrayOf(VocabText.t("detail_menu"), VocabText.t("copy"), VocabText.t("delete"))) { _, which ->
                 when (which) {
                     0 -> openDetail(item)
                     1 -> copy(item.text + if (item.meaning.isNotEmpty()) " = " + item.meaning else "")
@@ -306,40 +308,40 @@ class VocabView(
         val arr = readArray()
         if (item.index < arr.length()) arr.remove(item.index)
         writeArray(arr)
-        toast("삭제했어요")
+        toast(VocabText.t("deleted"))
         refresh()
     }
 
     private fun copy(text: String) {
         (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            .setPrimaryClip(ClipData.newPlainText("단어", text))
-        toast("복사했어요")
+            .setPrimaryClip(ClipData.newPlainText("word", text))
+        toast(VocabText.t("copied"))
     }
 
     private fun exportShown() {
         if (shown.isEmpty()) {
-            toast("내보낼 항목이 없어요.")
+            toast(VocabText.t("nothing"))
             return
         }
         var lastDay = ""
         val sb = StringBuilder()
         for (item in shown) {
-            val day = dayFormat.format(Date(item.time))
-            if (day != lastDay) {
-                lastDay = day
+            val d = day(item.time)
+            if (d != lastDay) {
+                lastDay = d
                 if (sb.isNotEmpty()) sb.append("\n")
-                sb.append("■ ").append(day).append("\n")
+                sb.append("■ ").append(d).append("\n")
             }
             sb.append(item.text)
             if (item.meaning.isNotEmpty()) sb.append("  =  ").append(item.meaning)
-            if (item.example.isNotEmpty()) sb.append("\n    예) ").append(item.example)
+            if (item.example.isNotEmpty()) sb.append("\n    ").append(VocabText.t("example")).append(item.example)
             sb.append("\n")
         }
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, sb.toString())
         }
-        context.startActivity(Intent.createChooser(send, "단어장 내보내기"))
+        context.startActivity(Intent.createChooser(send, VocabText.t("export_title")))
     }
 
     /* ---------- Word-by-word explanation ---------- */
@@ -354,7 +356,7 @@ class VocabView(
         }
         val engine = WordExplainer.llmEngine(prefs)
         val waiting = AlertDialog.Builder(context)
-            .setMessage("단어 설명을 만드는 중… (${WordExplainer.label(engine ?: "")})")
+            .setMessage(VocabText.f("making_detail", WordExplainer.label(engine ?: "")))
             .show()
 
         fun deliver(r: WordExplainer.Result) {
@@ -364,7 +366,7 @@ class VocabView(
             writeArray(arr)
             showDetail(item, r)
         }
-        fun offline() = WordExplainer.explainOffline(context, item.text, item.code) { deliver(it) }
+        fun offline() = WordExplainer.explainOffline(context, item.text, item.code, home.code) { deliver(it) }
 
         if (engine == null) {
             offline()
@@ -378,7 +380,7 @@ class VocabView(
                 if (r is WordExplainer.Result) {
                     deliver(r)
                 } else {
-                    toast("${WordExplainer.label(engine)} 설명에 실패해서 기기 분석으로 보여드려요")
+                    toast(VocabText.f("detail_fallback", WordExplainer.label(engine)))
                     offline()
                 }
             }
@@ -404,7 +406,7 @@ class VocabView(
             setPadding(0, dp(4), 0, 0)
         })
         box.addView(TextView(context).apply {
-            text = "🔊 문장 전체 듣기"
+            text = VocabText.t("play_sentence")
             textSize = 15f
             setPadding(0, dp(8), 0, dp(12))
             setOnClickListener { speak(item.text, item.voice) }
@@ -412,7 +414,7 @@ class VocabView(
         r.words.forEach { w -> box.addView(wordCard(item, w)) }
         if (r.grammar.isNotEmpty()) {
             box.addView(TextView(context).apply {
-                text = "문법 포인트"
+                text = VocabText.t("grammar")
                 textSize = 15f
                 setTypeface(null, Typeface.BOLD)
                 setPadding(0, dp(16), 0, dp(4))
@@ -424,18 +426,18 @@ class VocabView(
                 setTextIsSelectable(true)
             })
         }
+        val offline = r.source.isEmpty() || r.source == WordExplainer.OFFLINE
         box.addView(TextView(context).apply {
-            text = "설명: " + r.source.ifEmpty { WordExplainer.OFFLINE } +
-                if (r.source == WordExplainer.OFFLINE || r.source.isEmpty())
-                    "\n번역 엔진에 Claude나 맥북 LLM을 설정하면 활용과 문법까지 자세히 설명해요." else ""
+            text = VocabText.f("source", r.source.ifEmpty { WordExplainer.OFFLINE }) +
+                if (offline) "\n" + VocabText.t("offline_tip") else ""
             textSize = 12f
             setTextColor(Color.GRAY)
             setPadding(0, dp(16), 0, 0)
         })
         AlertDialog.Builder(context)
             .setView(ScrollView(context).apply { addView(box) })
-            .setPositiveButton("닫기", null)
-            .setNeutralButton("다시 만들기") { _, _ -> openDetail(item, force = true) }
+            .setPositiveButton(I18n.t("close"), null)
+            .setNeutralButton(VocabText.t("regen")) { _, _ -> openDetail(item, force = true) }
             .show()
     }
 
@@ -458,7 +460,7 @@ class VocabView(
         })
         val sub = listOf(
             w.pos,
-            if (w.base.isNotEmpty() && w.base != w.word) "기본형 ${w.base}" else ""
+            if (w.base.isNotEmpty() && w.base != w.word) VocabText.f("base_form", w.base) else ""
         ).filter { it.isNotEmpty() }.joinToString("  ·  ")
         if (sub.isNotEmpty()) card.addView(TextView(context).apply {
             text = sub
@@ -480,19 +482,19 @@ class VocabView(
             orientation = HORIZONTAL
             setPadding(0, dp(4), 0, 0)
             addView(TextView(context).apply {
-                text = "🔊 듣기"
+                text = TalkText.t("listen")
                 textSize = 14f
                 setPadding(0, dp(4), dp(20), dp(4))
                 setOnClickListener { speak(w.word, item.voice) }
             })
             addView(TextView(context).apply {
-                text = "+ 단어장"
+                text = VocabText.t("add_vocab")
                 textSize = 14f
                 setTextColor(blue)
                 setPadding(0, dp(4), 0, dp(4))
                 setOnClickListener {
                     addWord(item, w)
-                    text = "✔ 추가됨"
+                    text = VocabText.t("added")
                     isEnabled = false
                 }
             })
@@ -520,7 +522,7 @@ class VocabView(
                 .put("w", 0)
         )
         writeArray(arr)
-        toast("단어장에 추가: $word")
+        toast(VocabText.f("added_toast", word))
         refresh()
     }
 
@@ -528,22 +530,22 @@ class VocabView(
 
     private fun startQuiz() {
         if (shown.size < 2) {
-            toast("시험을 보려면 단어가 2개 이상 있어야 해요.")
+            toast(VocabText.t("need2"))
             return
         }
-        val missing = shown.filter { it.meaning.isEmpty() && it.code != TranslateLanguage.KOREAN }
+        val missing = shown.filter { it.meaning.isEmpty() && it.code != home.code }
         if (missing.isEmpty()) {
             chooseMode()
             return
         }
-        toast("뜻이 없는 단어 ${missing.size}개의 뜻을 채우는 중…")
+        toast(VocabText.f("filling", missing.size))
         fillMeanings(missing) {
             refresh()
             chooseMode()
         }
     }
 
-    // Translates words that have no meaning yet into Korean, then saves them.
+    // Translates words that have no meaning yet into my language, then saves them.
     private fun fillMeanings(items: List<Item>, done: () -> Unit) {
         var pending = items.size
         val results = HashMap<Int, String>()
@@ -560,7 +562,7 @@ class VocabView(
                 val t = Translation.getClient(
                     TranslatorOptions.Builder()
                         .setSourceLanguage(code)
-                        .setTargetLanguage(TranslateLanguage.KOREAN)
+                        .setTargetLanguage(home.code)
                         .build()
                 )
                 t.downloadModelIfNeeded(DownloadConditions.Builder().build())
@@ -580,10 +582,10 @@ class VocabView(
 
     private fun chooseMode() {
         val retry = shown.filter { it.wrong > 0 }
-        val options = arrayListOf("외국어 보고 뜻 고르기", "뜻 보고 외국어 고르기", "카드 넘기며 외우기")
-        if (retry.size >= 2) options += "틀렸던 것만 (뜻 고르기, ${retry.size}개)"
+        val options = arrayListOf(VocabText.t("mode1"), VocabText.t("mode2"), VocabText.t("mode3"))
+        if (retry.size >= 2) options += VocabText.f("mode4", retry.size)
         AlertDialog.Builder(context)
-            .setTitle("시험 · ${shown.size}개")
+            .setTitle(VocabText.f("quiz_title", shown.size))
             .setItems(options.toTypedArray()) { _, which ->
                 if (which == 3) launchQuiz(retry, QuizView.PICK_MEANING) else launchQuiz(shown, which)
             }
@@ -595,7 +597,7 @@ class VocabView(
             QuizView.Card(it.index, it.text, it.meaning, it.example, it.exampleMeaning, it.voice)
         }
         if (cards.size < 2) {
-            toast("뜻이 있는 단어가 2개 이상 필요해요.")
+            toast(VocabText.t("need2m"))
             return
         }
         val quiz = QuizView(context, cards, mode, speak, { card, ok -> record(card.key, ok) }, { closeQuiz() })
