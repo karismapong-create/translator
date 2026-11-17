@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
@@ -45,6 +46,7 @@ import android.widget.Toast
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
+import com.google.mlkit.nl.languageid.LanguageIdentification
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
@@ -95,6 +97,7 @@ class MainActivity : Activity() {
         Lang("中文", "zh-CN", TranslateLanguage.CHINESE, "Simplified Chinese")
     )
     private val korean get() = langs[0]
+    private val latinCodes = setOf(TranslateLanguage.ENGLISH, TranslateLanguage.FRENCH, TranslateLanguage.SPANISH)
     private val aliases = mapOf(
         "한국어" to TranslateLanguage.KOREAN, "일본어" to TranslateLanguage.JAPANESE,
         "영어" to TranslateLanguage.ENGLISH, "프랑스어" to TranslateLanguage.FRENCH,
@@ -121,8 +124,7 @@ class MainActivity : Activity() {
 
     private var recognizer: SpeechRecognizer? = null
     private var translator: Translator? = null
-    private var chatTranslator: Translator? = null
-    private var chatPair = ""
+    private val translators = HashMap<String, Translator>()
     private var tts: TextToSpeech? = null
     private var listening = false
     private var committed = 0
@@ -140,7 +142,20 @@ class MainActivity : Activity() {
     private var remoteBlockedUntil = 0L
     private val recent = ArrayDeque<String>()
 
-    private val from: Lang get() = langs[fromSpinner.selectedItemPosition]
+    // Automatic language detection
+    private var heard: Lang = langs[0]
+    private var foreign: Lang = langs[1]
+    private var detectedTag: String? = null
+    private val langId by lazy { LanguageIdentification.getClient() }
+
+    // Silent mode
+    private val audio by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    private val silent: Boolean get() = prefs.getBoolean("silent", true)
+    private var quiet = false
+    private var musicMuted = false
+
+    private val auto: Boolean get() = fromSpinner.selectedItemPosition == 0
+    private val from: Lang get() = if (auto) heard else langs[fromSpinner.selectedItemPosition - 1]
     private val to: Lang get() = langs[toSpinner.selectedItemPosition]
     private val noSpaces: Boolean get() = from.speechTag.startsWith("ja") || from.speechTag.startsWith("zh")
 
@@ -168,24 +183,34 @@ class MainActivity : Activity() {
 
         val labels = langs.map { it.label }
         fromSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, labels)
-            setSelection(1)
+            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf("🔍 자동 감지") + labels)
+            setSelection(0)
         }
         toSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, labels)
-            setSelection(0)
+            setSelection(1)
         }
         val swap = Button(this).apply {
             text = "⇄"
             textSize = 20f
             setOnClickListener {
-                val f = fromSpinner.selectedItemPosition
-                fromSpinner.setSelection(toSpinner.selectedItemPosition)
+                if (auto) {
+                    toast("자동 감지 중에는 바꿀 필요가 없어요")
+                    return@setOnClickListener
+                }
+                val f = fromSpinner.selectedItemPosition - 1
+                fromSpinner.setSelection(toSpinner.selectedItemPosition + 1)
                 toSpinner.setSelection(f)
             }
         }
+        val cameraButton = Button(this).apply {
+            text = "📷"
+            textSize = 18f
+            setOnClickListener { openCamera() }
+        }
         val onChange = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                if (to.mlkit != TranslateLanguage.KOREAN) foreign = to
                 scroll.removeCallbacks(restartRunnable)
                 scroll.postDelayed(restartRunnable, 300)
             }
@@ -198,6 +223,7 @@ class MainActivity : Activity() {
             addView(fromSpinner, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
             addView(swap, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
             addView(toSpinner, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(cameraButton, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         }
 
         segments = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -273,9 +299,9 @@ class MainActivity : Activity() {
         tts = TextToSpeech(this) { }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = runOnUiThread { highlight(utteranceId, -1, -1) }
-            override fun onDone(utteranceId: String?) = runOnUiThread { unhighlight(utteranceId) }
-            override fun onError(utteranceId: String?) = runOnUiThread { unhighlight(utteranceId) }
-            override fun onStop(utteranceId: String?, interrupted: Boolean) = runOnUiThread { unhighlight(utteranceId) }
+            override fun onDone(utteranceId: String?) = runOnUiThread { speechEnded(utteranceId) }
+            override fun onError(utteranceId: String?) = runOnUiThread { speechEnded(utteranceId) }
+            override fun onStop(utteranceId: String?, interrupted: Boolean) = runOnUiThread { speechEnded(utteranceId) }
             override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) =
                 runOnUiThread { highlight(utteranceId, start, end) }
         })
@@ -283,13 +309,42 @@ class MainActivity : Activity() {
 
     private fun showHint() {
         val h = TextView(this).apply {
-            text = "언어를 고르고 시작을 누르세요. 아래 입력창에 한국어를 쓰면 외국어로 번역해요.\n" +
-                   "☆ 문장 저장 · 🔊 다시 듣기 · 번역문을 길게 누르면 단어 저장과 복사"
+            text = "시작을 누르고 말하세요. 🔍 자동 감지는 한국어와 오른쪽 언어를 알아서 구분해요.\n" +
+                   "☆ 문장 저장 · 🔊 다시 듣기 · 번역문을 길게 누르면 단어 저장과 복사 · 📷 카메라 번역"
             textSize = 16f
             setTextColor(Color.GRAY)
         }
         hint = h
         segments.addView(h)
+    }
+
+    private fun openCamera() {
+        if (listening) stop()
+        startActivity(Intent(this, CameraActivity::class.java))
+    }
+
+    /* ---------- Silent mode ---------- */
+
+    private fun adjust(stream: Int, mute: Boolean) {
+        try {
+            audio.adjustStreamVolume(stream, if (mute) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE, 0)
+        } catch (_: Exception) {}
+    }
+
+    // Silences the recognizer's start and stop beeps while listening.
+    private fun setQuiet(on: Boolean) {
+        val want = on && silent
+        if (want == quiet) return
+        quiet = want
+        adjust(AudioManager.STREAM_NOTIFICATION, want)
+        adjust(AudioManager.STREAM_SYSTEM, want)
+        setMusicMuted(want && tts?.isSpeaking != true)
+    }
+
+    private fun setMusicMuted(mute: Boolean) {
+        if (mute == musicMuted) return
+        musicMuted = mute
+        adjust(AudioManager.STREAM_MUSIC, mute)
     }
 
     /* ---------- Highlight while speaking ---------- */
@@ -307,77 +362,145 @@ class MainActivity : Activity() {
         if (start < 0) scroll.post { scroll.smoothScrollTo(0, seg.view.top) }
     }
 
-    private fun unhighlight(id: String?) {
-        val seg = utter.remove(id ?: return) ?: return
-        seg.view.text = seg.tr
+    private fun speechEnded(id: String?) {
+        if (id != null) utter.remove(id)?.let { it.view.text = it.tr }
+        if (quiet && tts?.isSpeaking != true) setMusicMuted(true)
     }
 
     private fun speakNow(text: String, voice: String, seg: Seg?, flush: Boolean) {
         val engine = tts ?: return
+        setMusicMuted(false)
         val uid = "u${++utterCount}"
         if (seg != null) utter[uid] = seg
         engine.language = Locale.forLanguageTag(voice)
         engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, uid)
     }
 
+    /* ---------- Translators ---------- */
+
+    private fun withTranslator(sl: Lang, tl: Lang, ready: (Translator) -> Unit) {
+        val key = sl.mlkit + ">" + tl.mlkit
+        val t = translators.getOrPut(key) {
+            Translation.getClient(
+                TranslatorOptions.Builder()
+                    .setSourceLanguage(sl.mlkit)
+                    .setTargetLanguage(tl.mlkit)
+                    .build()
+            )
+        }
+        t.downloadModelIfNeeded(DownloadConditions.Builder().build())
+            .addOnSuccessListener { if (translators[key] === t) ready(t) }
+            .addOnFailureListener { status("언어팩을 받지 못했어요. 인터넷 연결을 확인하세요.") }
+    }
+
+    /* ---------- Automatic language detection ---------- */
+
+    private fun byCode(code: String) = langs.first { it.mlkit == code }
+    private fun langFromTag(tag: String?): Lang? = tag?.let { t -> langs.firstOrNull { t.startsWith(it.mlkit) } }
+    private fun fallbackLatin() = if (foreign.mlkit in latinCodes) foreign else byCode(TranslateLanguage.ENGLISH)
+
+    // Works out which language a piece of recognized text is in.
+    private fun detect(text: String, done: (Lang) -> Unit) {
+        val letters = text.filter { it.isLetter() }
+        val hangul = letters.count { it in '\uAC00'..'\uD7A3' }
+        val kana = letters.count { it in '\u3040'..'\u30FF' }
+        val han = letters.count { it in '\u4E00'..'\u9FFF' }
+        when {
+            hangul > 0 && hangul * 2 >= letters.length -> done(korean)
+            kana > 0 -> done(byCode(TranslateLanguage.JAPANESE))
+            han > 0 -> done(byCode(TranslateLanguage.CHINESE))
+            else -> {
+                val hinted = langFromTag(detectedTag)?.takeIf { it.mlkit in latinCodes }
+                if (hinted != null) {
+                    done(hinted)
+                    return
+                }
+                langId.identifyLanguage(text)
+                    .addOnSuccessListener { code ->
+                        done(langs.firstOrNull { it.mlkit == code && it.mlkit in latinCodes } ?: fallbackLatin())
+                    }
+                    .addOnFailureListener { done(fallbackLatin()) }
+            }
+        }
+    }
+
+    private fun autoStatus() =
+        status("듣는 중 · 자동 감지 (한국어 ↔ ${foreign.label}) · ${engineLabel(activeEngine)}")
+
+    private fun autoTranslate(raw: String) {
+        detect(raw) { lang ->
+            heard = lang
+            val sl: Lang
+            val tl: Lang
+            if (lang.mlkit == TranslateLanguage.KOREAN) {
+                sl = korean
+                tl = foreign
+            } else {
+                foreign = lang
+                sl = lang
+                tl = korean
+            }
+            if (listening) autoStatus()
+            withTranslator(sl, tl) { t -> translate(raw, sl, tl, t) }
+        }
+    }
+
+    private fun dispatch(text: String) {
+        if (auto) autoTranslate(text) else translate(text)
+    }
+
     /* ---------- Typed chat ---------- */
 
-    // Translates typed Korean into whichever foreign language is selected.
+    // Translates typed Korean into the foreign language in use.
     private fun sendChat() {
         val text = chatInput.text.toString().trim()
         if (text.isEmpty()) return
-        val target = if (to.mlkit != TranslateLanguage.KOREAN) to else from
+        val target = when {
+            auto -> foreign
+            to.mlkit != TranslateLanguage.KOREAN -> to
+            else -> from
+        }
         if (target.mlkit == TranslateLanguage.KOREAN) {
             status("위쪽에서 번역할 외국어를 고르세요.")
             return
         }
         chatInput.setText("")
         val src = korean
-        val pair = src.mlkit + ">" + target.mlkit
-        val existing = chatTranslator
-        if (existing != null && chatPair == pair) {
-            translate(text, src, target, existing, typed = true)
-            return
-        }
-        chatTranslator?.close()
-        val t = Translation.getClient(
-            TranslatorOptions.Builder()
-                .setSourceLanguage(src.mlkit)
-                .setTargetLanguage(target.mlkit)
-                .build()
-        )
-        chatTranslator = t
-        chatPair = pair
-        if (!listening) status("채팅 번역 준비 중…")
-        t.downloadModelIfNeeded(DownloadConditions.Builder().build())
-            .addOnSuccessListener {
-                if (chatTranslator === t) {
-                    if (!listening) status("번역 엔진: " + engineLabel(activeEngine))
-                    translate(text, src, target, t, typed = true)
-                }
-            }
-            .addOnFailureListener { status("언어팩을 받지 못했어요. 인터넷 연결을 확인하세요.") }
+        withTranslator(src, target) { t -> translate(text, src, target, t, typed = true) }
     }
 
     /* ---------- Settings ---------- */
 
     private fun openSettings() {
         val items = arrayOf(
-            "화면 지우기", "저장함", "화면 내용 내보내기", "단어장",
-            "번역 엔진 (지금: ${engineLabel(activeEngine)})"
+            "📷 카메라 번역", "화면 지우기", "저장함", "화면 내용 내보내기", "단어장",
+            "번역 엔진 (지금: ${engineLabel(activeEngine)})",
+            "무음 모드 (지금: ${if (silent) "켜짐" else "꺼짐"})"
         )
         AlertDialog.Builder(this)
             .setTitle("설정")
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> clearScreen()
-                    1 -> openSaved()
-                    2 -> exportScreen()
-                    3 -> openDictionary()
-                    else -> openEngines()
+                    0 -> openCamera()
+                    1 -> clearScreen()
+                    2 -> openSaved()
+                    3 -> exportScreen()
+                    4 -> openDictionary()
+                    5 -> openEngines()
+                    else -> toggleSilent()
                 }
             }
             .show()
+    }
+
+    private fun toggleSilent() {
+        val next = !silent
+        prefs.edit().putBoolean("silent", next).apply()
+        if (listening) {
+            setQuiet(false)
+            setQuiet(true)
+        }
+        toast(if (next) "무음 모드를 켰어요" else "무음 모드를 껐어요")
     }
 
     private fun clearScreen() {
@@ -820,9 +943,8 @@ class MainActivity : Activity() {
         stop()
         translator?.close()
         translator = null
-        chatTranslator?.close()
-        chatTranslator = null
-        chatPair = ""
+        translators.values.forEach { it.close() }
+        translators.clear()
         status("번역 결과가 이상해서 언어팩을 다시 받는 중이에요…")
         val mm = RemoteModelManager.getInstance()
         val tasks = listOf(src, tgt)
@@ -844,6 +966,19 @@ class MainActivity : Activity() {
             status("이 폰에서는 음성 인식을 쓸 수 없어요. Google 앱이 설치되어 있고 켜져 있는지 확인하세요.")
             return
         }
+        if (auto) {
+            if (to.mlkit != TranslateLanguage.KOREAN) foreign = to
+            listening = true
+            micButton.text = "정지"
+            recent.clear()
+            detectedTag = null
+            setQuiet(true)
+            withTranslator(korean, foreign) { }
+            withTranslator(foreign, korean) { }
+            autoStatus()
+            startRecognizer()
+            return
+        }
         if (from == to) {
             status("서로 다른 두 언어를 고르세요.")
             return
@@ -851,6 +986,7 @@ class MainActivity : Activity() {
         listening = true
         micButton.text = "정지"
         recent.clear()
+        setQuiet(true)
 
         translator?.close()
         val t = Translation.getClient(
@@ -878,6 +1014,7 @@ class MainActivity : Activity() {
         listening = false
         recognizer?.destroy()
         recognizer = null
+        setQuiet(false)
         interimView.text = ""
         micButton.text = "시작"
         status("번역 엔진: " + engineLabel(activeEngine))
@@ -887,6 +1024,11 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(rc, perms, res)
         if (res.firstOrNull() == PackageManager.PERMISSION_GRANTED) start()
         else status("마이크 권한을 허용해야 통역할 수 있어요.")
+    }
+
+    override fun onStop() {
+        if (listening) stop()
+        super.onStop()
     }
 
     /* ---------- Speech recognition ---------- */
@@ -899,8 +1041,12 @@ class MainActivity : Activity() {
         r.setRecognitionListener(object : RecognitionListener {
             override fun onPartialResults(b: Bundle?) = handle(firstResult(b), false)
             override fun onResults(b: Bundle?) {
+                b?.getString(SpeechRecognizer.DETECTED_LANGUAGE)?.let { detectedTag = it }
                 handle(firstResult(b), true)
                 restartRecognizer()
+            }
+            override fun onLanguageDetection(results: Bundle) {
+                results.getString(SpeechRecognizer.DETECTED_LANGUAGE)?.let { detectedTag = it }
             }
             override fun onError(error: Int) {
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
@@ -917,11 +1063,23 @@ class MainActivity : Activity() {
             override fun onEndOfSpeech() {}
             override fun onEvent(type: Int, p: Bundle?) {}
         })
+        val primary = from.speechTag
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, from.speechTag)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, primary)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+            if (auto) {
+                val others = langs.map { it.speechTag }.filter { it != primary }
+                putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", others.toTypedArray())
+                if (Build.VERSION.SDK_INT >= 34) {
+                    val all = ArrayList(langs.map { it.speechTag })
+                    putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+                    putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, all)
+                    putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
+                    putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, all)
+                }
+            }
             if (Build.VERSION.SDK_INT >= 33) {
                 val words = terms.mapNotNull { it.names[from.mlkit] }
                 if (words.isNotEmpty()) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(words))
@@ -943,7 +1101,7 @@ class MainActivity : Activity() {
         if (committed > text.length) committed = text.length
         val rest = text.substring(committed)
         if (isFinal) {
-            if (rest.isNotBlank()) translate(rest.trim())
+            if (rest.isNotBlank()) dispatch(rest.trim())
             committed = 0
             interimView.text = ""
             return
@@ -953,7 +1111,7 @@ class MainActivity : Activity() {
         if (size >= 9) {
             val stable = stablePart(rest)
             if (stable.isNotBlank()) {
-                translate(stable.trim())
+                dispatch(stable.trim())
                 committed += stable.length
             }
         }
@@ -995,7 +1153,7 @@ class MainActivity : Activity() {
         enableWordSave(trView, seg)
 
         val srcView = TextView(this).apply {
-            text = if (typed) "✍ " + p.shown else p.shown
+            text = (if (typed) "✍ " else "") + (if (auto && !typed) "[${sl.label}] " else "") + p.shown
             textSize = 14f
             setTextColor(Color.GRAY)
             setTextIsSelectable(true)
@@ -1096,8 +1254,9 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         listening = false
         recognizer?.destroy()
+        setQuiet(false)
         translator?.close()
-        chatTranslator?.close()
+        translators.values.forEach { it.close() }
         tts?.shutdown()
         net.shutdown()
         super.onDestroy()
