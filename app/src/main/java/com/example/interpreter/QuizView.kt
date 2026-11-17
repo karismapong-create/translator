@@ -61,7 +61,7 @@ class QuizView(
             setPadding(0, dp(24), 0, dp(8))
         }
         speakButton = Button(context).apply {
-            text = "🔊 듣기"
+            text = TalkText.t("listen")
             setOnClickListener { order.getOrNull(pos)?.let { speak(it.front, it.voice) } }
         }
         detail = TextView(context).apply {
@@ -72,12 +72,12 @@ class QuizView(
         }
         choices = LinearLayout(context).apply { orientation = VERTICAL }
         nextButton = Button(context).apply {
-            text = "다음"
+            text = VocabText.t("q_next")
             visibility = View.GONE
             setOnClickListener { advance() }
         }
         val quit = Button(context).apply {
-            text = "그만하기"
+            text = VocabText.t("q_quit")
             setOnClickListener { onClose() }
         }
         val body = LinearLayout(context).apply {
@@ -107,13 +107,13 @@ class QuizView(
 
     private fun explain(card: Card) = buildString {
         append(card.front).append("  =  ").append(card.back)
-        if (card.example.isNotEmpty()) append("\n\n예) ").append(card.example)
+        if (card.example.isNotEmpty()) append("\n\n").append(VocabText.t("example")).append(card.example)
         if (card.exampleMeaning.isNotEmpty()) append("\n").append(card.exampleMeaning)
     }
 
     private fun show() {
         val card = order.getOrNull(pos) ?: return finish()
-        progress.text = "${pos + 1} / ${order.size}   ·   맞힘 $correct"
+        progress.text = VocabText.f("q_progress", pos + 1, order.size, correct)
         val askForeign = mode != PICK_FOREIGN
         prompt.text = if (askForeign) card.front else card.back
         speakButton.visibility = if (askForeign) View.VISIBLE else View.GONE
@@ -122,11 +122,11 @@ class QuizView(
         nextButton.visibility = View.GONE
 
         if (mode == FLASH) {
-            choices.addView(button("뜻 보기") {
+            choices.addView(button(VocabText.t("q_show")) {
                 detail.text = explain(card)
                 choices.removeAllViews()
-                choices.addView(button("✔ 알아요") { record(card, true); advance() })
-                choices.addView(button("✘ 몰라요") { record(card, false); advance() })
+                choices.addView(button(VocabText.t("q_know")) { record(card, true); advance() })
+                choices.addView(button(VocabText.t("q_dont")) { record(card, false); advance() })
             })
             return
         }
@@ -146,9 +146,9 @@ class QuizView(
                     it.setBackgroundColor(GREEN)
                     it.setTextColor(Color.WHITE)
                 }
-                detail.text = (if (ok) "정답!\n" else "오답\n") + explain(card)
+                detail.text = VocabText.t(if (ok) "q_correct" else "q_wrong") + "\n" + explain(card)
                 record(card, ok)
-                nextButton.text = if (pos + 1 < order.size) "다음" else "결과 보기"
+                nextButton.text = VocabText.t(if (pos + 1 < order.size) "q_next" else "q_result_btn")
                 nextButton.visibility = View.VISIBLE
             }
             buttons += b
@@ -175,18 +175,18 @@ class QuizView(
     }
 
     private fun finish() {
-        progress.text = "결과"
+        progress.text = VocabText.t("q_result")
         prompt.text = "$correct / ${order.size}"
         speakButton.visibility = View.GONE
         nextButton.visibility = View.GONE
-        detail.text = if (wrong.isEmpty()) "모두 맞혔어요! 👏"
-                      else "틀린 단어\n\n" + wrong.joinToString("\n") { "${it.front}  =  ${it.back}" }
+        detail.text = if (wrong.isEmpty()) VocabText.t("q_perfect")
+                      else VocabText.t("q_missed") + "\n\n" + wrong.joinToString("\n") { "${it.front}  =  ${it.back}" }
         choices.removeAllViews()
         if (wrong.isNotEmpty()) {
             val again = wrong.toList()
-            choices.addView(button("틀린 것만 다시") { restart(again) })
+            choices.addView(button(VocabText.t("q_retry_wrong")) { restart(again) })
         }
-        choices.addView(button("처음부터 다시") { restart(cards) })
-        choices.addView(button("닫기") { onClose() })
+        choices.addView(button(VocabText.t("q_restart")) { restart(cards) })
+        choices.addView(button(I18n.t("close")) { onClose() })
     }
 }
