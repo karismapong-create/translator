@@ -3,15 +3,12 @@ package com.example.interpreter
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.media.AudioManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
@@ -19,7 +16,6 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.text.InputType
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
@@ -48,7 +44,6 @@ import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.languageid.LanguageIdentification
-import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
@@ -62,10 +57,7 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
-    private data class Lang(val label: String, val speechTag: String, val mlkit: String, val english: String)
     private data class Term(val names: Map<String, String>, val variants: List<String>)
-    private data class Engine(val id: String, val label: String)
-    private class HttpException(val code: Int, val body: String) : Exception("HTTP $code")
 
     // One translated line on screen.
     private class Seg(
@@ -86,28 +78,30 @@ class MainActivity : Activity() {
 
     companion object {
         const val DEFAULT_TERMS =
-            "마운자로 | | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro"
+            "마운자로 | | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro, 독일어=Mounjaro"
         const val MENU_SAVE_WORD = 1001
-        const val DEEPL_KEY_URL = "https://www.deepl.com/pro-api"
+        private val SAMPLES = mapOf(
+            "ko" to "안녕하세요. 만나서 반갑습니다.",
+            "ja" to "こんにちは。お会いできて嬉しいです。",
+            "en" to "Hello, nice to meet you.",
+            "fr" to "Bonjour, ravi de vous rencontrer.",
+            "es" to "Hola, encantado de conocerte.",
+            "de" to "Hallo, schön, Sie kennenzulernen.",
+            "zh" to "你好，很高兴认识你。"
+        )
     }
 
-    private val langs = listOf(
-        Lang("한국어", "ko-KR", TranslateLanguage.KOREAN, "Korean"),
-        Lang("日本語", "ja-JP", TranslateLanguage.JAPANESE, "Japanese"),
-        Lang("English", "en-US", TranslateLanguage.ENGLISH, "English"),
-        Lang("Français", "fr-FR", TranslateLanguage.FRENCH, "French"),
-        Lang("Español", "es-ES", TranslateLanguage.SPANISH, "Spanish"),
-        Lang("中文", "zh-CN", TranslateLanguage.CHINESE, "Simplified Chinese")
-    )
-    private val korean get() = langs[0]
-    private val latinCodes = setOf(TranslateLanguage.ENGLISH, TranslateLanguage.FRENCH, TranslateLanguage.SPANISH)
+    private val langs = Languages.all
+    private val latinCodes = setOf("en", "fr", "es", "de")
     private val aliases = mapOf(
-        "한국어" to TranslateLanguage.KOREAN, "일본어" to TranslateLanguage.JAPANESE,
-        "영어" to TranslateLanguage.ENGLISH, "프랑스어" to TranslateLanguage.FRENCH,
-        "스페인어" to TranslateLanguage.SPANISH, "중국어" to TranslateLanguage.CHINESE
+        "한국어" to "ko", "일본어" to "ja", "영어" to "en", "프랑스어" to "fr",
+        "스페인어" to "es", "중국어" to "zh", "독일어" to "de"
     )
-    private val engines = listOf(Engine("mlkit", "기기 번역만"), Engine("deepl", "DeepL")) +
-        Providers.llms.map { Engine(it.id, it.label) }
+
+    private lateinit var home: Lang
+    private lateinit var foreign: Lang
+    private lateinit var heard: Lang
+    private lateinit var settings: EngineSettings
 
     private lateinit var fromSpinner: Spinner
     private lateinit var toSpinner: Spinner
@@ -145,9 +139,6 @@ class MainActivity : Activity() {
     private var remoteBlockedUntil = 0L
     private val recent = ArrayDeque<String>()
 
-    // Automatic language detection
-    private var heard: Lang = langs[0]
-    private var foreign: Lang = langs[1]
     private var detectedTag: String? = null
     private val langId by lazy { LanguageIdentification.getClient() }
 
@@ -160,44 +151,42 @@ class MainActivity : Activity() {
     private val auto: Boolean get() = fromSpinner.selectedItemPosition == 0
     private val from: Lang get() = if (auto) heard else langs[fromSpinner.selectedItemPosition - 1]
     private val to: Lang get() = langs[toSpinner.selectedItemPosition]
-    private val noSpaces: Boolean get() = from.speechTag.startsWith("ja") || from.speechTag.startsWith("zh")
+    private val noSpaces: Boolean get() = from.code == "ja" || from.code == "zh"
 
     private fun p(key: String) = prefs.getString(key, "").orEmpty().trim()
-    private val engineId: String
-        get() = prefs.getString("engine", null) ?: if (p("deepl").isNotEmpty()) "deepl" else "mlkit"
-    private fun engineLabel(id: String) = Providers.label(id)
-    private fun engineReady(id: String): Boolean = when (id) {
-        "deepl" -> p("deepl").isNotEmpty()
-        "mlkit" -> false
-        else -> Providers.ready(prefs, id)
-    }
-    private val activeEngine: String
-        get() = engineId.let { if (it != "mlkit" && engineReady(it)) it else "mlkit" }
+    private val activeEngine: String get() = settings.active()
+    private fun engineLabel(id: String) = settings.label(id)
 
     private val restartRunnable = Runnable { if (listening) { stop(); start() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Providers.migrate(prefs)
+        home = Languages.home(prefs)
+        I18n.use(home.code)
+        foreign = langs.first { it.code != home.code }
+        heard = home
+        settings = EngineSettings(this, prefs, net, { id -> useEngine(id) }, { id -> testEngine(id) })
+
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         terms = parseTerms(prefs.getString("terms", DEFAULT_TERMS) ?: DEFAULT_TERMS)
 
-        val labels = langs.map { it.label }
+        val labels = langs.map { it.native }
         fromSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf("🔍 자동 감지") + labels)
+            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf(I18n.t("auto")) + labels)
             setSelection(0)
         }
         toSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, labels)
-            setSelection(1)
+            setSelection(langs.indexOf(foreign))
         }
         val swap = Button(this).apply {
             text = "⇄"
             textSize = 20f
             setOnClickListener {
                 if (auto) {
-                    toast("자동 감지 중에는 바꿀 필요가 없어요")
+                    toast(I18n.t("no_swap"))
                     return@setOnClickListener
                 }
                 val f = fromSpinner.selectedItemPosition - 1
@@ -207,7 +196,7 @@ class MainActivity : Activity() {
         }
         val onChange = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                if (to.mlkit != TranslateLanguage.KOREAN) foreign = to
+                if (to.code != home.code) foreign = to
                 scroll.removeCallbacks(restartRunnable)
                 scroll.postDelayed(restartRunnable, 300)
             }
@@ -234,11 +223,11 @@ class MainActivity : Activity() {
         statusView = TextView(this).apply {
             textSize = 14f
             setTextColor(Color.GRAY)
-            text = "번역 엔진: " + engineLabel(activeEngine)
+            text = I18n.f("engine_status", engineLabel(activeEngine))
         }
 
         chatInput = EditText(this).apply {
-            setHint("입력하면 한국어↔외국어로 번역해요")
+            setHint(I18n.t("chat_hint"))
             textSize = 16f
             setSingleLine(true)
             imeOptions = EditorInfo.IME_ACTION_SEND
@@ -248,7 +237,7 @@ class MainActivity : Activity() {
             }
         }
         val sendButton = Button(this).apply {
-            text = "번역"
+            text = I18n.t("translate")
             setOnClickListener { sendChat() }
         }
         val chatRow = LinearLayout(this).apply {
@@ -258,13 +247,13 @@ class MainActivity : Activity() {
             addView(sendButton, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         }
 
-        speakBox = CheckBox(this).apply { text = "음성으로 읽기" }
+        speakBox = CheckBox(this).apply { text = I18n.t("speak_aloud") }
         val settingsButton = Button(this).apply {
-            text = "설정"
+            text = I18n.t("settings")
             setOnClickListener { openSettings() }
         }
         micButton = Button(this).apply {
-            text = "시작"
+            text = I18n.t("start")
             textSize = 18f
             setOnClickListener { if (listening) stop() else start() }
         }
@@ -286,7 +275,7 @@ class MainActivity : Activity() {
             addView(bottom, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         }
 
-        val langInfos = langs.map { LangInfo(it.label, it.mlkit, it.speechTag) }
+        val langInfos = langs.map { LangInfo(it.native, it.code, it.speechTag) }
         convPage = ConversationView(
             this, prefs, langInfos,
             { text, voice -> speakNow(text, voice, null, true) },
@@ -302,9 +291,9 @@ class MainActivity : Activity() {
             pages.forEach { addView(it, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)) }
         }
 
-        tabViews = listOf("통역", "회화", "단어장", "용어집").mapIndexed { i, name ->
+        tabViews = listOf("tab_interp", "tab_talk", "tab_vocab", "tab_gloss").mapIndexed { i, key ->
             TextView(this).apply {
-                text = name
+                text = I18n.t(key)
                 textSize = 16f
                 gravity = Gravity.CENTER
                 setPadding(0, dp(10), 0, dp(10))
@@ -345,6 +334,23 @@ class MainActivity : Activity() {
             override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) =
                 runOnUiThread { highlight(utteranceId, start, end) }
         })
+
+        if (!Languages.hasChosen(prefs)) chooseCountry(firstRun = true)
+    }
+
+    /* ---------- Country and language ---------- */
+
+    private fun chooseCountry(firstRun: Boolean) {
+        val items = Languages.countries.map { "${it.flag}  ${it.name}" }.toTypedArray()
+        val builder = AlertDialog.Builder(this)
+            .setTitle("🌐 나라 · 国 · Country · Pays · País · Land · 国家")
+            .setItems(items) { _, w ->
+                if (listening) stop()
+                Languages.setHome(prefs, Languages.countries[w])
+                recreate()
+            }
+        if (firstRun) builder.setCancelable(false) else builder.setNegativeButton("✕", null)
+        builder.show()
     }
 
     private fun showTab(i: Int) {
@@ -364,8 +370,7 @@ class MainActivity : Activity() {
 
     private fun showHint() {
         val h = TextView(this).apply {
-            text = "시작을 누르고 말하세요. 🔍 자동 감지는 한국어와 오른쪽 언어를 알아서 구분해요.\n" +
-                   "☆ 문장 저장 · 🔊 다시 듣기 · 글자를 길게 눌러 '단어 저장'"
+            text = I18n.t("hint")
             textSize = 16f
             setTextColor(Color.GRAY)
         }
@@ -441,25 +446,27 @@ class MainActivity : Activity() {
     /* ---------- Translators ---------- */
 
     private fun withTranslator(sl: Lang, tl: Lang, ready: (Translator) -> Unit) {
-        val key = sl.mlkit + ">" + tl.mlkit
+        val key = sl.code + ">" + tl.code
         val t = translators.getOrPut(key) {
             Translation.getClient(
                 TranslatorOptions.Builder()
-                    .setSourceLanguage(sl.mlkit)
-                    .setTargetLanguage(tl.mlkit)
+                    .setSourceLanguage(sl.code)
+                    .setTargetLanguage(tl.code)
                     .build()
             )
         }
         t.downloadModelIfNeeded(DownloadConditions.Builder().build())
             .addOnSuccessListener { if (translators[key] === t) ready(t) }
-            .addOnFailureListener { status("언어팩을 받지 못했어요. 인터넷 연결을 확인하세요.") }
+            .addOnFailureListener { status(I18n.t("pack_failed")) }
     }
 
     /* ---------- Language detection ---------- */
 
-    private fun byCode(code: String) = langs.first { it.mlkit == code }
-    private fun langFromTag(tag: String?): Lang? = tag?.let { t -> langs.firstOrNull { t.startsWith(it.mlkit) } }
-    private fun fallbackLatin() = if (foreign.mlkit in latinCodes) foreign else byCode(TranslateLanguage.ENGLISH)
+    private fun fallbackLatin(): Lang = when {
+        foreign.code in latinCodes -> foreign
+        home.code in latinCodes -> home
+        else -> Languages.byCode("en")
+    }
 
     // Works out which language a piece of text is in.
     private fun detect(text: String, useHint: Boolean = true, done: (Lang) -> Unit) {
@@ -467,20 +474,22 @@ class MainActivity : Activity() {
         val hangul = letters.count { it in '\uAC00'..'\uD7A3' }
         val kana = letters.count { it in '\u3040'..'\u30FF' }
         val han = letters.count { it in '\u4E00'..'\u9FFF' }
-        val prefersJapanese = listOf(foreign, from, to).any { it.mlkit == TranslateLanguage.JAPANESE }
+        val prefersJapanese = listOf(foreign, from, to, home).any { it.code == "ja" }
         when {
-            hangul > 0 && hangul * 2 >= letters.length -> done(korean)
-            kana > 0 -> done(byCode(TranslateLanguage.JAPANESE))
-            han > 0 -> done(byCode(if (prefersJapanese) TranslateLanguage.JAPANESE else TranslateLanguage.CHINESE))
+            hangul > 0 && hangul * 2 >= letters.length -> done(Languages.byCode("ko"))
+            kana > 0 -> done(Languages.byCode("ja"))
+            han > 0 -> done(Languages.byCode(if (prefersJapanese) "ja" else "zh"))
             else -> {
-                val hinted = if (useHint) langFromTag(detectedTag)?.takeIf { it.mlkit in latinCodes } else null
+                val hinted = if (useHint) {
+                    detectedTag?.let { tag -> langs.firstOrNull { tag.startsWith(it.code) } }?.takeIf { it.code in latinCodes }
+                } else null
                 if (hinted != null) {
                     done(hinted)
                     return
                 }
                 langId.identifyLanguage(text)
                     .addOnSuccessListener { code ->
-                        done(langs.firstOrNull { it.mlkit == code && it.mlkit in latinCodes } ?: fallbackLatin())
+                        done(langs.firstOrNull { it.code == code && it.code in latinCodes } ?: fallbackLatin())
                     }
                     .addOnFailureListener { done(fallbackLatin()) }
             }
@@ -488,20 +497,20 @@ class MainActivity : Activity() {
     }
 
     private fun autoStatus() =
-        status("듣는 중 · 자동 감지 (한국어 ↔ ${foreign.label}) · ${engineLabel(activeEngine)}")
+        status(I18n.f("auto_status", home.native, foreign.native, engineLabel(activeEngine)))
 
     private fun autoTranslate(raw: String) {
         detect(raw) { lang ->
             heard = lang
             val sl: Lang
             val tl: Lang
-            if (lang.mlkit == TranslateLanguage.KOREAN) {
-                sl = korean
+            if (lang.code == home.code) {
+                sl = home
                 tl = foreign
             } else {
                 foreign = lang
                 sl = lang
-                tl = korean
+                tl = home
             }
             if (listening) autoStatus()
             withTranslator(sl, tl) { t -> translate(raw, sl, tl, t) }
@@ -514,30 +523,30 @@ class MainActivity : Activity() {
 
     /* ---------- Typed chat ---------- */
 
-    // Typed Korean goes to the foreign language; typed foreign text goes to Korean.
+    // Typed text in my language goes to the foreign language; anything else goes to my language.
     private fun sendChat() {
         val text = chatInput.text.toString().trim()
         if (text.isEmpty()) return
         val target = when {
             auto -> foreign
-            to.mlkit != TranslateLanguage.KOREAN -> to
+            to.code != home.code -> to
             else -> from
         }
         chatInput.setText("")
         detect(text, useHint = false) { lang ->
             val sl: Lang
             val tl: Lang
-            if (lang.mlkit == TranslateLanguage.KOREAN) {
-                if (target.mlkit == TranslateLanguage.KOREAN) {
-                    status("위쪽에서 번역할 외국어를 고르세요.")
+            if (lang.code == home.code) {
+                if (target.code == home.code) {
+                    status(I18n.t("pick_foreign"))
                     return@detect
                 }
-                sl = korean
+                sl = home
                 tl = target
             } else {
                 if (auto) foreign = lang
                 sl = lang
-                tl = korean
+                tl = home
             }
             withTranslator(sl, tl) { t -> translate(text, sl, tl, t, typed = true) }
         }
@@ -547,19 +556,24 @@ class MainActivity : Activity() {
 
     private fun openSettings() {
         val items = arrayOf(
-            "📷 카메라 번역", "🎙 마이크 진단", "화면 지우기", "화면 내용 내보내기",
-            "번역 엔진 (지금: ${engineLabel(activeEngine)})",
-            "무음 모드 (지금: ${if (silent) "켜짐" else "꺼짐"})"
+            I18n.f("m_country", Languages.countryLabel(prefs)),
+            I18n.t("m_camera"),
+            I18n.t("m_mic"),
+            I18n.t("m_clear"),
+            I18n.t("m_export"),
+            I18n.f("m_engine", engineLabel(activeEngine)),
+            I18n.f("m_silent", I18n.t(if (silent) "on" else "off"))
         )
         AlertDialog.Builder(this)
-            .setTitle("설정")
+            .setTitle(I18n.t("settings"))
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> openCamera()
-                    1 -> openMicTest()
-                    2 -> clearScreen()
-                    3 -> exportScreen()
-                    4 -> openEngines()
+                    0 -> chooseCountry(firstRun = false)
+                    1 -> openCamera()
+                    2 -> openMicTest()
+                    3 -> clearScreen()
+                    4 -> exportScreen()
+                    5 -> settings.open()
                     else -> toggleSilent()
                 }
             }
@@ -573,7 +587,7 @@ class MainActivity : Activity() {
             setQuiet(false)
             setQuiet(true)
         }
-        toast(if (next) "무음 모드를 켰어요" else "무음 모드를 껐어요")
+        toast(I18n.t(if (next) "silent_on" else "silent_off"))
     }
 
     private fun clearScreen() {
@@ -589,180 +603,30 @@ class MainActivity : Activity() {
 
     private fun exportScreen() {
         val lines = screenLog.filter { it.tr.isNotEmpty() }
-        if (lines.isEmpty()) { toast("화면에 번역된 내용이 없어요."); return }
+        if (lines.isEmpty()) { toast(I18n.t("nothing_export")); return }
         share(lines.joinToString("\n\n") { (if (it.typed) "✍ " else "") + it.src + "\n→ " + it.tr })
     }
 
     /* ---------- Translation engines ---------- */
 
-    private fun openEngines() {
-        val current = engines.indexOfFirst { it.id == engineId }.coerceAtLeast(0)
-        val labels = engines.map { e ->
-            e.label + if (e.id != "mlkit" && !engineReady(e.id)) "  (설정 필요)" else ""
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("번역 엔진")
-            .setSingleChoiceItems(labels, current) { d, which ->
-                d.dismiss()
-                val e = engines[which]
-                if (e.id == "mlkit") useEngine("mlkit") else openEngineConfig(e)
-            }
-            .setNegativeButton("닫기", null)
-            .show()
-    }
-
     private fun useEngine(id: String) {
         prefs.edit().putString("engine", id).apply()
         remoteBlockedUntil = 0L
-        toast(engineLabel(activeEngine) + " 사용")
-        if (listening) { stop(); start() } else status("번역 엔진: " + engineLabel(activeEngine))
+        toast(I18n.f("using", engineLabel(activeEngine)))
+        if (listening) { stop(); start() } else status(I18n.f("engine_status", engineLabel(activeEngine)))
     }
 
-    private fun openLink(url: String) {
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        } catch (_: Exception) {
-            toast("브라우저를 열지 못했어요. 주소를 길게 눌러 복사해서 여세요.")
-        }
-    }
-
-    private fun pasteInto(ed: EditText) {
-        val clip = (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
-        val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
-        if (text.isNullOrEmpty()) toast("복사된 내용이 없어요.") else ed.setText(text)
-    }
-
-    private fun openEngineConfig(e: Engine) {
-        val pr = Providers.find(e.id)
-        val keyPref = if (e.id == "deepl") "deepl" else "${e.id}_key"
-        val keyUrl = if (e.id == "deepl") DEEPL_KEY_URL else pr?.keyUrl.orEmpty()
-        val help = pr?.help ?: (
-            "① 아래 버튼으로 DeepL API 페이지를 열고 'DeepL API Free'로 가입하세요.\n" +
-            "② 로그인 후 계정 메뉴의 'API 키'에서 키를 복사하세요. 무료 키는 :fx로 끝나요.\n" +
-            "③ 아래에 붙여넣으세요."
-        )
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
-        }
-        fun field(label: String, value: String, hintText: String): EditText {
-            box.addView(TextView(this).apply {
-                text = label
-                textSize = 13f
-                setTextColor(Color.GRAY)
-                setPadding(0, dp(10), 0, 0)
-            })
-            val ed = EditText(this).apply {
-                setText(value)
-                setHint(hintText)
-                textSize = 15f
-                setSingleLine(true)
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-            }
-            box.addView(ed)
-            return ed
-        }
-
-        if (keyUrl.isNotEmpty()) {
-            box.addView(Button(this).apply {
-                text = if (e.id == "local") "⬇ Ollama 내려받기 (사이트 열기)" else "🔑 키 받으러 가기 (사이트 열기)"
-                setOnClickListener { openLink(keyUrl) }
-            })
-            box.addView(TextView(this).apply {
-                text = keyUrl
-                textSize = 12f
-                setTextColor(Color.GRAY)
-                setTextIsSelectable(true)
-            })
-        }
-        val urlEd = if (pr?.editableUrl == true) {
-            field("주소", Providers.rawUrl(prefs, e.id), if (e.id == "local") "http://192.168.0.10:11434/v1" else "https://…/v1")
-        } else null
-        val keyEd = field(
-            if (pr == null || pr.needsKey) "API 키" else "API 키 (없으면 비워두기)",
-            p(keyPref),
-            pr?.keyHint?.ifEmpty { "API 키" } ?: "xxxxxxxx-…:fx"
-        )
-        box.addView(Button(this).apply {
-            text = "📋 복사한 키 붙여넣기"
-            setOnClickListener { pasteInto(keyEd) }
-        })
-        val modelEd = if (pr != null) field("모델", Providers.model(prefs, e.id), "목록에서 고르거나 직접 입력") else null
-        val listButton = if (pr != null) Button(this).apply { text = "📋 모델 목록 불러오기" }.also { box.addView(it) } else null
-
-        fun store() {
-            val editor = prefs.edit()
-            urlEd?.let { editor.putString("${e.id}_url", it.text.toString().trim()) }
-            editor.putString(keyPref, keyEd.text.toString().trim())
-            modelEd?.let { editor.putString("${e.id}_model", it.text.toString().trim()) }
-            editor.apply()
-        }
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(e.label)
-            .setMessage(help)
-            .setView(ScrollView(this).apply { addView(box) })
-            .setPositiveButton("저장하고 사용") { _, _ -> store(); useEngine(e.id) }
-            .setNeutralButton("연결 테스트", null)
-            .setNegativeButton("취소", null)
-            .show()
-
-        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-            store()
-            dialog.setMessage("테스트 중… (로컬 LLM은 처음에 오래 걸릴 수 있어요)")
-            net.execute {
-                val r: Any = try {
-                    remote(e.id, "안녕하세요. 만나서 반갑습니다.", korean, langs[1], "")
-                } catch (ex: Exception) { ex }
-                runOnUiThread {
-                    dialog.setMessage(
-                        if (r is String) "성공 ✔\n일본어 번역: $r"
-                        else "실패: " + describe(r as Exception)
-                    )
-                }
-            }
-        }
-
-        listButton?.setOnClickListener {
-            store()
-            dialog.setMessage("모델 목록을 불러오는 중…")
-            net.execute {
-                val r: Any = try { Providers.fetchModels(prefs, e.id) } catch (ex: Exception) { ex }
-                runOnUiThread {
-                    val names = (r as? List<*>)?.map { it.toString() }.orEmpty()
-                    if (names.isEmpty()) {
-                        dialog.setMessage(
-                            "목록을 불러오지 못했어요. 키와 주소를 확인하세요.\n" +
-                            ((r as? Exception)?.let { describe(it) } ?: "모델이 없어요.")
-                        )
-                    } else {
-                        dialog.setMessage("모델 ${names.size}개를 찾았어요. 하나를 고르세요.")
-                        AlertDialog.Builder(this)
-                            .setTitle("모델 선택")
-                            .setItems(names.toTypedArray()) { _, w ->
-                                modelEd?.setText(names[w])
-                                dialog.setMessage("선택한 모델: ${names[w]}\n'연결 테스트'로 확인한 뒤 '저장하고 사용'을 누르세요.")
-                            }
-                            .show()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun describe(e: Exception): String = when (e) {
-        is HttpException -> "HTTP ${e.code}\n${e.body}"
-        is Providers.HttpException -> "HTTP ${e.code}\n${e.body.take(300)}"
-        is java.net.SocketTimeoutException -> "응답 시간 초과. 모델이 너무 크거나 주소가 틀렸을 수 있어요."
-        is java.net.ConnectException, is java.net.UnknownHostException, is java.net.NoRouteToHostException ->
-            "연결 실패. 주소, 인터넷 연결, (맥북이라면) 같은 와이파이인지와 방화벽 설정을 확인하세요."
-        else -> e.toString()
+    // Runs on a background thread for the engine settings "test" button.
+    private fun testEngine(id: String): String {
+        val target = langs.first { it.code != home.code }
+        val result = remote(id, SAMPLES[home.code] ?: SAMPLES.getValue("en"), home, target, "")
+        return "${target.native}: $result"
     }
 
     // Runs on a background thread.
     private fun remote(id: String, text: String, sl: Lang, tl: Lang, context: String): String =
         if (id == "deepl") {
-            deepl(text, sl.mlkit, tl.mlkit, p("deepl"), context)
+            deepl(text, sl.code, tl.code, p("deepl"), context)
         } else {
             clean(Providers.complete(prefs, id, systemPrompt(sl, tl), listOf("user" to userPrompt(text, context)), 1024, 20000))
         }
@@ -782,29 +646,8 @@ class MainActivity : Activity() {
     private fun clean(s: String) =
         s.replace(Regex("(?s)<think>.*?</think>"), "").trim().trim('"', '“', '”').trim()
 
-    private fun postJson(url: String, headers: Map<String, String>, body: JSONObject, readTimeout: Int): JSONObject {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = 4000
-        conn.readTimeout = readTimeout
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/json")
-        headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
-        try {
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val err = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                throw HttpException(code, err.take(300))
-            }
-            return JSONObject(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
-        } finally {
-            conn.disconnect()
-        }
-    }
-
-    private fun deeplCode(lang: String, asTarget: Boolean): String =
-        if (lang == TranslateLanguage.ENGLISH && asTarget) "EN-US" else lang.uppercase()
+    private fun deeplCode(code: String, asTarget: Boolean): String =
+        if (code == "en" && asTarget) "EN-US" else code.uppercase()
 
     private fun deepl(text: String, source: String, target: String, key: String, context: String): String {
         val host = if (key.endsWith(":fx")) "api-free.deepl.com" else "api.deepl.com"
@@ -814,19 +657,36 @@ class MainActivity : Activity() {
             .put("target_lang", deeplCode(target, true))
             .put("formality", "prefer_more")
         if (context.isNotBlank()) body.put("context", context)
-        val json = postJson("https://$host/v2/translate", mapOf("Authorization" to "DeepL-Auth-Key $key"), body, 6000)
-        return json.getJSONArray("translations").getJSONObject(0).getString("text")
+        val conn = URL("https://$host/v2/translate").openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.connectTimeout = 4000
+        conn.readTimeout = 6000
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Authorization", "DeepL-Auth-Key $key")
+        try {
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val err = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                throw Providers.HttpException(code, err)
+            }
+            val json = JSONObject(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+            return json.getJSONArray("translations").getJSONObject(0).getString("text")
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private fun remoteFailed(id: String, e: Exception?) {
         val name = engineLabel(id)
-        val code = (e as? HttpException)?.code ?: (e as? Providers.HttpException)?.code
+        val code = (e as? Providers.HttpException)?.code
         val (wait, msg) = when (code) {
-            401, 403 -> Long.MAX_VALUE to "$name 키가 올바르지 않아요. 설정에서 확인하세요. 지금은 기기 번역을 써요."
-            456 -> Long.MAX_VALUE to "이번 달 DeepL 무료 한도를 다 썼어요. 기기 번역으로 전환했어요."
-            400, 404 -> Long.MAX_VALUE to "$name 설정(주소나 모델 이름)을 확인하세요. 지금은 기기 번역을 써요."
-            429 -> 10_000L to "$name 사용 한도에 걸려 잠시 기기 번역을 써요."
-            else -> 30_000L to "$name 에 연결하지 못해 잠시 기기 번역을 써요."
+            401, 403 -> Long.MAX_VALUE to I18n.f("err_key", name)
+            456 -> Long.MAX_VALUE to I18n.t("err_quota")
+            400, 404 -> Long.MAX_VALUE to I18n.f("err_config", name)
+            429 -> 10_000L to I18n.f("err_rate", name)
+            else -> 30_000L to I18n.f("err_net", name)
         }
         remoteBlockedUntil = if (wait == Long.MAX_VALUE) Long.MAX_VALUE else System.currentTimeMillis() + wait
         status(msg)
@@ -834,31 +694,31 @@ class MainActivity : Activity() {
 
     /* ---------- Saving to the vocabulary list ---------- */
 
-    // Returns the foreign text, the Korean text and the foreign language of a translated line.
+    // Returns the foreign text, the text in my language, and the foreign language of a translated line.
     private fun sides(seg: Seg): Triple<String, String, Lang> =
-        if (seg.tl.mlkit == TranslateLanguage.KOREAN) Triple(seg.src, seg.tr, seg.sl)
+        if (seg.tl.code == home.code) Triple(seg.src, seg.tr, seg.sl)
         else Triple(seg.tr, seg.src, seg.tl)
 
     private fun saveSentence(seg: Seg) {
-        val (foreignText, koreanText, lang) = sides(seg)
-        storeVocab(foreignText, koreanText, "", "", lang)
+        val (foreignText, homeText, lang) = sides(seg)
+        storeVocab(foreignText, homeText, "", "", lang)
     }
 
     // Saves a selected word with its meaning, using the line it came from as the example.
     private fun saveWord(word: String, fromTranslation: Boolean, seg: Seg) {
-        val (exampleForeign, exampleKorean, foreignLang) = sides(seg)
+        val (exampleForeign, exampleHome, foreignLang) = sides(seg)
         val wordLang = if (fromTranslation) seg.tl else seg.sl
-        if (wordLang.mlkit == TranslateLanguage.KOREAN) {
-            withTranslator(korean, foreignLang) { t ->
+        if (wordLang.code == home.code) {
+            withTranslator(home, foreignLang) { t ->
                 t.translate(word)
-                    .addOnSuccessListener { fw -> storeVocab(fw, word, exampleForeign, exampleKorean, foreignLang) }
-                    .addOnFailureListener { toast("단어 번역에 실패했어요.") }
+                    .addOnSuccessListener { fw -> storeVocab(fw, word, exampleForeign, exampleHome, foreignLang) }
+                    .addOnFailureListener { toast(I18n.t("word_failed")) }
             }
         } else {
-            withTranslator(wordLang, korean) { t ->
+            withTranslator(wordLang, home) { t ->
                 t.translate(word)
-                    .addOnSuccessListener { m -> storeVocab(word, m, exampleForeign, exampleKorean, wordLang) }
-                    .addOnFailureListener { storeVocab(word, "", exampleForeign, exampleKorean, wordLang) }
+                    .addOnSuccessListener { m -> storeVocab(word, m, exampleForeign, exampleHome, wordLang) }
+                    .addOnFailureListener { storeVocab(word, "", exampleForeign, exampleHome, wordLang) }
             }
         }
     }
@@ -873,20 +733,20 @@ class MainActivity : Activity() {
                 .put("e", if (sameAsExample) "" else example)
                 .put("em", if (sameAsExample) "" else exampleMeaning)
                 .put("v", lang.speechTag)
-                .put("l", lang.mlkit)
+                .put("l", lang.code)
                 .put("d", System.currentTimeMillis())
                 .put("c", 0)
                 .put("w", 0)
         )
         prefs.edit().putString("saved", arr.toString()).apply()
-        toast("단어장에 저장: $text" + (if (meaning.isNotEmpty()) " = $meaning" else ""))
+        toast(I18n.f("saved_word", text + if (meaning.isNotEmpty()) " = $meaning" else ""))
     }
 
-    // Adds "단어 저장" next to copy when part of a line is selected.
+    // Adds "save word" next to copy when part of a line is selected.
     private fun enableWordSave(tv: TextView, seg: Seg, fromTranslation: Boolean) {
         tv.customSelectionActionModeCallback = object : ActionMode.Callback {
             override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
-                menu.add(0, MENU_SAVE_WORD, 0, "단어 저장")
+                menu.add(0, MENU_SAVE_WORD, 0, I18n.t("save_word"))
                 return true
             }
             override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = false
@@ -908,7 +768,7 @@ class MainActivity : Activity() {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, text)
         }
-        startActivity(Intent.createChooser(send, "내보내기"))
+        startActivity(Intent.createChooser(send, I18n.t("export_title")))
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
@@ -921,14 +781,14 @@ class MainActivity : Activity() {
         if (key.isEmpty() || key.startsWith("#")) return@mapNotNull null
         val variants = parts.getOrNull(1).orEmpty().split(",").map { it.trim() }.filter { it.isNotEmpty() }
         val names = HashMap<String, String>()
-        names[TranslateLanguage.KOREAN] = key
+        names["ko"] = key
         parts.getOrNull(2).orEmpty().replace("，", ",").split(",").forEach { pair ->
             val kv = pair.replace("＝", "=").split("=", limit = 2)
             if (kv.size == 2) {
                 val label = kv[0].trim()
                 val value = kv[1].trim()
                 val code = aliases[label]
-                    ?: langs.firstOrNull { it.label.equals(label, true) || it.mlkit == label.lowercase() }?.mlkit
+                    ?: langs.firstOrNull { it.native.equals(label, true) || it.code == label.lowercase() }?.code
                 if (code != null && value.isNotEmpty()) names[code] = value
             }
         }
@@ -949,39 +809,38 @@ class MainActivity : Activity() {
 
     private fun prepare(src: String, sl: Lang, tl: Lang): Prepared {
         var shown = src
-        if (sl.mlkit == TranslateLanguage.KOREAN) {
+        if (sl.code == "ko") {
             for (t in terms) {
-                val key = t.names[TranslateLanguage.KOREAN] ?: continue
+                val key = t.names["ko"] ?: continue
                 for (w in t.variants + key) shown = flex(w).replace(shown) { key }
             }
         }
         var input = shown
         val codes = LinkedHashMap<Regex, String>()
         terms.forEachIndexed { i, t ->
-            val a = t.names[sl.mlkit] ?: return@forEachIndexed
-            val pattern = if (sl.mlkit == TranslateLanguage.KOREAN) flex(a)
-                          else Regex(Regex.escape(a), RegexOption.IGNORE_CASE)
+            val a = t.names[sl.code] ?: return@forEachIndexed
+            val pattern = if (sl.code == "ko") flex(a) else Regex(Regex.escape(a), RegexOption.IGNORE_CASE)
             if (!pattern.containsMatchIn(input)) return@forEachIndexed
             val n = i + 1
             input = pattern.replace(input) { "XZ$n" }
-            codes[codeRegex(n)] = t.names[tl.mlkit] ?: t.names[TranslateLanguage.ENGLISH] ?: a
+            codes[codeRegex(n)] = t.names[tl.code] ?: t.names["en"] ?: a
         }
         return Prepared(shown, input, codes)
     }
 
     /* ---------- Language pack check ---------- */
 
-    private fun looksLike(text: String, lang: String): Boolean {
+    private fun looksLike(text: String, code: String): Boolean {
         val letters = text.filter { it.isLetter() }
         if (letters.length < 3) return true
         val hangul = letters.count { it in '\uAC00'..'\uD7A3' }
         val kana = letters.count { it in '\u3040'..'\u30FF' }
         val han = letters.count { it in '\u4E00'..'\u9FFF' }
         val latin = letters.count { it in 'a'..'z' || it in 'A'..'Z' || it in '\u00C0'..'\u024F' }
-        return when (lang) {
-            TranslateLanguage.KOREAN -> hangul > 0
-            TranslateLanguage.JAPANESE -> kana + han > 0
-            TranslateLanguage.CHINESE -> han > 0
+        return when (code) {
+            "ko" -> hangul > 0
+            "ja" -> kana + han > 0
+            "zh" -> han > 0
             else -> latin * 2 > letters.length
         }
     }
@@ -995,13 +854,13 @@ class MainActivity : Activity() {
         translator = null
         translators.values.forEach { it.close() }
         translators.clear()
-        status("번역 결과가 이상해서 언어팩을 다시 받는 중이에요…")
+        status(I18n.t("repairing"))
         val mm = RemoteModelManager.getInstance()
         val tasks = listOf(src, tgt)
-            .filter { it != TranslateLanguage.ENGLISH }
+            .filter { it != "en" }
             .map { mm.deleteDownloadedModel(TranslateRemoteModel.Builder(it).build()) }
         Tasks.whenAllComplete(tasks).addOnCompleteListener {
-            if (wasListening) start() else status("언어팩을 정리했어요. 다시 입력하면 새로 받아서 번역해요.")
+            if (wasListening) start() else status(I18n.t("repaired"))
         }
     }
 
@@ -1013,50 +872,51 @@ class MainActivity : Activity() {
             return
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            status("이 폰에서는 음성 인식을 쓸 수 없어요. Google 앱이 설치되어 있고 켜져 있는지 확인하세요.")
+            status(I18n.t("no_recognizer"))
             return
         }
         if (auto) {
-            if (to.mlkit != TranslateLanguage.KOREAN) foreign = to
+            if (to.code != home.code) foreign = to
             listening = true
-            micButton.text = "정지"
+            micButton.text = I18n.t("stop")
             recent.clear()
             detectedTag = null
+            heard = home
             setQuiet(true)
-            withTranslator(korean, foreign) { }
-            withTranslator(foreign, korean) { }
+            withTranslator(home, foreign) { }
+            withTranslator(foreign, home) { }
             autoStatus()
             startRecognizer()
             return
         }
         if (from == to) {
-            status("서로 다른 두 언어를 고르세요.")
+            status(I18n.t("same_lang"))
             return
         }
         listening = true
-        micButton.text = "정지"
+        micButton.text = I18n.t("stop")
         recent.clear()
         setQuiet(true)
 
         translator?.close()
         val t = Translation.getClient(
             TranslatorOptions.Builder()
-                .setSourceLanguage(from.mlkit)
-                .setTargetLanguage(to.mlkit)
+                .setSourceLanguage(from.code)
+                .setTargetLanguage(to.code)
                 .build()
         )
         translator = t
-        status("언어팩 준비 중… 처음 한 번은 인터넷이 필요해요.")
+        status(I18n.t("preparing"))
         t.downloadModelIfNeeded(DownloadConditions.Builder().build())
             .addOnSuccessListener {
                 if (listening && translator === t) {
-                    status("듣는 중 · ${from.label} → ${to.label} · ${engineLabel(activeEngine)}")
+                    status(I18n.f("listening", from.native, to.native, engineLabel(activeEngine)))
                     startRecognizer()
                 }
             }
             .addOnFailureListener {
                 stop()
-                status("언어팩을 받지 못했어요. 인터넷 연결을 확인하세요.")
+                status(I18n.t("pack_failed"))
             }
     }
 
@@ -1066,15 +926,15 @@ class MainActivity : Activity() {
         recognizer = null
         setQuiet(false)
         interimView.text = ""
-        micButton.text = "시작"
-        status("번역 엔진: " + engineLabel(activeEngine))
+        micButton.text = I18n.t("start")
+        status(I18n.f("engine_status", engineLabel(activeEngine)))
     }
 
     override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {
         super.onRequestPermissionsResult(rc, perms, res)
         if (rc != 1) return
         if (res.firstOrNull() == PackageManager.PERMISSION_GRANTED) start()
-        else status("마이크 권한을 허용해야 통역할 수 있어요.")
+        else status(I18n.t("mic_perm"))
     }
 
     override fun onStop() {
@@ -1103,7 +963,7 @@ class MainActivity : Activity() {
             override fun onError(error: Int) {
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                     stop()
-                    status("마이크 권한이 없어요.")
+                    status(I18n.t("mic_perm"))
                     return
                 }
                 restartRecognizer()
@@ -1133,7 +993,7 @@ class MainActivity : Activity() {
                 }
             }
             if (Build.VERSION.SDK_INT >= 33) {
-                val words = terms.mapNotNull { it.names[from.mlkit] }
+                val words = terms.mapNotNull { it.names[from.code] }
                 if (words.isNotEmpty()) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(words))
             }
         }
@@ -1191,8 +1051,8 @@ class MainActivity : Activity() {
         val id = ++seq
         hint?.let { segments.removeView(it); hint = null }
         val p = prepare(raw, sl, tl)
-        val source = sl.mlkit
-        val target = tl.mlkit
+        val source = sl.code
+        val target = tl.code
 
         val trView = TextView(this).apply {
             text = "…"
@@ -1205,7 +1065,7 @@ class MainActivity : Activity() {
         enableWordSave(trView, seg, true)
 
         val srcView = TextView(this).apply {
-            text = (if (typed) "✍ " else "") + (if (auto || typed) "[${sl.label}] " else "") + p.shown
+            text = (if (typed) "✍ " else "") + (if (auto || typed) "[${sl.native}] " else "") + p.shown
             textSize = 14f
             setTextColor(Color.GRAY)
             setTextIsSelectable(true)
@@ -1267,7 +1127,7 @@ class MainActivity : Activity() {
             .addOnSuccessListener { raw ->
                 val tr = p.restore(raw)
                 if (!looksLike(tr, target) && looksLike(p.shown, source)) {
-                    seg.view.text = "$tr\n(언어팩 오류 · 다시 받는 중)"
+                    seg.view.text = tr + "\n" + I18n.t("pack_error")
                     queueSpeech(id, null)
                     repairLanguagePack(source, target)
                     return@addOnSuccessListener
@@ -1275,7 +1135,7 @@ class MainActivity : Activity() {
                 showResult(id, seg, tr, target)
             }
             .addOnFailureListener {
-                seg.view.text = "번역 실패"
+                seg.view.text = I18n.t("failed")
                 queueSpeech(id, null)
             }
     }
@@ -1283,7 +1143,7 @@ class MainActivity : Activity() {
     private fun showResult(id: Int, seg: Seg, tr: String, target: String) {
         seg.tr = tr
         seg.view.text = tr
-        Pronouncer.attach(this, segments, seg.view, tr, target)
+        Pronunciation.attach(this, segments, seg.view, tr, target, home.code)
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
         queueSpeech(id, seg)
     }
