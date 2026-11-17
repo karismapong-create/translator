@@ -4,22 +4,26 @@ on:
   workflow_dispatch:
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: "8.7"
+      - name: Use fixed signing key
+        run: |
+          mkdir -p ~/.android
+          base64 -di keystore.b64 > ~/.android/debug.keystore
       - name: Download English pronunciation dictionary
         run: |
           mkdir -p app/src/main/assets
           curl -fsSL -o app/src/main/assets/cmudict.dict https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
       - run: gradle assembleDebug -Pandroid.useAndroidX=true --no-daemon
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: interpreter-apk
           path: app/build/outputs/apk/debug/app-debug.apk
