@@ -59,9 +59,11 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
-    private data class Lang(val label: String, val speechTag: String, val mlkit: String)
+    private data class Lang(val label: String, val speechTag: String, val mlkit: String, val english: String)
     private data class Term(val names: Map<String, String>, val variants: List<String>)
-    private class DeepLException(val code: Int) : Exception("HTTP $code")
+    private data class Engine(val id: String, val label: String)
+    private class Field(val key: String, val label: String, val hint: String, val default: String = "")
+    private class HttpException(val code: Int, val body: String) : Exception("HTTP $code")
 
     // One translated line on screen.
     private class Seg(val src: String, val voice: String, val view: TextView, val typed: Boolean) {
@@ -81,21 +83,29 @@ class MainActivity : Activity() {
         const val DEFAULT_TERMS =
             "마운자로 | | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro"
         const val MENU_SAVE_WORD = 1001
+        const val DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
     }
 
     private val langs = listOf(
-        Lang("한국어", "ko-KR", TranslateLanguage.KOREAN),
-        Lang("日本語", "ja-JP", TranslateLanguage.JAPANESE),
-        Lang("English", "en-US", TranslateLanguage.ENGLISH),
-        Lang("Français", "fr-FR", TranslateLanguage.FRENCH),
-        Lang("Español", "es-ES", TranslateLanguage.SPANISH),
-        Lang("中文", "zh-CN", TranslateLanguage.CHINESE)
+        Lang("한국어", "ko-KR", TranslateLanguage.KOREAN, "Korean"),
+        Lang("日本語", "ja-JP", TranslateLanguage.JAPANESE, "Japanese"),
+        Lang("English", "en-US", TranslateLanguage.ENGLISH, "English"),
+        Lang("Français", "fr-FR", TranslateLanguage.FRENCH, "French"),
+        Lang("Español", "es-ES", TranslateLanguage.SPANISH, "Spanish"),
+        Lang("中文", "zh-CN", TranslateLanguage.CHINESE, "Simplified Chinese")
     )
     private val korean get() = langs[0]
     private val aliases = mapOf(
         "한국어" to TranslateLanguage.KOREAN, "일본어" to TranslateLanguage.JAPANESE,
         "영어" to TranslateLanguage.ENGLISH, "프랑스어" to TranslateLanguage.FRENCH,
         "스페인어" to TranslateLanguage.SPANISH, "중국어" to TranslateLanguage.CHINESE
+    )
+    private val engines = listOf(
+        Engine("mlkit", "기기 번역만"),
+        Engine("deepl", "DeepL"),
+        Engine("claude", "Claude"),
+        Engine("openai", "OpenAI 호환 API"),
+        Engine("local", "로컬 LLM (맥북)")
     )
 
     private lateinit var fromSpinner: Spinner
@@ -127,13 +137,26 @@ class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("interpreter", MODE_PRIVATE) }
 
     private val net = Executors.newSingleThreadExecutor()
-    private var deeplBlockedUntil = 0L
+    private var remoteBlockedUntil = 0L
     private val recent = ArrayDeque<String>()
 
     private val from: Lang get() = langs[fromSpinner.selectedItemPosition]
     private val to: Lang get() = langs[toSpinner.selectedItemPosition]
     private val noSpaces: Boolean get() = from.speechTag.startsWith("ja") || from.speechTag.startsWith("zh")
-    private val deeplKey: String get() = prefs.getString("deepl", "").orEmpty().trim()
+
+    private fun p(key: String) = prefs.getString(key, "").orEmpty().trim()
+    private val engineId: String
+        get() = prefs.getString("engine", null) ?: if (p("deepl").isNotEmpty()) "deepl" else "mlkit"
+    private fun engineLabel(id: String) = engines.firstOrNull { it.id == id }?.label ?: id
+    private fun engineReady(id: String): Boolean = when (id) {
+        "deepl" -> p("deepl").isNotEmpty()
+        "claude" -> p("claude_key").isNotEmpty()
+        "openai" -> p("openai_url").isNotEmpty() && p("openai_key").isNotEmpty() && p("openai_model").isNotEmpty()
+        "local" -> p("local_url").isNotEmpty() && p("local_model").isNotEmpty()
+        else -> false
+    }
+    private val activeEngine: String
+        get() = engineId.let { if (it != "mlkit" && engineReady(it)) it else "mlkit" }
 
     private val restartRunnable = Runnable { if (listening) { stop(); start() } }
 
@@ -189,6 +212,7 @@ class MainActivity : Activity() {
         statusView = TextView(this).apply {
             textSize = 14f
             setTextColor(Color.GRAY)
+            text = "번역 엔진: " + engineLabel(activeEngine)
         }
 
         chatInput = EditText(this).apply {
@@ -328,7 +352,7 @@ class MainActivity : Activity() {
         t.downloadModelIfNeeded(DownloadConditions.Builder().build())
             .addOnSuccessListener {
                 if (chatTranslator === t) {
-                    if (!listening) status("")
+                    if (!listening) status("번역 엔진: " + engineLabel(activeEngine))
                     translate(text, src, target, t, typed = true)
                 }
             }
@@ -338,7 +362,10 @@ class MainActivity : Activity() {
     /* ---------- Settings ---------- */
 
     private fun openSettings() {
-        val items = arrayOf("화면 지우기", "저장함", "화면 내용 내보내기", "단어장", "DeepL API 키")
+        val items = arrayOf(
+            "화면 지우기", "저장함", "화면 내용 내보내기", "단어장",
+            "번역 엔진 (지금: ${engineLabel(activeEngine)})"
+        )
         AlertDialog.Builder(this)
             .setTitle("설정")
             .setItems(items) { _, which ->
@@ -347,7 +374,7 @@ class MainActivity : Activity() {
                     1 -> openSaved()
                     2 -> exportScreen()
                     3 -> openDictionary()
-                    else -> openDeeplKey()
+                    else -> openEngines()
                 }
             }
             .show()
@@ -375,24 +402,228 @@ class MainActivity : Activity() {
         addView(edit)
     }
 
-    private fun openDeeplKey() {
-        val edit = EditText(this).apply {
-            setText(prefs.getString("deepl", ""))
-            setHint("예: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx")
-            textSize = 15f
-            setSingleLine(true)
-        }
+    /* ---------- Translation engines ---------- */
+
+    private fun openEngines() {
+        val current = engines.indexOfFirst { it.id == engineId }.coerceAtLeast(0)
+        val labels = engines.map { e ->
+            e.label + if (e.id != "mlkit" && !engineReady(e.id)) "  (설정 필요)" else ""
+        }.toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle("DeepL API 키")
-            .setMessage("키를 넣으면 인터넷이 될 때 DeepL로 번역하고, 안 될 때는 기기 번역으로 자동 전환해요. 비워두면 기기 번역만 써요.")
-            .setView(dialogBox(edit))
-            .setPositiveButton("저장") { _, _ ->
-                prefs.edit().putString("deepl", edit.text.toString().trim()).apply()
-                deeplBlockedUntil = 0L
-                if (listening) { stop(); start() }
+            .setTitle("번역 엔진")
+            .setSingleChoiceItems(labels, current) { d, which ->
+                d.dismiss()
+                val e = engines[which]
+                if (e.id == "mlkit") useEngine("mlkit") else openEngineConfig(e)
             }
+            .setNegativeButton("닫기", null)
+            .show()
+    }
+
+    private fun useEngine(id: String) {
+        prefs.edit().putString("engine", id).apply()
+        remoteBlockedUntil = 0L
+        toast(engineLabel(activeEngine) + " 사용")
+        if (listening) { stop(); start() } else status("번역 엔진: " + engineLabel(activeEngine))
+    }
+
+    private fun fieldsFor(id: String): List<Field> = when (id) {
+        "deepl" -> listOf(Field("deepl", "API 키", "xxxxxxxx-…:fx"))
+        "claude" -> listOf(
+            Field("claude_key", "API 키", "sk-ant-…"),
+            Field("claude_model", "모델", DEFAULT_CLAUDE_MODEL, DEFAULT_CLAUDE_MODEL)
+        )
+        "openai" -> listOf(
+            Field("openai_url", "API 주소", "https://api.openai.com/v1", "https://api.openai.com/v1"),
+            Field("openai_key", "API 키", "sk-…"),
+            Field("openai_model", "모델", "사용할 모델 이름")
+        )
+        else -> listOf(
+            Field("local_url", "맥북 주소", "http://192.168.0.10:11434/v1"),
+            Field("local_key", "API 키 (없으면 비워두기)", ""),
+            Field("local_model", "모델", "ollama list에 나오는 이름")
+        )
+    }
+
+    private fun engineHelp(id: String): String = when (id) {
+        "deepl" -> "deepl.com/pro-api에서 받은 키를 넣으세요. 무료 키는 :fx로 끝나요."
+        "claude" -> "console.anthropic.com에서 받은 API 키를 넣으세요. 사용한 만큼 요금이 나가요."
+        "openai" -> "OpenAI나 같은 형식을 쓰는 서비스의 주소, 키, 모델 이름을 넣으세요."
+        else -> "맥북에서 Ollama나 LM Studio 서버를 켜고, 폰과 같은 와이파이에서 맥 주소를 넣으세요."
+    }
+
+    private fun openEngineConfig(e: Engine) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val edits = fieldsFor(e.id).map { f ->
+            box.addView(TextView(this).apply {
+                text = f.label
+                textSize = 13f
+                setTextColor(Color.GRAY)
+                setPadding(0, dp(8), 0, 0)
+            })
+            val ed = EditText(this).apply {
+                setText(prefs.getString(f.key, null) ?: f.default)
+                setHint(f.hint)
+                textSize = 15f
+                setSingleLine(true)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            }
+            box.addView(ed)
+            f to ed
+        }
+        fun store() {
+            val editor = prefs.edit()
+            edits.forEach { (f, ed) -> editor.putString(f.key, ed.text.toString().trim()) }
+            editor.apply()
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(e.label)
+            .setMessage(engineHelp(e.id))
+            .setView(box)
+            .setPositiveButton("저장하고 사용") { _, _ -> store(); useEngine(e.id) }
+            .setNeutralButton("연결 테스트", null)
             .setNegativeButton("취소", null)
             .show()
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            store()
+            dialog.setMessage("테스트 중… (로컬 LLM은 처음에 오래 걸릴 수 있어요)")
+            net.execute {
+                val r: Any = try {
+                    remote(e.id, "안녕하세요. 만나서 반갑습니다.", korean, langs[1], "")
+                } catch (ex: Exception) { ex }
+                runOnUiThread {
+                    dialog.setMessage(
+                        if (r is String) "성공 ✔\n일본어 번역: $r"
+                        else "실패: " + describe(r as Exception)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun describe(e: Exception): String = when (e) {
+        is HttpException -> "HTTP ${e.code}\n${e.body}"
+        is java.net.SocketTimeoutException -> "응답 시간 초과. 모델이 너무 크거나 주소가 틀렸을 수 있어요."
+        is java.net.ConnectException, is java.net.UnknownHostException, is java.net.NoRouteToHostException ->
+            "연결 실패. 주소, 같은 와이파이인지, 맥의 서버와 방화벽 설정을 확인하세요."
+        else -> e.toString()
+    }
+
+    // Runs on a background thread.
+    private fun remote(id: String, text: String, sl: Lang, tl: Lang, context: String): String = when (id) {
+        "deepl" -> deepl(text, sl.mlkit, tl.mlkit, p("deepl"), context)
+        "claude" -> claude(text, sl, tl, context)
+        "openai" -> chat(p("openai_url"), p("openai_key"), p("openai_model"), text, sl, tl, context, 20000)
+        "local" -> chat(p("local_url"), p("local_key"), p("local_model"), text, sl, tl, context, 45000)
+        else -> throw IllegalStateException("no engine")
+    }
+
+    private fun systemPrompt(sl: Lang, tl: Lang) =
+        "You are a professional simultaneous interpreter. Translate the user's text from ${sl.english} " +
+        "to ${tl.english}. The text may be an unfinished fragment of ongoing speech; translate it as it is " +
+        "without completing or guessing the rest. Lines marked as context are earlier conversation, given " +
+        "only so you understand the flow; never translate or repeat them. Keep placeholder codes such as " +
+        "XZ1 or XZ2 exactly as written. Use natural, polite spoken ${tl.english}. Reply with the translation " +
+        "only, with no quotes, notes, romanization or explanations."
+
+    private fun userPrompt(text: String, context: String) =
+        if (context.isBlank()) text
+        else "Context (do not translate):\n$context\n\nTranslate:\n$text"
+
+    private fun clean(s: String) =
+        s.replace(Regex("(?s)<think>.*?</think>"), "").trim().trim('"', '“', '”').trim()
+
+    private fun postJson(url: String, headers: Map<String, String>, body: JSONObject, readTimeout: Int): JSONObject {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.connectTimeout = 4000
+        conn.readTimeout = readTimeout
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/json")
+        headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+        try {
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val err = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                throw HttpException(code, err.take(300))
+            }
+            return JSONObject(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun deeplCode(lang: String, asTarget: Boolean): String =
+        if (lang == TranslateLanguage.ENGLISH && asTarget) "EN-US" else lang.uppercase()
+
+    private fun deepl(text: String, source: String, target: String, key: String, context: String): String {
+        val host = if (key.endsWith(":fx")) "api-free.deepl.com" else "api.deepl.com"
+        val body = JSONObject()
+            .put("text", JSONArray().put(text))
+            .put("source_lang", deeplCode(source, false))
+            .put("target_lang", deeplCode(target, true))
+            .put("formality", "prefer_more")
+        if (context.isNotBlank()) body.put("context", context)
+        val json = postJson("https://$host/v2/translate", mapOf("Authorization" to "DeepL-Auth-Key $key"), body, 6000)
+        return json.getJSONArray("translations").getJSONObject(0).getString("text")
+    }
+
+    private fun claude(text: String, sl: Lang, tl: Lang, context: String): String {
+        val body = JSONObject()
+            .put("model", p("claude_model").ifEmpty { DEFAULT_CLAUDE_MODEL })
+            .put("max_tokens", 1024)
+            .put("system", systemPrompt(sl, tl))
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", userPrompt(text, context))))
+        val json = postJson(
+            "https://api.anthropic.com/v1/messages",
+            mapOf("x-api-key" to p("claude_key"), "anthropic-version" to "2023-06-01"),
+            body, 20000
+        )
+        val content = json.getJSONArray("content")
+        val sb = StringBuilder()
+        for (i in 0 until content.length()) {
+            val block = content.getJSONObject(i)
+            if (block.optString("type") == "text") sb.append(block.optString("text"))
+        }
+        return clean(sb.toString())
+    }
+
+    // OpenAI-style chat completions: OpenAI, compatible services, Ollama and LM Studio.
+    private fun chat(
+        base0: String, key: String, model: String,
+        text: String, sl: Lang, tl: Lang, context: String, readTimeout: Int
+    ): String {
+        var base = base0.trim().trimEnd('/')
+        if (!base.startsWith("http://") && !base.startsWith("https://")) base = "http://$base"
+        if (!base.contains("/v1")) base += "/v1"
+        val body = JSONObject()
+            .put("model", model)
+            .put("stream", false)
+            .put("messages", JSONArray()
+                .put(JSONObject().put("role", "system").put("content", systemPrompt(sl, tl)))
+                .put(JSONObject().put("role", "user").put("content", userPrompt(text, context))))
+        val headers = if (key.isNotEmpty()) mapOf("Authorization" to "Bearer $key") else emptyMap()
+        val json = postJson("$base/chat/completions", headers, body, readTimeout)
+        val msg = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+        return clean(msg.optString("content"))
+    }
+
+    private fun remoteFailed(id: String, e: Exception?) {
+        val name = engineLabel(id)
+        val code = (e as? HttpException)?.code
+        val (wait, msg) = when (code) {
+            401, 403 -> Long.MAX_VALUE to "$name 키가 올바르지 않아요. 설정에서 확인하세요. 지금은 기기 번역을 써요."
+            456 -> Long.MAX_VALUE to "이번 달 DeepL 무료 한도를 다 썼어요. 기기 번역으로 전환했어요."
+            400, 404 -> Long.MAX_VALUE to "$name 설정(주소나 모델 이름)을 확인하세요. 지금은 기기 번역을 써요."
+            429 -> 10_000L to "$name 요청이 많아 잠시 기기 번역을 써요."
+            else -> 30_000L to "$name 에 연결하지 못해 잠시 기기 번역을 써요."
+        }
+        remoteBlockedUntil = if (wait == Long.MAX_VALUE) Long.MAX_VALUE else System.currentTimeMillis() + wait
+        status(msg)
     }
 
     /* ---------- Saved sentences and words ---------- */
@@ -633,8 +864,7 @@ class MainActivity : Activity() {
         t.downloadModelIfNeeded(DownloadConditions.Builder().build())
             .addOnSuccessListener {
                 if (listening && translator === t) {
-                    val engine = if (deeplKey.isNotEmpty()) "DeepL" else "기기 번역"
-                    status("듣는 중 · ${from.label} → ${to.label} · $engine")
+                    status("듣는 중 · ${from.label} → ${to.label} · ${engineLabel(activeEngine)}")
                     startRecognizer()
                 }
             }
@@ -650,7 +880,7 @@ class MainActivity : Activity() {
         recognizer = null
         interimView.text = ""
         micButton.text = "시작"
-        status("")
+        status("번역 엔진: " + engineLabel(activeEngine))
     }
 
     override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {
@@ -799,22 +1029,22 @@ class MainActivity : Activity() {
         segments.addView(srcRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
 
-        val context = recent.joinToString(" ")
+        val context = recent.joinToString("\n")
         recent.addLast(p.shown)
         while (recent.size > 3) recent.removeFirst()
 
-        val key = deeplKey
-        if (key.isEmpty() || System.currentTimeMillis() < deeplBlockedUntil) {
+        val engine = activeEngine
+        if (engine == "mlkit" || System.currentTimeMillis() < remoteBlockedUntil) {
             viaMlKit(t, id, seg, p, source, target)
             return
         }
         net.execute {
-            val result: Any = try { deepl(p.input, source, target, key, context) } catch (e: Exception) { e }
+            val result: Any = try { remote(engine, p.input, sl, tl, context) } catch (e: Exception) { e }
             runOnUiThread {
-                if (result is String) {
+                if (result is String && result.isNotBlank()) {
                     showResult(id, seg, p.restore(result), target)
                 } else {
-                    deeplFailed(result as Exception)
+                    remoteFailed(engine, result as? Exception)
                     viaMlKit(t, id, seg, p, source, target)
                 }
             }
@@ -845,50 +1075,6 @@ class MainActivity : Activity() {
         Pronouncer.attach(this, segments, seg.view, tr, target)
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
         queueSpeech(id, seg)
-    }
-
-    /* ---------- DeepL ---------- */
-
-    private fun deeplCode(lang: String, asTarget: Boolean): String =
-        if (lang == TranslateLanguage.ENGLISH && asTarget) "EN-US" else lang.uppercase()
-
-    // Runs on a background thread.
-    private fun deepl(text: String, source: String, target: String, key: String, context: String): String {
-        val host = if (key.endsWith(":fx")) "api-free.deepl.com" else "api.deepl.com"
-        val conn = URL("https://$host/v2/translate").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = 3000
-        conn.readTimeout = 6000
-        conn.doOutput = true
-        conn.setRequestProperty("Authorization", "DeepL-Auth-Key $key")
-        conn.setRequestProperty("Content-Type", "application/json")
-        val body = JSONObject()
-            .put("text", JSONArray().put(text))
-            .put("source_lang", deeplCode(source, false))
-            .put("target_lang", deeplCode(target, true))
-            .put("formality", "prefer_more")
-        if (context.isNotBlank()) body.put("context", context)
-        try {
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            if (code != 200) throw DeepLException(code)
-            val json = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            return JSONObject(json).getJSONArray("translations").getJSONObject(0).getString("text")
-        } finally {
-            conn.disconnect()
-        }
-    }
-
-    private fun deeplFailed(e: Exception) {
-        val code = (e as? DeepLException)?.code
-        val (wait, msg) = when (code) {
-            401, 403 -> Long.MAX_VALUE to "DeepL 키가 올바르지 않아요. 설정에서 확인하세요. 지금은 기기 번역을 써요."
-            456 -> Long.MAX_VALUE to "이번 달 DeepL 무료 한도를 다 썼어요. 기기 번역으로 전환했어요."
-            429 -> 10_000L to "DeepL 요청이 많아 잠시 기기 번역을 써요."
-            else -> 30_000L to "DeepL에 연결하지 못해 잠시 기기 번역을 써요."
-        }
-        deeplBlockedUntil = if (wait == Long.MAX_VALUE) Long.MAX_VALUE else System.currentTimeMillis() + wait
-        status(msg)
     }
 
     /* ---------- Speech output ---------- */
