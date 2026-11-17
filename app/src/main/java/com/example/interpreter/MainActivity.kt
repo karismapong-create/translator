@@ -3,6 +3,9 @@ package com.example.interpreter
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -13,9 +16,16 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
+import android.view.ActionMode
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -31,6 +41,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
@@ -52,6 +63,11 @@ class MainActivity : Activity() {
     private data class Term(val names: Map<String, String>, val variants: List<String>)
     private class DeepLException(val code: Int) : Exception("HTTP $code")
 
+    // One translated line on screen.
+    private class Seg(val src: String, val voice: String, val view: TextView, val typed: Boolean) {
+        var tr: String = ""
+    }
+
     // Source text with word-list terms swapped for placeholder codes, and how to put them back.
     private class Prepared(val shown: String, val input: String, val codes: Map<Regex, String>) {
         fun restore(text: String): String {
@@ -64,6 +80,7 @@ class MainActivity : Activity() {
     companion object {
         const val DEFAULT_TERMS =
             "마운자로 | | 일본어=マンジャロ, 영어=Mounjaro, 중국어=穆峰达, 스페인어=Mounjaro, 프랑스어=Mounjaro"
+        const val MENU_SAVE_WORD = 1001
     }
 
     private val langs = listOf(
@@ -101,7 +118,10 @@ class MainActivity : Activity() {
     private var committed = 0
     private var seq = 0
     private var nextToSpeak = 1
-    private val speechBuf = HashMap<Int, Pair<String, String>?>()
+    private val speechBuf = HashMap<Int, Seg?>()
+    private val screenLog = ArrayList<Seg>()
+    private val utter = HashMap<String, Seg>()
+    private var utterCount = 0
     private var terms: List<Term> = emptyList()
     private val repaired = HashSet<String>()
     private val prefs by lazy { getSharedPreferences("interpreter", MODE_PRIVATE) }
@@ -158,13 +178,8 @@ class MainActivity : Activity() {
         }
 
         segments = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        hint = TextView(this).apply {
-            text = "언어를 고르고 시작을 누르세요. 아래 입력창에 한국어를 쓰면 외국어로 번역해요. 번역문을 길게 누르면 복사할 수 있어요."
-            textSize = 16f
-            setTextColor(Color.GRAY)
-        }
-        segments.addView(hint)
         scroll = ScrollView(this).apply { addView(segments) }
+        showHint()
 
         interimView = TextView(this).apply {
             textSize = 15f
@@ -230,7 +245,55 @@ class MainActivity : Activity() {
 
         fromSpinner.onItemSelectedListener = onChange
         toSpinner.onItemSelectedListener = onChange
+
         tts = TextToSpeech(this) { }
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) = runOnUiThread { highlight(utteranceId, -1, -1) }
+            override fun onDone(utteranceId: String?) = runOnUiThread { unhighlight(utteranceId) }
+            override fun onError(utteranceId: String?) = runOnUiThread { unhighlight(utteranceId) }
+            override fun onStop(utteranceId: String?, interrupted: Boolean) = runOnUiThread { unhighlight(utteranceId) }
+            override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) =
+                runOnUiThread { highlight(utteranceId, start, end) }
+        })
+    }
+
+    private fun showHint() {
+        val h = TextView(this).apply {
+            text = "언어를 고르고 시작을 누르세요. 아래 입력창에 한국어를 쓰면 외국어로 번역해요.\n" +
+                   "☆ 문장 저장 · 🔊 다시 듣기 · 번역문을 길게 누르면 단어 저장과 복사"
+            textSize = 16f
+            setTextColor(Color.GRAY)
+        }
+        hint = h
+        segments.addView(h)
+    }
+
+    /* ---------- Highlight while speaking ---------- */
+
+    private fun highlight(id: String?, start: Int, end: Int) {
+        val seg = utter[id ?: return] ?: return
+        val text = seg.tr
+        if (text.isEmpty()) return
+        val s = SpannableString(text)
+        s.setSpan(BackgroundColorSpan(Color.argb(55, 255, 200, 0)), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (start >= 0 && end > start && end <= text.length) {
+            s.setSpan(BackgroundColorSpan(Color.argb(190, 255, 200, 0)), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        seg.view.text = s
+        if (start < 0) scroll.post { scroll.smoothScrollTo(0, seg.view.top) }
+    }
+
+    private fun unhighlight(id: String?) {
+        val seg = utter.remove(id ?: return) ?: return
+        seg.view.text = seg.tr
+    }
+
+    private fun speakNow(text: String, voice: String, seg: Seg?, flush: Boolean) {
+        val engine = tts ?: return
+        val uid = "u${++utterCount}"
+        if (seg != null) utter[uid] = seg
+        engine.language = Locale.forLanguageTag(voice)
+        engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, uid)
     }
 
     /* ---------- Typed chat ---------- */
@@ -275,12 +338,36 @@ class MainActivity : Activity() {
     /* ---------- Settings ---------- */
 
     private fun openSettings() {
+        val items = arrayOf("화면 지우기", "저장함", "화면 내용 내보내기", "단어장", "DeepL API 키")
         AlertDialog.Builder(this)
             .setTitle("설정")
-            .setItems(arrayOf("단어장", "DeepL API 키")) { _, which ->
-                if (which == 0) openDictionary() else openDeeplKey()
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> clearScreen()
+                    1 -> openSaved()
+                    2 -> exportScreen()
+                    3 -> openDictionary()
+                    else -> openDeeplKey()
+                }
             }
             .show()
+    }
+
+    private fun clearScreen() {
+        tts?.stop()
+        segments.removeAllViews()
+        screenLog.clear()
+        utter.clear()
+        speechBuf.clear()
+        nextToSpeak = seq + 1
+        recent.clear()
+        showHint()
+    }
+
+    private fun exportScreen() {
+        val lines = screenLog.filter { it.tr.isNotEmpty() }
+        if (lines.isEmpty()) { toast("화면에 번역된 내용이 없어요."); return }
+        share(lines.joinToString("\n\n") { (if (it.typed) "✍ " else "") + it.src + "\n→ " + it.tr })
     }
 
     private fun dialogBox(edit: EditText) = FrameLayout(this).apply {
@@ -307,6 +394,93 @@ class MainActivity : Activity() {
             .setNegativeButton("취소", null)
             .show()
     }
+
+    /* ---------- Saved sentences and words ---------- */
+
+    private fun loadSaved(): JSONArray =
+        try { JSONArray(prefs.getString("saved", "[]")) } catch (_: Exception) { JSONArray() }
+
+    private fun saveItem(text: String, note: String, voice: String) {
+        val arr = loadSaved()
+        arr.put(JSONObject().put("t", text).put("n", note).put("v", voice))
+        prefs.edit().putString("saved", arr.toString()).apply()
+        toast("저장했어요")
+    }
+
+    private fun openSaved() {
+        val arr = loadSaved()
+        if (arr.length() == 0) {
+            toast("저장한 문장이 없어요. ☆를 누르거나 단어를 길게 눌러 저장하세요.")
+            return
+        }
+        val items = Array(arr.length()) { i ->
+            val o = arr.getJSONObject(i)
+            o.optString("t") + "\n   " + o.optString("n")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("저장함")
+            .setItems(items) { _, i -> savedActions(i) }
+            .setNeutralButton("전체 내보내기") { _, _ -> share(items.joinToString("\n\n")) }
+            .setNegativeButton("닫기", null)
+            .show()
+    }
+
+    private fun savedActions(index: Int) {
+        val o = loadSaved().optJSONObject(index) ?: return
+        val text = o.optString("t")
+        AlertDialog.Builder(this)
+            .setTitle(text)
+            .setItems(arrayOf("소리로 듣기", "복사", "삭제")) { _, which ->
+                when (which) {
+                    0 -> speakNow(text, o.optString("v", "ja-JP"), null, true)
+                    1 -> copy(text)
+                    else -> {
+                        val arr = loadSaved()
+                        arr.remove(index)
+                        prefs.edit().putString("saved", arr.toString()).apply()
+                        toast("삭제했어요")
+                    }
+                }
+            }
+            .show()
+    }
+
+    // Adds "단어 저장" next to copy when part of a translation is selected.
+    private fun enableWordSave(tv: TextView, seg: Seg) {
+        tv.customSelectionActionModeCallback = object : ActionMode.Callback {
+            override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+                menu.add(0, MENU_SAVE_WORD, 0, "단어 저장")
+                return true
+            }
+            override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = false
+            override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+                if (item.itemId != MENU_SAVE_WORD) return false
+                val a = minOf(tv.selectionStart, tv.selectionEnd).coerceAtLeast(0)
+                val b = maxOf(tv.selectionStart, tv.selectionEnd).coerceAtMost(tv.text.length)
+                val word = if (b > a) tv.text.substring(a, b).trim() else ""
+                if (word.isNotEmpty()) saveItem(word, seg.tr, seg.voice)
+                mode.finish()
+                return true
+            }
+            override fun onDestroyActionMode(mode: ActionMode) {}
+        }
+    }
+
+    private fun copy(text: String) {
+        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+            .setPrimaryClip(ClipData.newPlainText("번역", text))
+        toast("복사했어요")
+    }
+
+    private fun share(text: String) {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startActivity(Intent.createChooser(send, "내보내기"))
+    }
+
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     /* ---------- Word list ---------- */
 
@@ -579,7 +753,6 @@ class MainActivity : Activity() {
         val p = prepare(raw, sl, tl)
         val source = sl.mlkit
         val target = tl.mlkit
-        val voice = tl.speechTag
 
         val trView = TextView(this).apply {
             text = "…"
@@ -587,14 +760,43 @@ class MainActivity : Activity() {
             setTypeface(null, Typeface.BOLD)
             setTextIsSelectable(true)
         }
+        val seg = Seg(p.shown, tl.speechTag, trView, typed)
+        screenLog.add(seg)
+        enableWordSave(trView, seg)
+
         val srcView = TextView(this).apply {
             text = if (typed) "✍ " + p.shown else p.shown
             textSize = 14f
             setTextColor(Color.GRAY)
             setTextIsSelectable(true)
         }
+        val playView = TextView(this).apply {
+            text = "🔊"
+            textSize = 18f
+            setPadding(dp(12), dp(4), dp(8), dp(4))
+            setOnClickListener { if (seg.tr.isNotEmpty()) speakNow(seg.tr, seg.voice, seg, true) }
+        }
+        val saveView = TextView(this).apply {
+            text = "☆"
+            textSize = 20f
+            setTextColor(Color.rgb(47, 91, 234))
+            setPadding(dp(8), dp(4), dp(4), dp(4))
+            setOnClickListener {
+                if (seg.tr.isNotEmpty()) {
+                    saveItem(seg.tr, seg.src, seg.voice)
+                    text = "★"
+                }
+            }
+        }
+        val srcRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(srcView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(playView, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+            addView(saveView, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        }
         segments.addView(trView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(14) })
-        segments.addView(srcView)
+        segments.addView(srcRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
 
         val context = recent.joinToString(" ")
@@ -603,45 +805,46 @@ class MainActivity : Activity() {
 
         val key = deeplKey
         if (key.isEmpty() || System.currentTimeMillis() < deeplBlockedUntil) {
-            viaMlKit(t, id, trView, p, source, target, voice)
+            viaMlKit(t, id, seg, p, source, target)
             return
         }
         net.execute {
             val result: Any = try { deepl(p.input, source, target, key, context) } catch (e: Exception) { e }
             runOnUiThread {
                 if (result is String) {
-                    showResult(id, trView, p.restore(result), target, voice)
+                    showResult(id, seg, p.restore(result), target)
                 } else {
                     deeplFailed(result as Exception)
-                    viaMlKit(t, id, trView, p, source, target, voice)
+                    viaMlKit(t, id, seg, p, source, target)
                 }
             }
         }
     }
 
-    private fun viaMlKit(t: Translator, id: Int, trView: TextView, p: Prepared, source: String, target: String, voice: String) {
+    private fun viaMlKit(t: Translator, id: Int, seg: Seg, p: Prepared, source: String, target: String) {
         t.translate(p.input)
             .addOnSuccessListener { raw ->
                 val tr = p.restore(raw)
                 if (!looksLike(tr, target) && looksLike(p.shown, source)) {
-                    trView.text = "$tr\n(언어팩 오류 · 다시 받는 중)"
-                    queueSpeech(id, null, voice)
+                    seg.view.text = "$tr\n(언어팩 오류 · 다시 받는 중)"
+                    queueSpeech(id, null)
                     repairLanguagePack(source, target)
                     return@addOnSuccessListener
                 }
-                showResult(id, trView, tr, target, voice)
+                showResult(id, seg, tr, target)
             }
             .addOnFailureListener {
-                trView.text = "번역 실패"
-                queueSpeech(id, null, voice)
+                seg.view.text = "번역 실패"
+                queueSpeech(id, null)
             }
     }
 
-    private fun showResult(id: Int, trView: TextView, tr: String, target: String, voice: String) {
-        trView.text = tr
-        Pronouncer.attach(this, segments, trView, tr, target)
+    private fun showResult(id: Int, seg: Seg, tr: String, target: String) {
+        seg.tr = tr
+        seg.view.text = tr
+        Pronouncer.attach(this, segments, seg.view, tr, target)
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-        queueSpeech(id, tr, voice)
+        queueSpeech(id, seg)
     }
 
     /* ---------- DeepL ---------- */
@@ -690,15 +893,13 @@ class MainActivity : Activity() {
 
     /* ---------- Speech output ---------- */
 
-    // Speak translations in the order they were requested, each in its own language.
-    private fun queueSpeech(id: Int, text: String?, voice: String) {
-        speechBuf[id] = text?.let { it to voice }
+    // Speak translations in the order they were requested.
+    private fun queueSpeech(id: Int, seg: Seg?) {
+        if (id < nextToSpeak) return
+        speechBuf[id] = seg
         while (speechBuf.containsKey(nextToSpeak)) {
-            val item = speechBuf.remove(nextToSpeak)
-            if (item != null && speakBox.isChecked) {
-                tts?.language = Locale.forLanguageTag(item.second)
-                tts?.speak(item.first, TextToSpeech.QUEUE_ADD, null, "seg$nextToSpeak")
-            }
+            val s = speechBuf.remove(nextToSpeak)
+            if (s != null && speakBox.isChecked) speakNow(s.tr, s.voice, s, false)
             nextToSpeak++
         }
     }
