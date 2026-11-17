@@ -40,7 +40,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.google.mlkit.common.model.DownloadConditions
-import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
@@ -59,19 +58,12 @@ import java.util.concurrent.Executors
 // Points the camera at text and draws the translation on top of it.
 class CameraActivity : ComponentActivity() {
 
-    private class Lang(val label: String, val code: String, val voice: String)
     private class Block(val box: Rect, val text: String) {
         var tr: String = ""
     }
 
-    private val langs = listOf(
-        Lang("日本語", TranslateLanguage.JAPANESE, "ja-JP"),
-        Lang("中文", TranslateLanguage.CHINESE, "zh-CN"),
-        Lang("English", TranslateLanguage.ENGLISH, "en-US"),
-        Lang("Français", TranslateLanguage.FRENCH, "fr-FR"),
-        Lang("Español", TranslateLanguage.SPANISH, "es-ES"),
-        Lang("한국어", TranslateLanguage.KOREAN, "ko-KR")
-    )
+    private val langs = Languages.all
+    private lateinit var home: Lang
 
     private lateinit var previewView: PreviewView
     private lateinit var frozenImage: ImageView
@@ -102,6 +94,8 @@ class CameraActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        home = Languages.home(prefs)
+        I18n.use(home.code)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         previewView = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
@@ -111,14 +105,14 @@ class CameraActivity : ComponentActivity() {
         }
         textOverlay = TextOverlay(this)
 
-        val labels = langs.map { it.label }
+        val labels = langs.map { it.native }
         srcSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, labels)
-            setSelection(0)
+            setSelection(langs.indexOfFirst { it.code != home.code })
         }
         tgtSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, labels)
-            setSelection(5)
+            setSelection(langs.indexOf(home))
         }
         val arrow = TextView(this).apply {
             text = "→"
@@ -137,16 +131,17 @@ class CameraActivity : ComponentActivity() {
             setTextColor(Color.DKGRAY)
         }
         val credit = TextView(this).apply {
-            text = "기기 번역: Google 번역 제공"
+            text = CamText.t("c_credit")
             textSize = 11f
             setTextColor(Color.GRAY)
         }
         freezeButton = Button(this).apply {
-            text = "멈추고 정확히 번역"
+            text = CamText.t("c_freeze")
+            isAllCaps = false
             setOnClickListener { if (frozen) unfreeze() else freeze() }
         }
         val closeButton = Button(this).apply {
-            text = "닫기"
+            text = I18n.t("close")
             setOnClickListener { finish() }
         }
         val buttonRow = LinearLayout(this).apply {
@@ -187,7 +182,7 @@ class CameraActivity : ComponentActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startCamera()
-        else status("카메라 권한을 허용해야 쓸 수 있어요.")
+        else status(CamText.t("c_perm"))
     }
 
     private fun startCamera() {
@@ -211,13 +206,13 @@ class CameraActivity : ComponentActivity() {
     /* ---------- Languages ---------- */
 
     private fun makeRecognizer(code: String): TextRecognizer = when (code) {
-        TranslateLanguage.JAPANESE -> TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
-        TranslateLanguage.CHINESE -> TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-        TranslateLanguage.KOREAN -> TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+        "ja" -> TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
+        "zh" -> TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+        "ko" -> TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
         else -> TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
 
-    private fun readyText() = "글자를 비추세요 · ${src.label} → ${tgt.label}"
+    private fun readyText() = CamText.f("c_ready", src.native, tgt.native)
 
     private fun setupLanguages() {
         if (frozen) unfreeze()
@@ -231,7 +226,7 @@ class CameraActivity : ComponentActivity() {
         blocks = emptyList()
         textOverlay.invalidate()
         if (src.code == tgt.code) {
-            status("서로 다른 두 언어를 고르세요.")
+            status(I18n.t("same_lang"))
             return
         }
         val t = Translation.getClient(
@@ -241,7 +236,7 @@ class CameraActivity : ComponentActivity() {
                 .build()
         )
         translator = t
-        status("언어팩 준비 중… 처음 한 번은 인터넷이 필요해요.")
+        status(I18n.t("preparing"))
         t.downloadModelIfNeeded(DownloadConditions.Builder().build())
             .addOnSuccessListener {
                 if (translator === t) {
@@ -249,7 +244,7 @@ class CameraActivity : ComponentActivity() {
                     status(readyText())
                 }
             }
-            .addOnFailureListener { if (translator === t) status("언어팩을 받지 못했어요. 인터넷 연결을 확인하세요.") }
+            .addOnFailureListener { if (translator === t) status(I18n.t("pack_failed")) }
     }
 
     /* ---------- Live mode ---------- */
@@ -277,7 +272,7 @@ class CameraActivity : ComponentActivity() {
     }
 
     private fun toBlocks(result: Text): List<Block> {
-        val sep = if (src.code == TranslateLanguage.JAPANESE || src.code == TranslateLanguage.CHINESE) "" else " "
+        val sep = if (src.code == "ja" || src.code == "zh") "" else " "
         return result.textBlocks.mapNotNull { b ->
             val box = b.boundingBox ?: return@mapNotNull null
             val text = b.lines.joinToString(sep) { it.text }.trim()
@@ -315,7 +310,7 @@ class CameraActivity : ComponentActivity() {
     /* ---------- Freeze and translate with the chosen engine ---------- */
 
     private fun freeze() {
-        val bmp: Bitmap = previewView.bitmap ?: run { toast("화면을 가져오지 못했어요."); return }
+        val bmp: Bitmap = previewView.bitmap ?: run { toast(CamText.t("c_no_frame")); return }
         val r = recognizer ?: return
         frozen = true
         val gen = ++generation
@@ -323,8 +318,8 @@ class CameraActivity : ComponentActivity() {
         frozenImage.visibility = View.VISIBLE
         blocks = emptyList()
         textOverlay.invalidate()
-        freezeButton.text = "다시 실시간"
-        status("글자 인식 중…")
+        freezeButton.text = CamText.t("c_live")
+        status(CamText.t("c_reading"))
         r.process(InputImage.fromBitmap(bmp, 0))
             .addOnSuccessListener { result ->
                 if (gen != generation) return@addOnSuccessListener
@@ -333,20 +328,20 @@ class CameraActivity : ComponentActivity() {
                 val found = toBlocks(result)
                 blocks = found
                 textOverlay.invalidate()
-                if (found.isEmpty()) status("글자를 찾지 못했어요. 다시 실시간으로 비춰 보세요.")
+                if (found.isEmpty()) status(CamText.t("c_none"))
                 else translateFrozen(found, gen)
             }
-            .addOnFailureListener { if (gen == generation) status("글자를 인식하지 못했어요.") }
+            .addOnFailureListener { if (gen == generation) status(CamText.t("c_fail")) }
     }
 
     private fun translateFrozen(found: List<Block>, gen: Int) {
         val engine = Engines.active(prefs)
         if (engine == "mlkit") {
             found.forEach { mlkitOne(it, gen) }
-            status("완료 · 기기 번역 · 글자를 누르면 원문 보기·복사·저장")
+            status(CamText.f("c_done", Engines.label(engine)))
             return
         }
-        status("번역 중… · " + Engines.label(engine))
+        status(CamText.f("c_translating", Engines.label(engine)))
         val s = src.code
         val g = tgt.code
         net.execute {
@@ -357,7 +352,7 @@ class CameraActivity : ComponentActivity() {
                     val rest = found.drop(i)
                     runOnUiThread {
                         if (gen == generation) {
-                            status(Engines.label(engine) + " 연결 실패 · 기기 번역으로 표시해요")
+                            status(CamText.f("c_engine_fail", Engines.label(engine)))
                             rest.forEach { mlkitOne(it, gen) }
                         }
                     }
@@ -371,7 +366,7 @@ class CameraActivity : ComponentActivity() {
                 }
             }
             runOnUiThread {
-                if (gen == generation) status("완료 · ${Engines.label(engine)} · 글자를 누르면 원문 보기·복사·저장")
+                if (gen == generation) status(CamText.f("c_done", Engines.label(engine)))
             }
         }
     }
@@ -399,7 +394,7 @@ class CameraActivity : ComponentActivity() {
         frozenImage.setImageBitmap(null)
         blocks = emptyList()
         textOverlay.invalidate()
-        freezeButton.text = "멈추고 정확히 번역"
+        freezeButton.text = CamText.t("c_freeze")
         status(readyText())
     }
 
@@ -408,24 +403,39 @@ class CameraActivity : ComponentActivity() {
     private fun showDetail(b: Block) {
         AlertDialog.Builder(this)
             .setTitle(b.tr)
-            .setMessage("원문\n" + b.text)
-            .setPositiveButton("저장") { _, _ -> save(b) }
-            .setNeutralButton("복사") { _, _ -> copy(b.tr) }
-            .setNegativeButton("닫기", null)
+            .setMessage(CamText.t("c_original") + "\n" + b.text)
+            .setPositiveButton(CamText.t("c_save")) { _, _ -> save(b) }
+            .setNeutralButton(VocabText.t("copy")) { _, _ -> copy(b.tr) }
+            .setNegativeButton(I18n.t("close"), null)
             .show()
     }
 
+    // Saves the foreign text with its meaning in my language, in the word list's format.
     private fun save(b: Block) {
+        val (text, meaning, lang) =
+            if (tgt.code == home.code) Triple(b.text, b.tr, src)
+            else Triple(b.tr, if (src.code == home.code) b.text else "", tgt)
         val arr = try { JSONArray(prefs.getString("saved", "[]")) } catch (_: Exception) { JSONArray() }
-        arr.put(JSONObject().put("t", b.tr).put("n", b.text).put("v", tgt.voice))
+        arr.put(
+            JSONObject()
+                .put("t", text)
+                .put("m", meaning)
+                .put("e", "")
+                .put("em", "")
+                .put("v", lang.speechTag)
+                .put("l", lang.code)
+                .put("d", System.currentTimeMillis())
+                .put("c", 0)
+                .put("w", 0)
+        )
         prefs.edit().putString("saved", arr.toString()).apply()
-        toast("저장함에 저장했어요")
+        toast(TalkText.t("saved_toast"))
     }
 
     private fun copy(text: String) {
         (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            .setPrimaryClip(ClipData.newPlainText("번역", text))
-        toast("복사했어요")
+            .setPrimaryClip(ClipData.newPlainText("text", text))
+        toast(VocabText.t("copied"))
     }
 
     private fun status(msg: String) { statusView.text = msg }
@@ -498,4 +508,32 @@ class CameraActivity : ComponentActivity() {
             return true
         }
     }
+}
+
+// Screen text for the camera screen. Order in m(): ko, ja, en, fr, es, de, zh.
+private object CamText {
+
+    fun t(key: String): String = table[key]?.let { it[I18n.lang] ?: it["en"] ?: it["ko"] } ?: key
+
+    fun f(key: String, vararg args: Any): String = String.format(t(key), *args)
+
+    private fun m(ko: String, ja: String, en: String, fr: String, es: String, de: String, zh: String) =
+        mapOf("ko" to ko, "ja" to ja, "en" to en, "fr" to fr, "es" to es, "de" to de, "zh" to zh)
+
+    private val table: Map<String, Map<String, String>> = mapOf(
+        "c_credit" to m("기기 번역: Google 번역 제공", "端末内翻訳: Google 翻訳提供", "On-device translation by Google Translate", "Traduction sur l'appareil par Google Traduction", "Traducción en el dispositivo con Google Traductor", "Übersetzung auf dem Gerät von Google Übersetzer", "设备翻译：由 Google 翻译提供"),
+        "c_freeze" to m("멈추고 정확히 번역", "止めて正確に翻訳", "Freeze & translate precisely", "Figer et traduire précisément", "Congelar y traducir con precisión", "Anhalten & genau übersetzen", "定格并精确翻译"),
+        "c_live" to m("다시 실시간", "ライブに戻る", "Back to live", "Retour au direct", "Volver a en vivo", "Zurück zu live", "返回实时"),
+        "c_perm" to m("카메라 권한을 허용해야 쓸 수 있어요.", "カメラの許可が必要です。", "Allow camera access to use this.", "Autorisez l'appareil photo pour continuer.", "Permite el acceso a la cámara.", "Erlaube den Kamerazugriff.", "需要相机权限。"),
+        "c_ready" to m("글자를 비추세요 · %1\$s → %2\$s", "文字を映してください · %1\$s → %2\$s", "Point at text · %1\$s → %2\$s", "Visez le texte · %1\$s → %2\$s", "Apunta al texto · %1\$s → %2\$s", "Auf Text richten · %1\$s → %2\$s", "对准文字 · %1\$s → %2\$s"),
+        "c_no_frame" to m("화면을 가져오지 못했어요.", "画面を取得できませんでした。", "Couldn't capture the screen.", "Impossible de capturer l'écran.", "No se pudo capturar la pantalla.", "Bild konnte nicht erfasst werden.", "无法获取画面。"),
+        "c_reading" to m("글자 인식 중…", "文字を認識中…", "Reading text…", "Lecture du texte…", "Leyendo texto…", "Text wird erkannt…", "正在识别文字…"),
+        "c_none" to m("글자를 찾지 못했어요. 다시 실시간으로 비춰 보세요.", "文字が見つかりませんでした。ライブでもう一度映してください。", "No text found. Go back to live and try again.", "Aucun texte trouvé. Revenez au direct et réessayez.", "No se encontró texto. Vuelve a en vivo e inténtalo.", "Kein Text gefunden. Zurück zu live und erneut versuchen.", "未找到文字，请返回实时重试。"),
+        "c_fail" to m("글자를 인식하지 못했어요.", "文字を認識できませんでした。", "Couldn't read the text.", "Impossible de lire le texte.", "No se pudo leer el texto.", "Text konnte nicht erkannt werden.", "无法识别文字。"),
+        "c_done" to m("완료 · %s · 글자를 누르면 원문 보기·복사·저장", "完了 · %s · タップで原文・コピー・保存", "Done · %s · tap text to see the original, copy or save", "Terminé · %s · touchez pour voir l'original, copier ou enregistrer", "Listo · %s · toca para ver el original, copiar o guardar", "Fertig · %s · tippen für Original, Kopieren, Speichern", "完成 · %s · 点按文字查看原文、复制或保存"),
+        "c_translating" to m("번역 중… · %s", "翻訳中… · %s", "Translating… · %s", "Traduction… · %s", "Traduciendo… · %s", "Übersetzung… · %s", "翻译中… · %s"),
+        "c_engine_fail" to m("%s 연결 실패 · 기기 번역으로 표시해요", "%s に接続できません · 端末内翻訳で表示します", "%s failed · showing on-device translation", "Échec de %s · traduction locale affichée", "%s falló · se muestra la traducción local", "%s fehlgeschlagen · Geräteübersetzung wird gezeigt", "%s 连接失败 · 显示设备翻译"),
+        "c_original" to m("원문", "原文", "Original", "Original", "Original", "Original", "原文"),
+        "c_save" to m("저장", "保存", "Save", "Enregistrer", "Guardar", "Speichern", "保存")
+    )
 }
