@@ -8,6 +8,7 @@
     </queries>
     <application
         android:label="동시통역"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:name=".MainActivity"
