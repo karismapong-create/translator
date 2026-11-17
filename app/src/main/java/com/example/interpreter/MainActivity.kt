@@ -68,7 +68,10 @@ class MainActivity : Activity() {
     private class HttpException(val code: Int, val body: String) : Exception("HTTP $code")
 
     // One translated line on screen.
-    private class Seg(val src: String, val voice: String, val view: TextView, val typed: Boolean) {
+    private class Seg(
+        val src: String, val voice: String, val view: TextView, val typed: Boolean,
+        val sl: Lang, val tl: Lang
+    ) {
         var tr: String = ""
     }
 
@@ -357,7 +360,7 @@ class MainActivity : Activity() {
     private fun showHint() {
         val h = TextView(this).apply {
             text = "시작을 누르고 말하세요. 🔍 자동 감지는 한국어와 오른쪽 언어를 알아서 구분해요.\n" +
-                   "☆ 문장 저장 · 🔊 다시 듣기 · 번역문을 길게 누르면 단어 저장과 복사"
+                   "☆ 문장 저장 · 🔊 다시 듣기 · 글자를 길게 눌러 '단어 저장'"
             textSize = 16f
             setTextColor(Color.GRAY)
         }
@@ -801,24 +804,58 @@ class MainActivity : Activity() {
         status(msg)
     }
 
-    /* ---------- Saving words and sentences ---------- */
+    /* ---------- Saving to the vocabulary list ---------- */
 
-    private fun saveItem(text: String, note: String, voice: String) {
+    // Returns the foreign text, the Korean text and the foreign language of a translated line.
+    private fun sides(seg: Seg): Triple<String, String, Lang> =
+        if (seg.tl.mlkit == TranslateLanguage.KOREAN) Triple(seg.src, seg.tr, seg.sl)
+        else Triple(seg.tr, seg.src, seg.tl)
+
+    private fun saveSentence(seg: Seg) {
+        val (foreignText, koreanText, lang) = sides(seg)
+        storeVocab(foreignText, koreanText, "", "", lang)
+    }
+
+    // Saves a selected word with its meaning, using the line it came from as the example.
+    private fun saveWord(word: String, fromTranslation: Boolean, seg: Seg) {
+        val (exampleForeign, exampleKorean, foreignLang) = sides(seg)
+        val wordLang = if (fromTranslation) seg.tl else seg.sl
+        if (wordLang.mlkit == TranslateLanguage.KOREAN) {
+            withTranslator(korean, foreignLang) { t ->
+                t.translate(word)
+                    .addOnSuccessListener { fw -> storeVocab(fw, word, exampleForeign, exampleKorean, foreignLang) }
+                    .addOnFailureListener { toast("단어 번역에 실패했어요.") }
+            }
+        } else {
+            withTranslator(wordLang, korean) { t ->
+                t.translate(word)
+                    .addOnSuccessListener { m -> storeVocab(word, m, exampleForeign, exampleKorean, wordLang) }
+                    .addOnFailureListener { storeVocab(word, "", exampleForeign, exampleKorean, wordLang) }
+            }
+        }
+    }
+
+    private fun storeVocab(text: String, meaning: String, example: String, exampleMeaning: String, lang: Lang) {
         val arr = try { JSONArray(prefs.getString("saved", "[]")) } catch (_: Exception) { JSONArray() }
+        val sameAsExample = example == text
         arr.put(
             JSONObject()
                 .put("t", text)
-                .put("n", note)
-                .put("v", voice)
-                .put("l", voice.substringBefore("-"))
+                .put("m", meaning)
+                .put("e", if (sameAsExample) "" else example)
+                .put("em", if (sameAsExample) "" else exampleMeaning)
+                .put("v", lang.speechTag)
+                .put("l", lang.mlkit)
                 .put("d", System.currentTimeMillis())
+                .put("c", 0)
+                .put("w", 0)
         )
         prefs.edit().putString("saved", arr.toString()).apply()
-        toast("단어장에 저장했어요")
+        toast("단어장에 저장: $text" + (if (meaning.isNotEmpty()) " = $meaning" else ""))
     }
 
-    // Adds "단어 저장" next to copy when part of a translation is selected.
-    private fun enableWordSave(tv: TextView, seg: Seg) {
+    // Adds "단어 저장" next to copy when part of a line is selected.
+    private fun enableWordSave(tv: TextView, seg: Seg, fromTranslation: Boolean) {
         tv.customSelectionActionModeCallback = object : ActionMode.Callback {
             override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
                 menu.add(0, MENU_SAVE_WORD, 0, "단어 저장")
@@ -830,18 +867,12 @@ class MainActivity : Activity() {
                 val a = minOf(tv.selectionStart, tv.selectionEnd).coerceAtLeast(0)
                 val b = maxOf(tv.selectionStart, tv.selectionEnd).coerceAtMost(tv.text.length)
                 val word = if (b > a) tv.text.substring(a, b).trim() else ""
-                if (word.isNotEmpty()) saveItem(word, seg.tr, seg.voice)
+                if (word.isNotEmpty() && seg.tr.isNotEmpty()) saveWord(word, fromTranslation, seg)
                 mode.finish()
                 return true
             }
             override fun onDestroyActionMode(mode: ActionMode) {}
         }
-    }
-
-    private fun copy(text: String) {
-        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            .setPrimaryClip(ClipData.newPlainText("번역", text))
-        toast("복사했어요")
     }
 
     private fun share(text: String) {
@@ -1139,9 +1170,9 @@ class MainActivity : Activity() {
             setTypeface(null, Typeface.BOLD)
             setTextIsSelectable(true)
         }
-        val seg = Seg(p.shown, tl.speechTag, trView, typed)
+        val seg = Seg(p.shown, tl.speechTag, trView, typed, sl, tl)
         screenLog.add(seg)
-        enableWordSave(trView, seg)
+        enableWordSave(trView, seg, true)
 
         val srcView = TextView(this).apply {
             text = (if (typed) "✍ " else "") + (if (auto || typed) "[${sl.label}] " else "") + p.shown
@@ -1149,6 +1180,7 @@ class MainActivity : Activity() {
             setTextColor(Color.GRAY)
             setTextIsSelectable(true)
         }
+        enableWordSave(srcView, seg, false)
         val playView = TextView(this).apply {
             text = "🔊"
             textSize = 18f
@@ -1162,7 +1194,7 @@ class MainActivity : Activity() {
             setPadding(dp(8), dp(4), dp(4), dp(4))
             setOnClickListener {
                 if (seg.tr.isNotEmpty()) {
-                    saveItem(seg.tr, seg.src, seg.voice)
+                    saveSentence(seg)
                     text = "★"
                 }
             }
