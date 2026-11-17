@@ -72,7 +72,7 @@ class MainActivity : Activity() {
         var tr: String = ""
     }
 
-    // Source text with word-list terms swapped for placeholder codes, and how to put them back.
+    // Source text with glossary terms swapped for placeholder codes, and how to put them back.
     private class Prepared(val shown: String, val input: String, val codes: Map<Regex, String>) {
         fun restore(text: String): String {
             var out = text
@@ -120,6 +120,10 @@ class MainActivity : Activity() {
     private lateinit var speakBox: CheckBox
     private lateinit var micButton: Button
     private lateinit var chatInput: EditText
+    private lateinit var vocabPage: VocabView
+    private lateinit var glossaryPage: GlossaryView
+    private lateinit var pages: List<View>
+    private lateinit var tabViews: List<TextView>
     private var hint: TextView? = null
 
     private var recognizer: SpeechRecognizer? = null
@@ -203,11 +207,6 @@ class MainActivity : Activity() {
                 toSpinner.setSelection(f)
             }
         }
-        val cameraButton = Button(this).apply {
-            text = "📷"
-            textSize = 18f
-            setOnClickListener { openCamera() }
-        }
         val onChange = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 if (to.mlkit != TranslateLanguage.KOREAN) foreign = to
@@ -223,7 +222,6 @@ class MainActivity : Activity() {
             addView(fromSpinner, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
             addView(swap, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
             addView(toSpinner, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            addView(cameraButton, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         }
 
         segments = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -242,7 +240,7 @@ class MainActivity : Activity() {
         }
 
         chatInput = EditText(this).apply {
-            setHint("한국어로 입력하면 외국어로 번역해요")
+            setHint("입력하면 한국어↔외국어로 번역해요")
             textSize = 16f
             setSingleLine(true)
             imeOptions = EditorInfo.IME_ACTION_SEND
@@ -280,10 +278,8 @@ class MainActivity : Activity() {
             addView(micButton, LinearLayout.LayoutParams(dp(120), dp(64)))
         }
 
-        val pad = dp(16)
-        val root = LinearLayout(this).apply {
+        val interpPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad)
             addView(top, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
             addView(interimView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -291,7 +287,48 @@ class MainActivity : Activity() {
             addView(chatRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(bottom, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         }
+
+        val langInfos = langs.map { LangInfo(it.label, it.mlkit, it.speechTag) }
+        vocabPage = VocabView(this, prefs, langInfos) { text, voice -> speakNow(text, voice, null, true) }
+        glossaryPage = GlossaryView(this, prefs, langInfos, DEFAULT_TERMS) { text ->
+            terms = parseTerms(text)
+            if (listening) { stop(); start() }
+        }
+        pages = listOf(interpPage, vocabPage, glossaryPage)
+        val container = FrameLayout(this).apply {
+            pages.forEach { addView(it, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)) }
+        }
+
+        tabViews = listOf("통역", "단어장", "용어집").mapIndexed { i, name ->
+            TextView(this).apply {
+                text = name
+                textSize = 17f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(10), 0, dp(10))
+                setOnClickListener { showTab(i) }
+            }
+        }
+        val cameraButton = Button(this).apply {
+            text = "📷"
+            textSize = 18f
+            setOnClickListener { openCamera() }
+        }
+        val tabBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            tabViews.forEach { addView(it, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)) }
+            addView(cameraButton, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        }
+
+        val pad = dp(16)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad * 2, pad, pad)
+            addView(tabBar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            addView(container, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        }
         setContentView(root)
+        showTab(0)
 
         fromSpinner.onItemSelectedListener = onChange
         toSpinner.onItemSelectedListener = onChange
@@ -307,10 +344,20 @@ class MainActivity : Activity() {
         })
     }
 
+    private fun showTab(i: Int) {
+        pages.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
+        tabViews.forEachIndexed { k, t ->
+            t.setTextColor(if (k == i) Color.rgb(47, 91, 234) else Color.GRAY)
+            t.setTypeface(null, if (k == i) Typeface.BOLD else Typeface.NORMAL)
+        }
+        if (i == 1) vocabPage.refresh()
+        if (i == 2) glossaryPage.refresh()
+    }
+
     private fun showHint() {
         val h = TextView(this).apply {
             text = "시작을 누르고 말하세요. 🔍 자동 감지는 한국어와 오른쪽 언어를 알아서 구분해요.\n" +
-                   "☆ 문장 저장 · 🔊 다시 듣기 · 번역문을 길게 누르면 단어 저장과 복사 · 📷 카메라 번역"
+                   "☆ 문장 저장 · 🔊 다시 듣기 · 번역문을 길게 누르면 단어 저장과 복사"
             textSize = 16f
             setTextColor(Color.GRAY)
         }
@@ -393,24 +440,25 @@ class MainActivity : Activity() {
             .addOnFailureListener { status("언어팩을 받지 못했어요. 인터넷 연결을 확인하세요.") }
     }
 
-    /* ---------- Automatic language detection ---------- */
+    /* ---------- Language detection ---------- */
 
     private fun byCode(code: String) = langs.first { it.mlkit == code }
     private fun langFromTag(tag: String?): Lang? = tag?.let { t -> langs.firstOrNull { t.startsWith(it.mlkit) } }
     private fun fallbackLatin() = if (foreign.mlkit in latinCodes) foreign else byCode(TranslateLanguage.ENGLISH)
 
-    // Works out which language a piece of recognized text is in.
-    private fun detect(text: String, done: (Lang) -> Unit) {
+    // Works out which language a piece of text is in.
+    private fun detect(text: String, useHint: Boolean = true, done: (Lang) -> Unit) {
         val letters = text.filter { it.isLetter() }
         val hangul = letters.count { it in '\uAC00'..'\uD7A3' }
         val kana = letters.count { it in '\u3040'..'\u30FF' }
         val han = letters.count { it in '\u4E00'..'\u9FFF' }
+        val prefersJapanese = listOf(foreign, from, to).any { it.mlkit == TranslateLanguage.JAPANESE }
         when {
             hangul > 0 && hangul * 2 >= letters.length -> done(korean)
             kana > 0 -> done(byCode(TranslateLanguage.JAPANESE))
-            han > 0 -> done(byCode(TranslateLanguage.CHINESE))
+            han > 0 -> done(byCode(if (prefersJapanese) TranslateLanguage.JAPANESE else TranslateLanguage.CHINESE))
             else -> {
-                val hinted = langFromTag(detectedTag)?.takeIf { it.mlkit in latinCodes }
+                val hinted = if (useHint) langFromTag(detectedTag)?.takeIf { it.mlkit in latinCodes } else null
                 if (hinted != null) {
                     done(hinted)
                     return
@@ -451,7 +499,7 @@ class MainActivity : Activity() {
 
     /* ---------- Typed chat ---------- */
 
-    // Translates typed Korean into the foreign language in use.
+    // Typed Korean goes to the foreign language; typed foreign text goes to Korean.
     private fun sendChat() {
         val text = chatInput.text.toString().trim()
         if (text.isEmpty()) return
@@ -460,20 +508,31 @@ class MainActivity : Activity() {
             to.mlkit != TranslateLanguage.KOREAN -> to
             else -> from
         }
-        if (target.mlkit == TranslateLanguage.KOREAN) {
-            status("위쪽에서 번역할 외국어를 고르세요.")
-            return
-        }
         chatInput.setText("")
-        val src = korean
-        withTranslator(src, target) { t -> translate(text, src, target, t, typed = true) }
+        detect(text, useHint = false) { lang ->
+            val sl: Lang
+            val tl: Lang
+            if (lang.mlkit == TranslateLanguage.KOREAN) {
+                if (target.mlkit == TranslateLanguage.KOREAN) {
+                    status("위쪽에서 번역할 외국어를 고르세요.")
+                    return@detect
+                }
+                sl = korean
+                tl = target
+            } else {
+                if (auto) foreign = lang
+                sl = lang
+                tl = korean
+            }
+            withTranslator(sl, tl) { t -> translate(text, sl, tl, t, typed = true) }
+        }
     }
 
     /* ---------- Settings ---------- */
 
     private fun openSettings() {
         val items = arrayOf(
-            "📷 카메라 번역", "화면 지우기", "저장함", "화면 내용 내보내기", "단어장",
+            "📷 카메라 번역", "화면 지우기", "화면 내용 내보내기",
             "번역 엔진 (지금: ${engineLabel(activeEngine)})",
             "무음 모드 (지금: ${if (silent) "켜짐" else "꺼짐"})"
         )
@@ -483,10 +542,8 @@ class MainActivity : Activity() {
                 when (which) {
                     0 -> openCamera()
                     1 -> clearScreen()
-                    2 -> openSaved()
-                    3 -> exportScreen()
-                    4 -> openDictionary()
-                    5 -> openEngines()
+                    2 -> exportScreen()
+                    3 -> openEngines()
                     else -> toggleSilent()
                 }
             }
@@ -518,11 +575,6 @@ class MainActivity : Activity() {
         val lines = screenLog.filter { it.tr.isNotEmpty() }
         if (lines.isEmpty()) { toast("화면에 번역된 내용이 없어요."); return }
         share(lines.joinToString("\n\n") { (if (it.typed) "✍ " else "") + it.src + "\n→ " + it.tr })
-    }
-
-    private fun dialogBox(edit: EditText) = FrameLayout(this).apply {
-        setPadding(dp(20), dp(8), dp(20), 0)
-        addView(edit)
     }
 
     /* ---------- Translation engines ---------- */
@@ -749,54 +801,20 @@ class MainActivity : Activity() {
         status(msg)
     }
 
-    /* ---------- Saved sentences and words ---------- */
-
-    private fun loadSaved(): JSONArray =
-        try { JSONArray(prefs.getString("saved", "[]")) } catch (_: Exception) { JSONArray() }
+    /* ---------- Saving words and sentences ---------- */
 
     private fun saveItem(text: String, note: String, voice: String) {
-        val arr = loadSaved()
-        arr.put(JSONObject().put("t", text).put("n", note).put("v", voice))
+        val arr = try { JSONArray(prefs.getString("saved", "[]")) } catch (_: Exception) { JSONArray() }
+        arr.put(
+            JSONObject()
+                .put("t", text)
+                .put("n", note)
+                .put("v", voice)
+                .put("l", voice.substringBefore("-"))
+                .put("d", System.currentTimeMillis())
+        )
         prefs.edit().putString("saved", arr.toString()).apply()
-        toast("저장했어요")
-    }
-
-    private fun openSaved() {
-        val arr = loadSaved()
-        if (arr.length() == 0) {
-            toast("저장한 문장이 없어요. ☆를 누르거나 단어를 길게 눌러 저장하세요.")
-            return
-        }
-        val items = Array(arr.length()) { i ->
-            val o = arr.getJSONObject(i)
-            o.optString("t") + "\n   " + o.optString("n")
-        }
-        AlertDialog.Builder(this)
-            .setTitle("저장함")
-            .setItems(items) { _, i -> savedActions(i) }
-            .setNeutralButton("전체 내보내기") { _, _ -> share(items.joinToString("\n\n")) }
-            .setNegativeButton("닫기", null)
-            .show()
-    }
-
-    private fun savedActions(index: Int) {
-        val o = loadSaved().optJSONObject(index) ?: return
-        val text = o.optString("t")
-        AlertDialog.Builder(this)
-            .setTitle(text)
-            .setItems(arrayOf("소리로 듣기", "복사", "삭제")) { _, which ->
-                when (which) {
-                    0 -> speakNow(text, o.optString("v", "ja-JP"), null, true)
-                    1 -> copy(text)
-                    else -> {
-                        val arr = loadSaved()
-                        arr.remove(index)
-                        prefs.edit().putString("saved", arr.toString()).apply()
-                        toast("삭제했어요")
-                    }
-                }
-            }
-            .show()
+        toast("단어장에 저장했어요")
     }
 
     // Adds "단어 저장" next to copy when part of a translation is selected.
@@ -836,7 +854,7 @@ class MainActivity : Activity() {
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
-    /* ---------- Word list ---------- */
+    /* ---------- Glossary matching ---------- */
 
     private fun parseTerms(text: String): List<Term> = text.lines().mapNotNull { line ->
         val parts = line.replace("｜", "|").split("|").map { it.trim() }
@@ -890,33 +908,6 @@ class MainActivity : Activity() {
             codes[codeRegex(n)] = t.names[tl.mlkit] ?: t.names[TranslateLanguage.ENGLISH] ?: a
         }
         return Prepared(shown, input, codes)
-    }
-
-    private fun openDictionary() {
-        val edit = EditText(this).apply {
-            setText(prefs.getString("terms", DEFAULT_TERMS))
-            textSize = 15f
-            minLines = 6
-            gravity = Gravity.TOP or Gravity.START
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            setHorizontallyScrolling(false)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("단어장")
-            .setMessage(
-                "한 줄에 단어 하나씩 적어요.\n" +
-                "한국어 단어 | 잘못 들리는 말 | 언어=번역\n" +
-                "잘못 들리는 말은 쉼표로 여러 개 적을 수 있고, 가운데·끝 칸은 비워도 돼요."
-            )
-            .setView(dialogBox(edit))
-            .setPositiveButton("저장") { _, _ ->
-                val text = edit.text.toString()
-                prefs.edit().putString("terms", text).apply()
-                terms = parseTerms(text)
-                if (listening) { stop(); start() }
-            }
-            .setNegativeButton("취소", null)
-            .show()
     }
 
     /* ---------- Language pack check ---------- */
@@ -1153,7 +1144,7 @@ class MainActivity : Activity() {
         enableWordSave(trView, seg)
 
         val srcView = TextView(this).apply {
-            text = (if (typed) "✍ " else "") + (if (auto && !typed) "[${sl.label}] " else "") + p.shown
+            text = (if (typed) "✍ " else "") + (if (auto || typed) "[${sl.label}] " else "") + p.shown
             textSize = 14f
             setTextColor(Color.GRAY)
             setTextIsSelectable(true)
