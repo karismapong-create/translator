@@ -14,6 +14,7 @@ object Providers {
         val label: String,
         val baseUrl: String,
         val keyHint: String,
+        val keyUrl: String,
         val help: String,
         val defaultModel: String,
         val needsKey: Boolean = true,
@@ -26,45 +27,80 @@ object Providers {
         Provider(
             "gemini", "Google Gemini (무료 가능)",
             "https://generativelanguage.googleapis.com/v1beta/openai", "AIza…",
-            "aistudio.google.com에서 구글 계정으로 무료 API 키를 만들 수 있어요. 무료 사용분의 내용은 Google 서비스 개선에 쓰일 수 있어요.",
+            "https://aistudio.google.com/apikey",
+            "① 아래 버튼으로 Google AI Studio를 열고 구글 계정으로 로그인하세요.\n" +
+            "② 'API 키 만들기(Create API key)'를 누르세요. 결제 정보는 필요 없어요.\n" +
+            "③ 만들어진 키(AIza로 시작)를 복사해서 아래에 붙여넣으세요.\n" +
+            "무료 사용분의 내용은 Google 서비스 개선에 쓰일 수 있어요.",
             "gemini-2.5-flash"
         ),
         Provider(
             "claude", "Claude (Anthropic)", "https://api.anthropic.com/v1", "sk-ant-…",
-            "console.anthropic.com에서 받은 API 키를 넣으세요. 사용한 만큼 요금이 나가요.",
+            "https://console.anthropic.com/settings/keys",
+            "① 아래 버튼으로 Anthropic Console을 열고 가입·로그인하세요.\n" +
+            "② 결제 수단을 등록하고 크레딧을 충전하세요. 사용한 만큼 요금이 나가요.\n" +
+            "③ 'Create Key'로 키를 만들어 복사해서 붙여넣으세요.",
             "claude-haiku-5-5"
         ),
         Provider(
             "openai", "OpenAI", "https://api.openai.com/v1", "sk-…",
-            "platform.openai.com에서 받은 API 키를 넣고, 모델 목록에서 모델을 고르세요.", ""
+            "https://platform.openai.com/api-keys",
+            "① 아래 버튼으로 OpenAI Platform을 열고 로그인하세요.\n" +
+            "② 결제 수단을 등록하고 'Create new secret key'를 누르세요.\n" +
+            "③ 키를 복사해서 붙여넣고, '모델 목록 불러오기'로 모델을 고르세요.",
+            ""
         ),
         Provider(
             "groq", "Groq (무료 가능)", "https://api.groq.com/openai/v1", "gsk_…",
-            "console.groq.com에서 무료 API 키를 받을 수 있어요. 응답이 아주 빨라요.", ""
+            "https://console.groq.com/keys",
+            "① 아래 버튼으로 Groq Console을 열고 가입·로그인하세요.\n" +
+            "② 'Create API Key'를 누르세요. 무료로 시작할 수 있어요.\n" +
+            "③ 키를 복사해서 붙여넣고, '모델 목록 불러오기'로 모델을 고르세요. 응답이 아주 빨라요.",
+            ""
         ),
         Provider(
             "openrouter", "OpenRouter (무료 모델 있음)", "https://openrouter.ai/api/v1", "sk-or-…",
-            "openrouter.ai 키 하나로 여러 회사의 모델을 써요. 이름 끝이 :free인 모델은 무료예요.", ""
+            "https://openrouter.ai/keys",
+            "① 아래 버튼으로 OpenRouter를 열고 가입·로그인하세요.\n" +
+            "② 'Create Key'로 키를 만들어 복사해서 붙여넣으세요.\n" +
+            "③ '모델 목록 불러오기'에서 이름 끝이 :free인 모델을 고르면 무료예요.",
+            ""
         ),
         Provider(
             "mistral", "Mistral", "https://api.mistral.ai/v1", "",
-            "console.mistral.ai에서 받은 API 키를 넣으세요.", "mistral-small-latest"
+            "https://console.mistral.ai/api-keys",
+            "① 아래 버튼으로 Mistral Console을 열고 가입·로그인하세요.\n" +
+            "② 요금제를 고른 뒤 'Create new key'를 누르세요.\n" +
+            "③ 키를 복사해서 붙여넣으세요.",
+            "mistral-small-latest"
         ),
         Provider(
             "deepseek", "DeepSeek", "https://api.deepseek.com/v1", "sk-…",
-            "platform.deepseek.com에서 받은 API 키를 넣으세요. 저렴한 편이에요.", "deepseek-chat"
+            "https://platform.deepseek.com/api_keys",
+            "① 아래 버튼으로 DeepSeek Platform을 열고 가입·로그인하세요.\n" +
+            "② 크레딧을 충전하고 'Create new API key'를 누르세요. 저렴한 편이에요.\n" +
+            "③ 키를 복사해서 붙여넣으세요.",
+            "deepseek-chat"
         ),
         Provider(
             "xai", "xAI Grok", "https://api.x.ai/v1", "xai-…",
-            "console.x.ai에서 받은 API 키를 넣고, 모델 목록에서 모델을 고르세요.", ""
+            "https://console.x.ai",
+            "① 아래 버튼으로 xAI Console을 열고 가입·로그인하세요.\n" +
+            "② 'API Keys' 메뉴에서 키를 만드세요.\n" +
+            "③ 키를 복사해서 붙여넣고, '모델 목록 불러오기'로 모델을 고르세요.",
+            ""
         ),
         Provider(
             "local", "로컬 LLM (맥북)", "", "",
-            "맥북에서 Ollama나 LM Studio 서버를 켜고, 폰과 같은 와이파이에서 맥 주소를 넣으세요. 예: http://192.168.0.10:11434/v1",
+            "https://ollama.com/download",
+            "① 아래 버튼으로 Ollama를 맥북에 내려받아 설치하세요.\n" +
+            "② 맥 터미널에서 launchctl setenv OLLAMA_HOST \"0.0.0.0\" 실행 후 Ollama를 다시 켜세요.\n" +
+            "③ 폰과 같은 와이파이에서 맥 주소를 넣으세요. 예: http://192.168.0.10:11434/v1\n" +
+            "키는 비워두고, '모델 목록 불러오기'로 모델을 고르세요.",
             "", needsKey = false, editableUrl = true
         ),
         Provider(
-            "custom", "직접 입력 (OpenAI 호환)", "", "",
+            "custom", "직접 입력 (OpenAI 호환)", "", "", "",
             "OpenAI와 같은 형식을 쓰는 다른 서비스의 주소, 키, 모델 이름을 넣으세요.",
             "", needsKey = false, editableUrl = true
         )
