@@ -15,10 +15,12 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.text.InputType
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -72,6 +74,7 @@ class MainActivity : Activity() {
         Lang("Español", "es-ES", TranslateLanguage.SPANISH),
         Lang("中文", "zh-CN", TranslateLanguage.CHINESE)
     )
+    private val korean get() = langs[0]
     private val aliases = mapOf(
         "한국어" to TranslateLanguage.KOREAN, "일본어" to TranslateLanguage.JAPANESE,
         "영어" to TranslateLanguage.ENGLISH, "프랑스어" to TranslateLanguage.FRENCH,
@@ -86,16 +89,19 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var speakBox: CheckBox
     private lateinit var micButton: Button
+    private lateinit var chatInput: EditText
     private var hint: TextView? = null
 
     private var recognizer: SpeechRecognizer? = null
     private var translator: Translator? = null
+    private var chatTranslator: Translator? = null
+    private var chatPair = ""
     private var tts: TextToSpeech? = null
     private var listening = false
     private var committed = 0
     private var seq = 0
     private var nextToSpeak = 1
-    private val speechBuf = HashMap<Int, String?>()
+    private val speechBuf = HashMap<Int, Pair<String, String>?>()
     private var terms: List<Term> = emptyList()
     private val repaired = HashSet<String>()
     private val prefs by lazy { getSharedPreferences("interpreter", MODE_PRIVATE) }
@@ -114,6 +120,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         terms = parseTerms(prefs.getString("terms", DEFAULT_TERMS) ?: DEFAULT_TERMS)
 
         val labels = langs.map { it.label }
@@ -152,7 +159,7 @@ class MainActivity : Activity() {
 
         segments = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         hint = TextView(this).apply {
-            text = "언어를 고르고 시작을 누르세요. 번역문을 길게 누르면 선택해서 복사할 수 있어요."
+            text = "언어를 고르고 시작을 누르세요. 아래 입력창에 한국어를 쓰면 외국어로 번역해요. 번역문을 길게 누르면 복사할 수 있어요."
             textSize = 16f
             setTextColor(Color.GRAY)
         }
@@ -168,6 +175,28 @@ class MainActivity : Activity() {
             textSize = 14f
             setTextColor(Color.GRAY)
         }
+
+        chatInput = EditText(this).apply {
+            setHint("한국어로 입력하면 외국어로 번역해요")
+            textSize = 16f
+            setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEND
+            setOnEditorActionListener { _, actionId, event ->
+                val enter = event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
+                if (actionId == EditorInfo.IME_ACTION_SEND || enter) { sendChat(); true } else false
+            }
+        }
+        val sendButton = Button(this).apply {
+            text = "번역"
+            setOnClickListener { sendChat() }
+        }
+        val chatRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(chatInput, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(sendButton, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        }
+
         speakBox = CheckBox(this).apply { text = "음성으로 읽기" }
         val settingsButton = Button(this).apply {
             text = "설정"
@@ -194,6 +223,7 @@ class MainActivity : Activity() {
             addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
             addView(interimView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(statusView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            addView(chatRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(bottom, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         }
         setContentView(root)
@@ -201,6 +231,45 @@ class MainActivity : Activity() {
         fromSpinner.onItemSelectedListener = onChange
         toSpinner.onItemSelectedListener = onChange
         tts = TextToSpeech(this) { }
+    }
+
+    /* ---------- Typed chat ---------- */
+
+    // Translates typed Korean into whichever foreign language is selected.
+    private fun sendChat() {
+        val text = chatInput.text.toString().trim()
+        if (text.isEmpty()) return
+        val target = if (to.mlkit != TranslateLanguage.KOREAN) to else from
+        if (target.mlkit == TranslateLanguage.KOREAN) {
+            status("위쪽에서 번역할 외국어를 고르세요.")
+            return
+        }
+        chatInput.setText("")
+        val src = korean
+        val pair = src.mlkit + ">" + target.mlkit
+        val existing = chatTranslator
+        if (existing != null && chatPair == pair) {
+            translate(text, src, target, existing, typed = true)
+            return
+        }
+        chatTranslator?.close()
+        val t = Translation.getClient(
+            TranslatorOptions.Builder()
+                .setSourceLanguage(src.mlkit)
+                .setTargetLanguage(target.mlkit)
+                .build()
+        )
+        chatTranslator = t
+        chatPair = pair
+        if (!listening) status("채팅 번역 준비 중…")
+        t.downloadModelIfNeeded(DownloadConditions.Builder().build())
+            .addOnSuccessListener {
+                if (chatTranslator === t) {
+                    if (!listening) status("")
+                    translate(text, src, target, t, typed = true)
+                }
+            }
+            .addOnFailureListener { status("언어팩을 받지 못했어요. 인터넷 연결을 확인하세요.") }
     }
 
     /* ---------- Settings ---------- */
@@ -273,9 +342,9 @@ class MainActivity : Activity() {
         return Regex("[XxＸｘ]\\s*[ZzＺｚ]\\s*$digits(?![0-9０-９])")
     }
 
-    private fun prepare(src: String): Prepared {
+    private fun prepare(src: String, sl: Lang, tl: Lang): Prepared {
         var shown = src
-        if (from.mlkit == TranslateLanguage.KOREAN) {
+        if (sl.mlkit == TranslateLanguage.KOREAN) {
             for (t in terms) {
                 val key = t.names[TranslateLanguage.KOREAN] ?: continue
                 for (w in t.variants + key) shown = flex(w).replace(shown) { key }
@@ -284,13 +353,13 @@ class MainActivity : Activity() {
         var input = shown
         val codes = LinkedHashMap<Regex, String>()
         terms.forEachIndexed { i, t ->
-            val a = t.names[from.mlkit] ?: return@forEachIndexed
-            val pattern = if (from.mlkit == TranslateLanguage.KOREAN) flex(a)
+            val a = t.names[sl.mlkit] ?: return@forEachIndexed
+            val pattern = if (sl.mlkit == TranslateLanguage.KOREAN) flex(a)
                           else Regex(Regex.escape(a), RegexOption.IGNORE_CASE)
             if (!pattern.containsMatchIn(input)) return@forEachIndexed
             val n = i + 1
             input = pattern.replace(input) { "XZ$n" }
-            codes[codeRegex(n)] = t.names[to.mlkit] ?: t.names[TranslateLanguage.ENGLISH] ?: a
+            codes[codeRegex(n)] = t.names[tl.mlkit] ?: t.names[TranslateLanguage.ENGLISH] ?: a
         }
         return Prepared(shown, input, codes)
     }
@@ -340,17 +409,23 @@ class MainActivity : Activity() {
     }
 
     // Deletes and re-downloads the language packs once if output comes back in the wrong language.
-    private fun repairLanguagePack() {
-        if (!repaired.add(from.mlkit + ">" + to.mlkit)) return
+    private fun repairLanguagePack(src: String, tgt: String) {
+        if (!repaired.add("$src>$tgt")) return
+        val wasListening = listening
         stop()
         translator?.close()
         translator = null
+        chatTranslator?.close()
+        chatTranslator = null
+        chatPair = ""
         status("번역 결과가 이상해서 언어팩을 다시 받는 중이에요…")
         val mm = RemoteModelManager.getInstance()
-        val tasks = listOf(from.mlkit, to.mlkit)
+        val tasks = listOf(src, tgt)
             .filter { it != TranslateLanguage.ENGLISH }
             .map { mm.deleteDownloadedModel(TranslateRemoteModel.Builder(it).build()) }
-        Tasks.whenAllComplete(tasks).addOnCompleteListener { start() }
+        Tasks.whenAllComplete(tasks).addOnCompleteListener {
+            if (wasListening) start() else status("언어팩을 정리했어요. 다시 입력하면 새로 받아서 번역해요.")
+        }
     }
 
     /* ---------- Start / stop ---------- */
@@ -371,7 +446,6 @@ class MainActivity : Activity() {
         listening = true
         micButton.text = "정지"
         recent.clear()
-        tts?.language = Locale.forLanguageTag(to.speechTag)
 
         translator?.close()
         val t = Translation.getClient(
@@ -492,13 +566,20 @@ class MainActivity : Activity() {
 
     /* ---------- Translation ---------- */
 
-    private fun translate(raw: String) {
-        val t = translator ?: return
+    private fun translate(
+        raw: String,
+        sl: Lang = from,
+        tl: Lang = to,
+        mt: Translator? = translator,
+        typed: Boolean = false
+    ) {
+        val t = mt ?: return
         val id = ++seq
         hint?.let { segments.removeView(it); hint = null }
-        val p = prepare(raw)
-        val source = from.mlkit
-        val target = to.mlkit
+        val p = prepare(raw, sl, tl)
+        val source = sl.mlkit
+        val target = tl.mlkit
+        val voice = tl.speechTag
 
         val trView = TextView(this).apply {
             text = "…"
@@ -507,7 +588,7 @@ class MainActivity : Activity() {
             setTextIsSelectable(true)
         }
         val srcView = TextView(this).apply {
-            text = p.shown
+            text = if (typed) "✍ " + p.shown else p.shown
             textSize = 14f
             setTextColor(Color.GRAY)
             setTextIsSelectable(true)
@@ -522,45 +603,45 @@ class MainActivity : Activity() {
 
         val key = deeplKey
         if (key.isEmpty() || System.currentTimeMillis() < deeplBlockedUntil) {
-            viaMlKit(t, id, trView, p, source, target)
+            viaMlKit(t, id, trView, p, source, target, voice)
             return
         }
         net.execute {
             val result: Any = try { deepl(p.input, source, target, key, context) } catch (e: Exception) { e }
             runOnUiThread {
                 if (result is String) {
-                    showResult(id, trView, p.restore(result), target)
+                    showResult(id, trView, p.restore(result), target, voice)
                 } else {
                     deeplFailed(result as Exception)
-                    viaMlKit(t, id, trView, p, source, target)
+                    viaMlKit(t, id, trView, p, source, target, voice)
                 }
             }
         }
     }
 
-    private fun viaMlKit(t: Translator, id: Int, trView: TextView, p: Prepared, source: String, target: String) {
+    private fun viaMlKit(t: Translator, id: Int, trView: TextView, p: Prepared, source: String, target: String, voice: String) {
         t.translate(p.input)
             .addOnSuccessListener { raw ->
                 val tr = p.restore(raw)
                 if (!looksLike(tr, target) && looksLike(p.shown, source)) {
                     trView.text = "$tr\n(언어팩 오류 · 다시 받는 중)"
-                    queueSpeech(id, null)
-                    repairLanguagePack()
+                    queueSpeech(id, null, voice)
+                    repairLanguagePack(source, target)
                     return@addOnSuccessListener
                 }
-                showResult(id, trView, tr, target)
+                showResult(id, trView, tr, target, voice)
             }
             .addOnFailureListener {
                 trView.text = "번역 실패"
-                queueSpeech(id, null)
+                queueSpeech(id, null, voice)
             }
     }
 
-    private fun showResult(id: Int, trView: TextView, tr: String, target: String) {
+    private fun showResult(id: Int, trView: TextView, tr: String, target: String, voice: String) {
         trView.text = tr
         Pronouncer.attach(this, segments, trView, tr, target)
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-        queueSpeech(id, tr)
+        queueSpeech(id, tr, voice)
     }
 
     /* ---------- DeepL ---------- */
@@ -609,13 +690,14 @@ class MainActivity : Activity() {
 
     /* ---------- Speech output ---------- */
 
-    // Speak translations in the order the phrases were heard.
-    private fun queueSpeech(id: Int, text: String?) {
-        speechBuf[id] = text
+    // Speak translations in the order they were requested, each in its own language.
+    private fun queueSpeech(id: Int, text: String?, voice: String) {
+        speechBuf[id] = text?.let { it to voice }
         while (speechBuf.containsKey(nextToSpeak)) {
-            val t = speechBuf.remove(nextToSpeak)
-            if (t != null && speakBox.isChecked) {
-                tts?.speak(t, TextToSpeech.QUEUE_ADD, null, "seg$nextToSpeak")
+            val item = speechBuf.remove(nextToSpeak)
+            if (item != null && speakBox.isChecked) {
+                tts?.language = Locale.forLanguageTag(item.second)
+                tts?.speak(item.first, TextToSpeech.QUEUE_ADD, null, "seg$nextToSpeak")
             }
             nextToSpeak++
         }
@@ -628,6 +710,7 @@ class MainActivity : Activity() {
         listening = false
         recognizer?.destroy()
         translator?.close()
+        chatTranslator?.close()
         tts?.shutdown()
         net.shutdown()
         super.onDestroy()
