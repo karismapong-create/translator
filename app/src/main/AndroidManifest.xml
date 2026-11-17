@@ -31,5 +31,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".MicTestActivity"
+            android:label="마이크 진단"
+            android:exported="false"
+            android:screenOrientation="portrait" />
     </application>
 </manifest>
