@@ -99,6 +99,8 @@ object TalkText {
 
         "s_play" to m("▶ 전체 듣기", "▶ 全部聞く", "▶ Play all", "▶ Tout écouter", "▶ Escuchar todo", "▶ Alles abspielen", "▶ 全部播放"),
         "s_stop" to m("⏹ 멈추기", "⏹ 停止", "⏹ Stop", "⏹ Arrêter", "⏹ Detener", "⏹ Stopp", "⏹ 停止"),
+        "s_bg_playing" to m("상황별 회화 재생 중", "場面別会話を再生中", "Playing dialogue", "Lecture du dialogue", "Reproduciendo diálogo", "Dialog wird abgespielt", "正在播放情景对话"),
+        "s_bg_channel" to m("회화 재생", "会話の再生", "Dialogue playback", "Lecture des dialogues", "Reproducción de diálogos", "Dialogwiedergabe", "对话播放"),
         "s_resume" to m("▶ 이어서 듣기", "▶ 続きから聞く", "▶ Resume", "▶ Reprendre", "▶ Continuar", "▶ Fortsetzen", "▶ 继续播放"),
         "s_practice" to m("🎭 이 상황으로 연습", "🎭 この場面で練習", "🎭 Practice this", "🎭 S'entraîner", "🎭 Practicar esto", "🎭 Das üben", "🎭 练习这个情景"),
         "s_disclaimer" to m("참고용 예문이에요. 실제 절차나 표현은 장소마다 다를 수 있어요.", "参考用の例文です。実際の手続きや表現は場所によって異なることがあります。", "Sample dialogue for reference. Real procedures and wording may differ.", "Dialogue indicatif. Les procédures réelles peuvent varier.", "Diálogo de referencia. Los procedimientos reales pueden variar.", "Beispieldialog zur Orientierung. Abläufe können abweichen.", "示例对话仅供参考，实际流程和表达可能不同。"),
