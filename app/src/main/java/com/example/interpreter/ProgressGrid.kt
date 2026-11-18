@@ -14,10 +14,11 @@ class ProgressGrid(context: Context) : View(context) {
     private var rows: List<IntArray> = emptyList()
     private var names: List<String> = emptyList()
     private val d = resources.displayMetrics.density
-    private val cell = 18 * d
+    // Cell size follows the width the dialog gives, so all 11 cells always fit on screen.
+    private var cell = 18 * d
     private val gap = 3 * d
-    private val labelW = 96 * d
-    private val rowH = cell + gap
+    private val labelW = 92 * d
+    private val rowH get() = cell + gap
     private val box = RectF()
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -33,9 +34,11 @@ class ProgressGrid(context: Context) : View(context) {
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = (labelW + 11 * (cell + gap) + gap).toInt()
+        val wanted = (labelW + 11 * (18 * d + gap)).toInt()
+        val w = resolveSize(wanted, widthMeasureSpec)
+        cell = ((w - labelW - 11 * gap) / 11f).coerceIn(8 * d, 18 * d)
         val h = (rows.size * rowH + gap).toInt()
-        setMeasuredDimension(resolveSize(w, widthMeasureSpec), h)
+        setMeasuredDimension(w, h)
     }
 
     override fun onDraw(canvas: Canvas) {

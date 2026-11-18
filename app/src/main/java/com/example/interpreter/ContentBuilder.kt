@@ -737,6 +737,7 @@ object ContentBuilder {
                     progress.text = "${native(f)} + ${native(m)} 뜻 · 완료 $count / $total (${count * 100 / total}%)" +
                         if (running) "\n만드는 중: $runningCombo" else ""
                     grid.set(names, rows)
+                    gridNote.text = "위에서 고른 ${native(f)} 대화 + ${native(m)} 뜻 기준 · 줄마다 장소 · ● 질문 목록, ■ 대화 1~10"
                     if (msg != null) status.text = msg
                 }
             }.start()
