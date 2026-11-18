@@ -95,7 +95,8 @@ object Providers {
             "https://ollama.com/download",
             "① 아래 버튼으로 Ollama를 맥북에 내려받아 설치하세요.\n" +
             "② 맥 터미널에서 launchctl setenv OLLAMA_HOST \"0.0.0.0\" 실행 후 Ollama를 다시 켜세요.\n" +
-            "③ 폰과 같은 와이파이에서 맥 주소를 넣으세요. 예: http://192.168.0.10:11434/v1\n" +
+            "③ 맥 주소를 넣으세요. 같은 와이파이: http://192.168.0.10:11434/v1\n" +
+            "   WireGuard로 연결 중이면 맥의 WireGuard 주소: http://10.0.0.2:11434/v1\n" +
             "키는 비워두고, '모델 목록 불러오기'로 모델을 고르세요.",
             "", needsKey = false, editableUrl = true
         ),

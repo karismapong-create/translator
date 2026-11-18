@@ -37,7 +37,9 @@ class ConversationView(
     private val prefs: SharedPreferences,
     langs: List<LangInfo>,
     private val speak: (String, String) -> Unit,
-    private val stopSpeaking: () -> Unit
+    private val stopSpeaking: () -> Unit,
+    // Speaks after whatever is playing, instead of cutting it off.
+    private val speakAfter: ((String, String) -> Unit)? = null
 ) : LinearLayout(activity) {
 
     private class Topic(val key: String, val role: String, val scene: String)
@@ -72,6 +74,9 @@ class ConversationView(
     private var lang: LangInfo = foreignLangs.first()
     private var system = ""
     private var hintSystem = ""
+    // The last hint shown, and whether my own line is being read out this turn.
+    private var lastHint = ""
+    private var spokeMine = false
     private val turns = ArrayList<Pair<String, String>>()
     private var busy = false
     private var session = 0
@@ -410,16 +415,19 @@ class ConversationView(
         val t = input.text.toString().trim()
         if (t.isEmpty()) return
         input.setText("")
-        sendUser(t)
+        sendUser(t, typed = true)
     }
 
-    private fun sendUser(text: String) {
+    private fun sendUser(text: String, typed: Boolean = false) {
         if (busy) {
             toast(TalkText.t("busy"))
             return
         }
         lastUserBox = addUser(text)
         turns.add("user" to text)
+        // A sent hint (or any line in the language I practise) is read out, so I hear how it sounds.
+        spokeMine = autoSpeak.isChecked && (text == lastHint || (typed && LangCheck.looks(text, lang.code)))
+        if (spokeMine) speak(text, lang.voice)
         ask()
     }
 
@@ -454,7 +462,11 @@ class ConversationView(
             }
         }
         addAi(reply, meaning)
-        if (autoSpeak.isChecked) speak(reply, lang.voice)
+        if (autoSpeak.isChecked) {
+            val after = speakAfter
+            if (spokeMine && after != null) after(reply, lang.voice) else speak(reply, lang.voice)
+        }
+        spokeMine = false
     }
 
     private fun showError(e: Exception) {
@@ -473,6 +485,7 @@ class ConversationView(
     private fun addUser(text: String): LinearLayout {
         val box = bubble(Ui.SURFACE)
         box.addView(text("🙋 $text", 17f))
+        if (LangCheck.looks(text, lang.code)) box.addView(row(action(TalkText.t("listen")) { speak(text, lang.voice) }))
         messages.addView(box, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
             setMargins(dp(40), dp(10), 0, 0)
         })
@@ -549,6 +562,7 @@ class ConversationView(
             textSize = 13f
             setTypeface(null, Typeface.BOLD)
         })
+        lastHint = say
         val sayView = text(say, 17f, Color.BLACK, true)
         box.addView(sayView)
         if (meaning.isNotEmpty()) box.addView(text(meaning, 14f, blue))
