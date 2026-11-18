@@ -195,5 +195,12 @@ object Ui {
         root.requestApplyInsets()
     }
 
+    // Position in parent of the child that holds view (the view itself or a row around it).
+    fun childIndexOf(parent: ViewGroup, view: View): Int {
+        var v: View = view
+        while (v.parent !== parent) v = (v.parent as? View) ?: return parent.childCount - 1
+        return parent.indexOfChild(v)
+    }
+
     fun bold(tv: TextView) = tv.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
 }

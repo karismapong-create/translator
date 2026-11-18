@@ -21,7 +21,7 @@ object Pronouncer {
             textSize = 18f
             setTextColor(Color.rgb(47, 91, 234))
         }
-        parent.addView(view, parent.indexOfChild(anchor) + 1)
+        parent.addView(view, Ui.childIndexOf(parent, anchor) + 1)
         worker.execute {
             val result = try { toHangul(activity, text, lang) } catch (e: Throwable) { null }
             activity.runOnUiThread {

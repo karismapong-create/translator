@@ -20,7 +20,8 @@ import java.util.WeakHashMap
 //    own audio track, wait for the output to open, and keep it open while speech continues.
 object SpeechOut {
     const val WARM_ID = "warmup"
-    private const val WAKE_MS = 350L      // time for the output to open from cold
+    private const val WAKE_MS = 600L      // time for the output to open from cold (some phones are slow)
+    private const val LEAD_MS = 220L      // silence the voice engine plays before a fresh start
     private const val IDLE_MS = 8000L     // keep the output open this long after the last speech
 
     private val main = Handler(Looper.getMainLooper())
@@ -93,8 +94,16 @@ object SpeechOut {
         engine.setSpeechRate(1.0f)
         // Only when the phone has a single voice: a light pitch change to tell speakers apart.
         engine.setPitch(if (distinct) 1.0f else 0.9f)
-        engine.speak(text, mode, null, id)
+        // A fresh start opens the voice engine's own audio, which fades in; a moment of silence in
+        // front of the first sentence takes that fade instead of its first syllable.
+        if (mode == TextToSpeech.QUEUE_FLUSH || !engine.isSpeaking) {
+            engine.playSilentUtterance(LEAD_MS, mode, WARM_ID)
+            engine.speak(text, TextToSpeech.QUEUE_ADD, null, id)
+        } else {
+            engine.speak(text, mode, null, id)
+        }
     }
+
 
     // Stops speech, including a start that is still waiting for the audio output to wake.
     fun stop(engine: TextToSpeech?) {
