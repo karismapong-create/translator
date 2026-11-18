@@ -85,14 +85,14 @@ class PlaybackService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_play_arrow)
+            .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(TalkText.t("s_bg_playing"))
             .setContentText(title)
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(
                 Notification.Action.Builder(
-                    Icon.createWithResource(this, R.drawable.ic_stop), TalkText.t("s_stop"), stop
+                    Icon.createWithResource(this, android.R.drawable.ic_media_pause), TalkText.t("s_stop"), stop
                 ).build()
             )
             .build()
