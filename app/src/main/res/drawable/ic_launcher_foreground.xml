@@ -5,6 +5,8 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Scaled into the adaptive-icon safe zone (66dp circle) so no launcher crops the cap or feet. -->
+    <group android:pivotX="54" android:pivotY="55" android:scaleX="0.84" android:scaleY="0.84">
     <!-- wings, one waving -->
     <path android:fillColor="#6D4329" android:pathData="M26,64 Q24,79 35,83 Q37,72 33,60Z" />
     <path android:fillColor="#6D4329" android:pathData="M82,58 Q90,52 88,44 Q78,46 75,58Z" />
@@ -71,5 +73,6 @@
             android:pathData="M54,29 L75,31.5 L75,40" />
         <path android:fillColor="#FFB300" android:pathData="M52.4,29 a1.6,1.6 0 1,0 3.2,0 a1.6,1.6 0 1,0 -3.2,0Z" />
         <path android:fillColor="#FFB300" android:pathData="M73,40 L77,40 L78.3,46.5 L71.7,46.5Z" />
+    </group>
     </group>
 </vector>

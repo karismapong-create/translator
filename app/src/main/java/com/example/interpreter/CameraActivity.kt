@@ -167,6 +167,7 @@ class CameraActivity : ComponentActivity() {
             addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
         }
         setContentView(root)
+        Ui.watch(root)
 
         val onChange = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) = setupLanguages()
@@ -408,7 +409,7 @@ class CameraActivity : ComponentActivity() {
             .setPositiveButton(CamText.t("c_save")) { _, _ -> save(b) }
             .setNeutralButton(VocabText.t("copy")) { _, _ -> copy(b.tr) }
             .setNegativeButton(I18n.t("close"), null)
-            .show()
+            .show().also { Ui.watch(it) }
     }
 
     // Saves the foreign text with its meaning in my language, in the word list's format.

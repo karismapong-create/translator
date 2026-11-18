@@ -51,7 +51,7 @@ object SpeechOut {
 
     // alt = true picks a second voice (for the other speaker) when the phone has one.
     // Returns true when a distinct voice was found for alt, so callers can skip pitch tricks.
-    private fun useVoice(engine: TextToSpeech, tag: String, alt: Boolean): Boolean {
+    fun useVoice(engine: TextToSpeech, tag: String, alt: Boolean = false): Boolean {
         val voices = offlineVoices(engine, tag)
         val v = if (alt && voices.size > 1) voices[1] else voices.firstOrNull()
         val key = v?.name ?: "locale:$tag"

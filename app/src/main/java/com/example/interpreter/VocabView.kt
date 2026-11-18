@@ -301,7 +301,7 @@ class VocabView(
                     else -> delete(item)
                 }
             }
-            .show()
+            .show().also { Ui.watch(it) }
     }
 
     private fun delete(item: Item) {
@@ -357,7 +357,7 @@ class VocabView(
         val engine = WordExplainer.llmEngine(prefs)
         val waiting = AlertDialog.Builder(context)
             .setMessage(VocabText.f("making_detail", WordExplainer.label(engine ?: "")))
-            .show()
+            .show().also { Ui.watch(it) }
 
         fun deliver(r: WordExplainer.Result) {
             waiting.dismiss()
@@ -438,14 +438,14 @@ class VocabView(
             .setView(ScrollView(context).apply { addView(box) })
             .setPositiveButton(I18n.t("close"), null)
             .setNeutralButton(VocabText.t("regen")) { _, _ -> openDetail(item, force = true) }
-            .show()
+            .show().also { Ui.watch(it) }
     }
 
     private fun wordCard(item: Item, w: WordExplainer.Word): View {
         val card = LinearLayout(context).apply {
             orientation = VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundColor(Color.argb(20, 47, 91, 234))
+            background = Ui.rounded(Ui.PRIMARY_SOFT, 16, context)
         }
         val head = buildString {
             append(w.word)
@@ -589,7 +589,7 @@ class VocabView(
             .setItems(options.toTypedArray()) { _, which ->
                 if (which == 3) launchQuiz(retry, QuizView.PICK_MEANING) else launchQuiz(shown, which)
             }
-            .show()
+            .show().also { Ui.watch(it) }
     }
 
     private fun launchQuiz(pool: List<Item>, mode: Int) {

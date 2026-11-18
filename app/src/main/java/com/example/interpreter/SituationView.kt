@@ -43,44 +43,12 @@ class SituationView(
 ) : LinearLayout(activity) {
 
     // names: "ko|ja|en|fr|es|de|zh"
-    private class Place(val emoji: String, val names: String, val en: String, val role: String, val staff: String)
     private class Question(val title: String, val phrase: String, val meaning: String)
     private class Line(val who: String, val text: String, val meaning: String) {
         val me: Boolean get() = who.equals("A", true)
     }
 
-    private val places = listOf(
-        Place("✈️", "공항 체크인|空港チェックイン|Airport check-in|Enregistrement à l'aéroport|Facturación en el aeropuerto|Flughafen-Check-in|机场值机", "an airport check-in counter", "an airline check-in agent", "항공사 직원"),
-        Place("🛂", "출입국심사대|入国審査|Immigration|Contrôle des passeports|Control de inmigración|Passkontrolle|出入境检查", "immigration passport control", "an immigration officer", "심사관"),
-        Place("🧳", "세관|税関|Customs|Douane|Aduana|Zoll|海关", "customs inspection at the airport", "a customs officer", "세관 직원"),
-        Place("🛍️", "면세점|免税店|Duty-free shop|Boutique hors taxes|Tienda libre de impuestos|Duty-free-Shop|免税店", "a duty-free shop", "a duty-free shop clerk", "점원"),
-        Place("💱", "환전소·은행|両替所・銀行|Exchange & bank|Change et banque|Cambio y banco|Wechselstube & Bank|换汇处·银行", "a currency exchange and bank", "a bank teller", "은행 직원"),
-        Place("🚇", "지하철|地下鉄|Subway|Métro|Metro|U-Bahn|地铁", "a subway station", "a station staff member", "역무원"),
-        Place("🚌", "버스 정류장|バス停|Bus stop|Arrêt de bus|Parada de autobús|Bushaltestelle|公交车站", "a bus stop and city bus", "a bus driver", "버스 기사"),
-        Place("🚆", "기차역|駅|Train station|Gare|Estación de tren|Bahnhof|火车站", "a train station ticket office", "a ticket office clerk", "매표 직원"),
-        Place("🚕", "택시|タクシー|Taxi|Taxi|Taxi|Taxi|出租车", "a taxi ride", "a taxi driver", "택시 기사"),
-        Place("🚗", "렌터카 업체|レンタカー|Car rental|Location de voiture|Alquiler de coches|Autovermietung|租车公司", "a car rental counter", "a car rental agent", "렌터카 직원"),
-        Place("🏨", "호텔|ホテル|Hotel|Hôtel|Hotel|Hotel|酒店", "a hotel front desk", "a hotel front desk clerk", "프런트 직원"),
-        Place("🍽️", "음식점|レストラン|Restaurant|Restaurant|Restaurante|Restaurant|餐厅", "a restaurant", "a restaurant server", "점원"),
-        Place("☕", "카페|カフェ|Café|Café|Cafetería|Café|咖啡馆", "a café", "a barista", "바리스타"),
-        Place("🏪", "편의점|コンビニ|Convenience store|Supérette|Tienda de conveniencia|Kiosk|便利店", "a convenience store", "a convenience store clerk", "점원"),
-        Place("🛒", "슈퍼마켓|スーパー|Supermarket|Supermarché|Supermercado|Supermarkt|超市", "a supermarket", "a supermarket staff member", "직원"),
-        Place("👕", "옷가게|洋服店|Clothing store|Magasin de vêtements|Tienda de ropa|Bekleidungsgeschäft|服装店", "a clothing store", "a clothing store clerk", "점원"),
-        Place("💊", "약국|薬局|Pharmacy|Pharmacie|Farmacia|Apotheke|药店", "a pharmacy", "a pharmacist", "약사"),
-        Place("🏥", "병원|病院|Hospital|Hôpital|Hospital|Krankenhaus|医院", "a hospital or clinic, from reception to the doctor", "a hospital receptionist and doctor", "병원 직원"),
-        Place("🚻", "화장실 찾기|トイレを探す|Finding a restroom|Trouver des toilettes|Buscar un baño|Toilette finden|找洗手间", "finding and using public restrooms", "a passerby or shop staff member", "현지인"),
-        Place("ℹ️", "관광안내소|観光案内所|Tourist information|Office de tourisme|Oficina de turismo|Touristeninformation|游客服务中心", "a tourist information center", "a tourist information staff member", "안내 직원"),
-        Place("🏛️", "박물관|博物館|Museum|Musée|Museo|Museum|博物馆", "a museum", "a museum staff member", "직원"),
-        Place("🎢", "놀이공원|遊園地|Amusement park|Parc d'attractions|Parque de atracciones|Freizeitpark|游乐园", "an amusement park", "an amusement park staff member", "직원"),
-        Place("🏊", "수영장|プール|Swimming pool|Piscine|Piscina|Schwimmbad|游泳池", "a swimming pool", "a pool staff member", "직원"),
-        Place("♨️", "온천|温泉|Hot spring|Source chaude|Aguas termales|Therme|温泉", "a hot spring bath", "a hot spring staff member", "직원"),
-        Place("🏖️", "해변|ビーチ|Beach|Plage|Playa|Strand|海滩", "a beach with rentals", "a lifeguard or beach rental staff member", "직원"),
-        Place("⛰️", "산|山|Mountain|Montagne|Montaña|Berg|山", "a mountain hiking area", "a mountain hut staff member", "산장 직원"),
-        Place("🥾", "트레킹 코스|トレッキングコース|Trekking trail|Sentier de randonnée|Ruta de senderismo|Wanderweg|徒步路线", "a trekking trail", "a trail guide", "가이드"),
-        Place("🏞️", "호수|湖|Lake|Lac|Lago|See|湖", "a lake with boat rentals", "a boat rental staff member", "직원"),
-        Place("👮", "경찰서·분실물|警察・遺失物|Police & lost and found|Police et objets trouvés|Policía y objetos perdidos|Polizei & Fundbüro|警察局·失物招领", "a police station and lost and found office", "a police officer", "경찰관"),
-        Place("💇", "미용실|美容院|Hair salon|Salon de coiffure|Peluquería|Friseur|理发店", "a hair salon", "a hairdresser", "미용사")
-    )
+    private val places = Places.all
     private val nameOrder = listOf("ko", "ja", "en", "fr", "es", "de", "zh")
 
     private companion object {
@@ -91,8 +59,8 @@ class SituationView(
     }
 
     private val home: Lang = Languages.home(prefs)
-    private val blue = Color.rgb(47, 91, 234)
-    private val highlightColor = Color.argb(80, 255, 200, 0)
+    private val blue = Ui.PRIMARY
+    private val highlightColor = Color.rgb(255, 241, 204)
     private val wordColor = Color.argb(230, 255, 160, 0)
     private val density = resources.displayMetrics.density
     private val net = Executors.newSingleThreadExecutor()
@@ -140,8 +108,9 @@ class SituationView(
         orientation = VERTICAL
 
         titleView = TextView(activity).apply {
-            textSize = 16f
-            setTypeface(null, Typeface.BOLD)
+            textSize = 18f
+            setTextColor(Ui.INK)
+            Ui.bold(this)
             setPadding(dp(6), 0, dp(6), 0)
             setOnLongClickListener {
                 if (screen == 0) {
@@ -173,7 +142,7 @@ class SituationView(
             val rowLayout = LinearLayout(activity).apply { orientation = HORIZONTAL }
             row.forEach { p ->
                 rowLayout.addView(placeButton(p), LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-                    setMargins(dp(3), dp(3), dp(3), dp(3))
+                    setMargins(dp(4), dp(4), dp(4), dp(4))
                 })
             }
             repeat(3 - row.size) { rowLayout.addView(View(activity), LayoutParams(0, 0, 1f)) }
@@ -246,12 +215,20 @@ class SituationView(
         setOnClickListener { onClick(this) }
     }
 
+    // A place tile: icon in a soft circle above the name, on a white card.
     private fun placeButton(p: Place) = TextView(activity).apply {
-        text = "${p.emoji}\n${placeName(p)}"
-        textSize = 14f
+        val res = Ui.iconRes(p.emoji)
+        text = if (res != null) placeName(p) else "${p.emoji}\n${placeName(p)}"
+        textSize = 13.5f
+        setTextColor(Ui.INK)
         gravity = Gravity.CENTER
-        setPadding(dp(4), dp(14), dp(4), dp(14))
-        setBackgroundColor(Color.argb(18, 47, 91, 234))
+        maxLines = 2
+        setPadding(dp(6), dp(14), dp(6), dp(12))
+        if (res != null) {
+            setCompoundDrawables(null, Ui.circleIcon(activity, res, 48), null, null)
+            compoundDrawablePadding = dp(8)
+        }
+        background = Ui.pressable(activity)
         setOnClickListener { openPlace(p) }
     }
 
@@ -397,18 +374,20 @@ class SituationView(
         qs.forEachIndexed { i, q ->
             val row = LinearLayout(activity).apply {
                 orientation = VERTICAL
-                setPadding(dp(12), dp(10), dp(12), dp(10))
-                setBackgroundColor(Color.argb(14, 0, 0, 0))
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                background = Ui.pressable(activity)
                 setOnClickListener { openDialogue(i) }
                 addView(TextView(activity).apply {
                     text = "${i + 1}. ${q.title}"
-                    textSize = 17f
-                    setTypeface(null, Typeface.BOLD)
+                    textSize = 16f
+                    setTextColor(Ui.INK)
+                    Ui.bold(this)
                 })
                 addView(TextView(activity).apply {
                     text = q.phrase
                     textSize = 15f
-                    setTextColor(Color.DKGRAY)
+                    setTextColor(Ui.INK_SOFT)
+                    setPadding(0, dp(2), 0, 0)
                 })
                 if (q.meaning.isNotEmpty()) addView(TextView(activity).apply {
                     text = q.meaning
@@ -513,7 +492,11 @@ class SituationView(
         }
     }
 
-    private fun baseColor(line: Line) = if (line.me) Color.argb(25, 47, 91, 234) else Color.argb(14, 0, 0, 0)
+    private fun baseColor(line: Line) = if (line.me) Ui.PRIMARY_SOFT else Ui.SURFACE
+
+    // Chat-style bubble: my lines soft blue, the other side white with a hairline border.
+    private fun bubble(fill: Int, line: Line) =
+        Ui.rounded(fill, 18, activity, if (line.me || fill != Ui.SURFACE) 0 else Ui.LINE)
 
     private fun renderDialogue(p: Place, q: Question, ls: List<Line>, tips: String) {
         lines = ls
@@ -526,6 +509,7 @@ class SituationView(
             }
         }
         playButton = play
+        Ui.primary(play)
         val practice = button(TalkText.t("s_practice")) {
             stopPlay()
             onRolePlay(lang, "${p.en} — ${q.title} (${q.phrase})", p.role, "${p.emoji} ${placeName(p)} · ${q.title}")
@@ -549,9 +533,10 @@ class SituationView(
             dialogueBox.addView(TextView(activity).apply {
                 text = "💡 $tips"
                 textSize = 14f
-                setTextColor(Color.DKGRAY)
-                setPadding(dp(4), dp(16), dp(4), dp(8))
-            })
+                setTextColor(Color.rgb(122, 82, 0))
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = Ui.rounded(Color.rgb(255, 247, 228), 16, activity)
+            }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
         }
         dialogueBox.addView(button(TalkText.t("s_regen_d")) { loadDialogue(true) })
         dialogueScroll.post { dialogueScroll.scrollTo(0, 0) }
@@ -560,8 +545,8 @@ class SituationView(
     private fun lineCard(i: Int, line: Line, p: Place): View {
         val card = LinearLayout(activity).apply {
             orientation = VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            setBackgroundColor(baseColor(line))
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = bubble(baseColor(line), line)
             setOnClickListener { lineTapped(i) }
             setOnLongClickListener {
                 openWordPicker(line)
@@ -612,7 +597,7 @@ class SituationView(
     }
 
     private fun highlight(i: Int) {
-        cards.forEachIndexed { k, c -> c.setBackgroundColor(if (k == i) highlightColor else baseColor(lines[k])) }
+        cards.forEachIndexed { k, c -> c.background = bubble(if (k == i) highlightColor else baseColor(lines[k]), lines[k]) }
         if (i in cards.indices) {
             val top = cards[i].top
             dialogueScroll.post { dialogueScroll.smoothScrollTo(0, (top - dp(60)).coerceAtLeast(0)) }
@@ -790,9 +775,9 @@ class SituationView(
                     chips.addView(TextView(activity).apply {
                         text = w
                         textSize = 16f
-                        setTextColor(Color.BLACK)
-                        setPadding(dp(12), dp(8), dp(12), dp(8))
-                        setBackgroundColor(Color.argb(30, 47, 91, 234))
+                        setTextColor(Ui.INK)
+                        setPadding(dp(14), dp(8), dp(14), dp(8))
+                        background = Ui.pressable(activity, Ui.PRIMARY_SOFT, 20, 0)
                         setOnClickListener {
                             saveWord(w, line, l)
                             text = "✔ $w"
@@ -808,7 +793,7 @@ class SituationView(
             .setTitle(TalkText.t("w_title"))
             .setView(ScrollView(activity).apply { addView(box) })
             .setPositiveButton(I18n.t("close"), null)
-            .show()
+            .show().also { Ui.watch(it) }
     }
 
     // Saves a word with its meaning in my language, using the line as the example.
@@ -878,5 +863,51 @@ class SituationView(
         tts?.shutdown()
         tts = null
         super.onDetachedFromWindow()
+    }
+}
+
+// A place in the phrasebook. names: "ko|ja|en|fr|es|de|zh".
+class Place(val emoji: String, val names: String, val en: String, val role: String, val staff: String)
+
+// The phrasebook places, also used as scenes for live conversation.
+object Places {
+    val all = listOf(
+        Place("✈️", "공항 체크인|空港チェックイン|Airport check-in|Enregistrement à l'aéroport|Facturación en el aeropuerto|Flughafen-Check-in|机场值机", "an airport check-in counter", "an airline check-in agent", "항공사 직원"),
+        Place("🛂", "출입국심사대|入国審査|Immigration|Contrôle des passeports|Control de inmigración|Passkontrolle|出入境检查", "immigration passport control", "an immigration officer", "심사관"),
+        Place("🧳", "세관|税関|Customs|Douane|Aduana|Zoll|海关", "customs inspection at the airport", "a customs officer", "세관 직원"),
+        Place("🛍️", "면세점|免税店|Duty-free shop|Boutique hors taxes|Tienda libre de impuestos|Duty-free-Shop|免税店", "a duty-free shop", "a duty-free shop clerk", "점원"),
+        Place("💱", "환전소·은행|両替所・銀行|Exchange & bank|Change et banque|Cambio y banco|Wechselstube & Bank|换汇处·银行", "a currency exchange and bank", "a bank teller", "은행 직원"),
+        Place("🚇", "지하철|地下鉄|Subway|Métro|Metro|U-Bahn|地铁", "a subway station", "a station staff member", "역무원"),
+        Place("🚌", "버스 정류장|バス停|Bus stop|Arrêt de bus|Parada de autobús|Bushaltestelle|公交车站", "a bus stop and city bus", "a bus driver", "버스 기사"),
+        Place("🚆", "기차역|駅|Train station|Gare|Estación de tren|Bahnhof|火车站", "a train station ticket office", "a ticket office clerk", "매표 직원"),
+        Place("🚕", "택시|タクシー|Taxi|Taxi|Taxi|Taxi|出租车", "a taxi ride", "a taxi driver", "택시 기사"),
+        Place("🚗", "렌터카 업체|レンタカー|Car rental|Location de voiture|Alquiler de coches|Autovermietung|租车公司", "a car rental counter", "a car rental agent", "렌터카 직원"),
+        Place("🏨", "호텔|ホテル|Hotel|Hôtel|Hotel|Hotel|酒店", "a hotel front desk", "a hotel front desk clerk", "프런트 직원"),
+        Place("🍽️", "음식점|レストラン|Restaurant|Restaurant|Restaurante|Restaurant|餐厅", "a restaurant", "a restaurant server", "점원"),
+        Place("☕", "카페|カフェ|Café|Café|Cafetería|Café|咖啡馆", "a café", "a barista", "바리스타"),
+        Place("🏪", "편의점|コンビニ|Convenience store|Supérette|Tienda de conveniencia|Kiosk|便利店", "a convenience store", "a convenience store clerk", "점원"),
+        Place("🛒", "슈퍼마켓|スーパー|Supermarket|Supermarché|Supermercado|Supermarkt|超市", "a supermarket", "a supermarket staff member", "직원"),
+        Place("👕", "옷가게|洋服店|Clothing store|Magasin de vêtements|Tienda de ropa|Bekleidungsgeschäft|服装店", "a clothing store", "a clothing store clerk", "점원"),
+        Place("💊", "약국|薬局|Pharmacy|Pharmacie|Farmacia|Apotheke|药店", "a pharmacy", "a pharmacist", "약사"),
+        Place("🏥", "병원|病院|Hospital|Hôpital|Hospital|Krankenhaus|医院", "a hospital or clinic, from reception to the doctor", "a hospital receptionist and doctor", "병원 직원"),
+        Place("🚻", "화장실 찾기|トイレを探す|Finding a restroom|Trouver des toilettes|Buscar un baño|Toilette finden|找洗手间", "finding and using public restrooms", "a passerby or shop staff member", "현지인"),
+        Place("ℹ️", "관광안내소|観光案内所|Tourist information|Office de tourisme|Oficina de turismo|Touristeninformation|游客服务中心", "a tourist information center", "a tourist information staff member", "안내 직원"),
+        Place("🏛️", "박물관|博物館|Museum|Musée|Museo|Museum|博物馆", "a museum", "a museum staff member", "직원"),
+        Place("🎢", "놀이공원|遊園地|Amusement park|Parc d'attractions|Parque de atracciones|Freizeitpark|游乐园", "an amusement park", "an amusement park staff member", "직원"),
+        Place("🏊", "수영장|プール|Swimming pool|Piscine|Piscina|Schwimmbad|游泳池", "a swimming pool", "a pool staff member", "직원"),
+        Place("♨️", "온천|温泉|Hot spring|Source chaude|Aguas termales|Therme|温泉", "a hot spring bath", "a hot spring staff member", "직원"),
+        Place("🏖️", "해변|ビーチ|Beach|Plage|Playa|Strand|海滩", "a beach with rentals", "a lifeguard or beach rental staff member", "직원"),
+        Place("⛰️", "산|山|Mountain|Montagne|Montaña|Berg|山", "a mountain hiking area", "a mountain hut staff member", "산장 직원"),
+        Place("🥾", "트레킹 코스|トレッキングコース|Trekking trail|Sentier de randonnée|Ruta de senderismo|Wanderweg|徒步路线", "a trekking trail", "a trail guide", "가이드"),
+        Place("🏞️", "호수|湖|Lake|Lac|Lago|See|湖", "a lake with boat rentals", "a boat rental staff member", "직원"),
+        Place("👮", "경찰서·분실물|警察・遺失物|Police & lost and found|Police et objets trouvés|Policía y objetos perdidos|Polizei & Fundbüro|警察局·失物招领", "a police station and lost and found office", "a police officer", "경찰관"),
+        Place("💇", "미용실|美容院|Hair salon|Salon de coiffure|Peluquería|Friseur|理发店", "a hair salon", "a hairdresser", "미용사")
+    )
+
+    private val order = listOf("ko", "ja", "en", "fr", "es", "de", "zh")
+
+    fun name(p: Place, home: String): String {
+        val parts = p.names.split("|")
+        return parts.getOrNull(order.indexOf(home).coerceAtLeast(0)) ?: parts[2]
     }
 }

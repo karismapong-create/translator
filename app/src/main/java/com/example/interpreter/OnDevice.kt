@@ -239,7 +239,7 @@ object OnDevice {
             .setTitle(NanoText.t("label"))
             .setView(ScrollView(activity).apply { addView(box) })
             .setPositiveButton(I18n.t("close"), null)
-            .show()
+            .show().also { Ui.watch(it) }
         useButton.setOnClickListener {
             dialog.dismiss()
             onUse(ID)
