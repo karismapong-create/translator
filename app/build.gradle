@@ -13,6 +13,15 @@ android {
         versionCode = 5
         versionName = "1.4"
     }
+    // Every build is signed with the same key (keystore.b64), so new APKs install over the old app.
+    signingConfigs {
+        debug {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

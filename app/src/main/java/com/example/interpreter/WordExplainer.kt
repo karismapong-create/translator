@@ -84,6 +84,20 @@ object WordExplainer {
 
     fun llmEngine(prefs: SharedPreferences): String? = Providers.llmEngine(prefs)
 
+    // Words worth saving from a sentence, in dictionary form, for one-tap saving. Runs on a background thread.
+    fun candidates(text: String, code: String): List<String> = try {
+        when (code) {
+            "ja" -> tokenizer.tokenize(text)
+                .filter { it.partOfSpeechLevel1 !in setOf("記号", "助詞", "助動詞") }
+                .map { t -> t.baseForm.takeIf { it != null && it != "*" } ?: t.surface }
+            "zh" -> emptyList()
+            else -> text.split(Regex("\\s+"))
+                .map { w -> w.trim { c -> !c.isLetterOrDigit() && c != '\'' && c != '-' } }
+        }.filter { it.isNotBlank() }.distinct()
+    } catch (_: Throwable) {
+        emptyList()
+    }
+
     fun label(id: String) = if (id.isEmpty()) OFFLINE else Providers.label(id)
 
     /* ---------- LLM explanation ---------- */

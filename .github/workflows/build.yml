@@ -18,11 +18,16 @@ jobs:
         run: |
           mkdir -p ~/.android
           base64 -di keystore.b64 > ~/.android/debug.keystore
+          base64 -di keystore.b64 > app/debug.keystore
       - name: Download English pronunciation dictionary
         run: |
           mkdir -p app/src/main/assets
           curl -fsSL -o app/src/main/assets/cmudict.dict https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
       - run: gradle assembleDebug -Pandroid.useAndroidX=true --no-daemon
+      - name: Show signing key fingerprint
+        run: |
+          SIGNER=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)apksigner
+          $SIGNER verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -i "SHA-256"
       - uses: actions/upload-artifact@v5
         with:
           name: interpreter-apk
