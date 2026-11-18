@@ -39,7 +39,11 @@ class NewsActivity : Activity() {
     private var category = -1
     private var date = ""
     private var dates: List<String> = emptyList()
-    private var items: List<NewsStore.Item> = emptyList()
+    // A news item with the day it belongs to (the list can mix days in "last 7 days").
+    private class Entry(val date: String, val index: Int, val item: NewsStore.Item)
+    private var entries: List<Entry> = emptyList()
+    // "" = the last 7 days together.
+    private var lessonDate = ""
     private val translators = HashMap<String, Translator>()
     private val glosses = HashMap<String, String>()
     private var tts: TextToSpeech? = null
@@ -77,7 +81,10 @@ class NewsActivity : Activity() {
         })
 
         dateSpinner = Spinner(this).apply {
-            onItemSelectedListener = picked { pos -> dates.getOrNull(pos)?.let { if (it != date) { date = it; showDay() } } }
+            onItemSelectedListener = picked { pos ->
+                val d = if (pos == 0) "" else dates.getOrNull(pos - 1) ?: return@picked
+                if (d != date || entries.isEmpty()) { date = d; showDay() }
+            }
         }
         val refresh = Button(this).apply {
             text = StudyText.t("refresh")
@@ -165,11 +172,16 @@ class NewsActivity : Activity() {
         return "${mo.toInt()}/${da.toInt()}" + if (d == today) " (${StudyText.t("today_tag")})" else ""
     }
 
+    // First option: the last 7 days together (today's page is still short in the Korean evening, as the
+    // source is dated in UTC). Then each day with its number of items.
     private fun loadDates() {
         dates = NewsStore.dates(this)
-        dateSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, dates.map { label(it) })
-        if (date.isEmpty() || date !in dates) date = dates.firstOrNull().orEmpty()
-        if (date.isNotEmpty()) dateSpinner.setSelection(dates.indexOf(date))
+        val counts = dates.associateWith { NewsStore.load(this, it).size }
+        val week = dates.take(7).sumOf { counts[it] ?: 0 }
+        val labels = listOf(StudyText.f("week", week)) + dates.map { "${label(it)} · ${StudyText.f("count", counts[it] ?: 0)}" }
+        dateSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+        if (date.isNotEmpty() && date !in dates) date = ""
+        dateSpinner.setSelection(if (date.isEmpty()) 0 else dates.indexOf(date) + 1)
         showDay()
     }
 
@@ -182,15 +194,16 @@ class NewsActivity : Activity() {
     }
 
     private fun showDay() {
-        items = if (date.isEmpty()) emptyList() else NewsStore.load(this, date)
-        status.text = if (items.isEmpty()) StudyText.t("no_news") else ""
+        val days = if (date.isEmpty()) dates.take(7) else listOf(date)
+        entries = days.flatMap { d -> NewsStore.load(this, d).mapIndexed { i, it -> Entry(d, i, it) } }
+        status.text = if (entries.isEmpty()) StudyText.t("no_news") else ""
         renderChips()
         renderList()
     }
 
     private fun renderChips() {
         chips.removeAllViews()
-        val counts = items.groupingBy { it.category }.eachCount()
+        val counts = entries.groupingBy { it.item.category }.eachCount()
         fun chip(name: String, id: Int) = TextView(this).apply {
             text = name
             textSize = 13.5f
@@ -204,7 +217,7 @@ class NewsActivity : Activity() {
                 renderList()
             }
         }
-        chips.addView(chip("${StudyText.t("all")} ${items.size}", -1), chipParams())
+        chips.addView(chip("${StudyText.t("all")} ${entries.size}", -1), chipParams())
         StudyText.categories.indices.filter { (counts[it] ?: 0) > 0 }.forEach { i ->
             chips.addView(chip("${StudyText.category(i)} ${counts[i]}", i), chipParams())
         }
@@ -216,7 +229,8 @@ class NewsActivity : Activity() {
 
     private fun renderList() {
         list.removeAllViews()
-        items.withIndex().filter { category < 0 || it.value.category == category }.forEach { (i, item) ->
+        entries.filter { category < 0 || it.item.category == category }.forEach { e ->
+            val item = e.item
             val gloss = TextView(this).apply {
                 textSize = 15f
                 setTextColor(Ui.INK)
@@ -225,9 +239,9 @@ class NewsActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), dp(12), dp(14), dp(12))
                 background = Ui.pressable(context)
-                setOnClickListener { openLesson(i, item) }
+                setOnClickListener { openLesson(e) }
                 addView(TextView(context).apply {
-                    text = (if (item.read) "✔ " else "") + StudyText.category(item.category) +
+                    text = (if (item.read) "✔ " else "") + (if (date.isEmpty()) label(e.date) + " · " else "") + StudyText.category(item.category) +
                         if (item.topic.isNotBlank()) " · ${item.topic}" else ""
                     textSize = 12f
                     setTextColor(Ui.PRIMARY)
@@ -264,13 +278,16 @@ class NewsActivity : Activity() {
 
     /* ---------- Lesson ---------- */
 
-    private fun openLesson(index: Int, item: NewsStore.Item) {
+    private fun openLesson(e: Entry) {
+        val index = e.index
+        val item = e.item
+        lessonDate = e.date
         listPage.visibility = View.GONE
         lessonPage.visibility = View.VISIBLE
         lessonPage.scrollTo(0, 0)
         registerBack()
         lessonBox.removeAllViews()
-        val d = date
+        val d = e.date
         val l = lang
         val lv = level
         NewsStore.markRead(this, d, index)
@@ -344,7 +361,7 @@ class NewsActivity : Activity() {
 
     private fun renderLesson(item: NewsStore.Item, o: JSONObject, l: Lang) {
         lessonBox.addView(TextView(this).apply {
-            text = StudyText.category(item.category) + " · " + label(date)
+            text = StudyText.category(item.category) + " · " + label(lessonDate)
             textSize = 12f
             setTextColor(Ui.PRIMARY)
         })
@@ -441,7 +458,7 @@ class NewsActivity : Activity() {
         lessonBox.addView(Button(this).apply {
             text = StudyText.t("open_source")
             setOnClickListener {
-                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NewsStore.portalUrl(date)))) } catch (_: Exception) {}
+                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NewsStore.portalUrl(lessonDate)))) } catch (_: Exception) {}
             }
         })
     }

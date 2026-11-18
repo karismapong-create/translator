@@ -39,6 +39,8 @@ object StudyText {
         "level1" to m("중급", "中級", "Intermediate", "Intermédiaire", "Intermedio", "Mittelstufe", "中级"),
         "level2" to m("고급", "上級", "Advanced", "Avancé", "Avanzado", "Fortgeschritten", "高级"),
         "all" to m("전체", "すべて", "All", "Tout", "Todo", "Alle", "全部"),
+        "week" to m("최근 7일 전체 · %d건", "直近7日すべて · %d件", "Last 7 days · %d", "7 derniers jours · %d", "Últimos 7 días · %d", "Letzte 7 Tage · %d", "最近7天 · %d条"),
+        "count" to m("%d건", "%d件", "%d", "%d", "%d", "%d", "%d条"),
         "today_tag" to m("오늘", "今日", "today", "aujourd'hui", "hoy", "heute", "今天"),
         "refresh" to m("↻ 새로고침", "↻ 更新", "↻ Refresh", "↻ Actualiser", "↻ Actualizar", "↻ Aktualisieren", "↻ 刷新"),
         "loading" to m("뉴스를 받아오는 중…", "ニュースを取得中…", "Getting the news…", "Chargement…", "Cargando…", "Wird geladen…", "正在获取新闻…"),
