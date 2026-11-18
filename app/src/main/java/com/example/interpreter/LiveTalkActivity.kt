@@ -644,6 +644,10 @@ class LiveTalkActivity : Activity() {
             stopAuto()
             return
         }
+        if (!Pro.active(this)) {
+            Pro.showPaywall(this) { toggleAuto() }
+            return
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
             return

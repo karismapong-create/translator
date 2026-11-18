@@ -117,12 +117,12 @@ class VocabView(
         }
         // Daily review (spaced repetition) and news study.
         reviewButton = Button(context).apply {
-            setOnClickListener { context.startActivity(android.content.Intent(context, StudyActivity::class.java)) }
+            setOnClickListener { Pro.gate(context) { context.startActivity(android.content.Intent(context, StudyActivity::class.java)) } }
         }
         Ui.primary(reviewButton)
         val newsButton = Button(context).apply {
             text = StudyText.t("news_btn")
-            setOnClickListener { context.startActivity(android.content.Intent(context, NewsActivity::class.java)) }
+            setOnClickListener { Pro.gate(context) { context.startActivity(android.content.Intent(context, NewsActivity::class.java)) } }
         }
         val study = LinearLayout(context).apply {
             orientation = HORIZONTAL
