@@ -297,8 +297,16 @@ class SituationView(
 
     private fun parseQuestions(raw: String): List<Question>? {
         val arr = Tutor.json(raw)?.optJSONArray("questions") ?: return null
+        val code = lang.code
         return (0 until arr.length()).mapNotNull { i ->
-            arr.optJSONObject(i)?.let { Question(it.optString("ko"), it.optString("phrase"), it.optString("phrase_ko")) }
+            arr.optJSONObject(i)?.let {
+                val phrase = it.optString("phrase")
+                val meaning = it.optString("phrase_ko")
+                // Sentence and meaning swapped by the AI: put them back.
+                if (!LangCheck.looks(phrase, code) && LangCheck.looks(meaning, code) && LangCheck.looks(phrase, home.code))
+                    Question(it.optString("ko"), meaning, phrase)
+                else Question(it.optString("ko"), phrase, meaning)
+            }
         }.filter { it.phrase.isNotBlank() }
     }
 
@@ -373,6 +381,7 @@ class SituationView(
                 source = if (force) FORCED else AUTO
                 if (force) clearDialogues(l.code, placeIdx)
                 writeCache(source + key, raw)
+                if (!force) net.execute { ContentBuilder.adoptQuestions(activity, l.code, placeIdx, home.code, raw) }
                 renderQuestions(qs)
             }
         }
@@ -451,8 +460,9 @@ class SituationView(
             return
         }
         val cached = readCache(cacheKey)?.let { parseDialogue(it) }
-        if (cached != null) {
-            renderDialogue(p, q, cached.first, cached.second)
+        val cachedLines = cached?.let { checkDialogue(it.first, l) }
+        if (cached != null && cachedLines != null) {
+            renderDialogue(p, q, cachedLines, cached.second)
             return
         }
         // Built-in dialogues only match the built-in question list.
@@ -485,7 +495,23 @@ class SituationView(
         renderQuestions(questions.toMutableList().also { it[i] = updated })
     }
 
-    private fun generateDialogue(p: Place, q: Question, l: LangInfo, key: String, token: Int) {
+    // A made dialogue is usable when its lines are in the foreign language and the meanings in mine;
+    // lines with the two swapped are put right.
+    private fun checkDialogue(lines: List<Line>, l: LangInfo): List<Line>? {
+        var bad = 0
+        val fixed = lines.map { x ->
+            when {
+                LangCheck.looks(x.text, l.code) && (x.meaning.isEmpty() || LangCheck.looks(x.meaning, home.code)) -> x
+                LangCheck.looks(x.meaning, l.code) && LangCheck.looks(x.text, home.code) -> Line(x.who, x.meaning, x.text)
+                else -> { bad++; x }
+            }
+        }
+        return if (bad <= maxOf(1, lines.size / 10)) fixed else null
+    }
+
+    private fun generateDialogue(p: Place, q: Question, l: LangInfo, key: String, token: Int, attempt: Int = 1) {
+        val qi = questionIndex
+        val src = source
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
             dialogueBox.addView(note(TalkText.t("s_need_llm"), Color.rgb(207, 34, 46)))
@@ -509,15 +535,26 @@ class SituationView(
                 if (token != loadToken) return@post
                 val raw = r as? String
                 val parsed = raw?.let { parseDialogue(it) }
+                val checked = parsed?.let { checkDialogue(it.first, l) }
+                if (parsed != null && checked == null && attempt < 2) {
+                    // Mixed-up languages: ask once more before giving up.
+                    generateDialogue(p, q, l, key, token, attempt + 1)
+                    return@post
+                }
                 dialogueBox.removeAllViews()
-                if (raw == null || parsed == null) {
+                if (raw == null || parsed == null || checked == null) {
                     dialogueBox.addView(note(TalkText.f("s_failed", (r as? Exception)?.message ?: TalkText.t("s_format"))))
                     dialogueBox.addView(button(TalkText.t("retry")) { loadDialogue(true) })
                     return@post
                 }
                 writeCache(key, raw)
+                // Made for the DB's own list: it joins the DB (progress, export). Hand-remade lists stay local.
+                if (src != FORCED) {
+                    val placeIdx = places.indexOf(p)
+                    net.execute { ContentBuilder.adoptDialogue(activity, l.code, placeIdx, qi, home.code, raw) }
+                }
                 updatePhrase(p, l, raw)
-                renderDialogue(p, question ?: q, parsed.first, parsed.second)
+                renderDialogue(p, question ?: q, checked, parsed.second)
             }
         }
     }
