@@ -19,6 +19,13 @@ class ProgressGrid(context: Context) : View(context) {
     private val gap = 3 * d
     private val labelW = 92 * d
     private val rowH get() = cell + gap
+    // A header row numbers the columns: the list, then dialogue 1 to 10 (= question 1 to 10).
+    private val headH = 18 * d
+    private val head = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 10.5f * d
+        color = Ui.INK_SOFT
+        textAlign = Paint.Align.CENTER
+    }
     private val box = RectF()
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -37,13 +44,17 @@ class ProgressGrid(context: Context) : View(context) {
         val wanted = (labelW + 11 * (18 * d + gap)).toInt()
         val w = resolveSize(wanted, widthMeasureSpec)
         cell = ((w - labelW - 11 * gap) / 11f).coerceIn(8 * d, 18 * d)
-        val h = (rows.size * rowH + gap).toInt()
+        val h = (headH + rows.size * rowH + gap).toInt()
         setMeasuredDimension(w, h)
     }
 
     override fun onDraw(canvas: Canvas) {
+        for (c in 0 until 11) {
+            val x = labelW + c * (cell + gap) + cell / 2
+            canvas.drawText(if (c == 0) "목록" else "$c", x, headH - 5 * d, head)
+        }
         rows.forEachIndexed { r, row ->
-            val y = gap + r * rowH
+            val y = headH + gap + r * rowH
             val name = names.getOrNull(r).orEmpty()
             val label = "${r + 1}. " + if (name.length > 7) name.take(7) + "…" else name
             canvas.drawText(label, 0f, y + cell * 0.75f, text)
