@@ -265,7 +265,7 @@ class MainActivity : Activity() {
         convPage = ConversationView(
             this, prefs, langInfos,
             { text, voice -> speakNow(text, voice, null, true) },
-            { tts?.stop() }
+            { SpeechOut.stop(tts) }
         )
         vocabPage = VocabView(this, prefs, langInfos) { text, voice -> speakNow(text, voice, null, true) }
         glossaryPage = GlossaryView(this, prefs, langInfos) { text ->
@@ -611,7 +611,7 @@ class MainActivity : Activity() {
     }
 
     private fun clearScreen() {
-        tts?.stop()
+        SpeechOut.stop(tts)
         segments.removeAllViews()
         screenLog.clear()
         utter.clear()

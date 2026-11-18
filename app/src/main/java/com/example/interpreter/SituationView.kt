@@ -651,7 +651,7 @@ class SituationView(
         playing = false
         pausedLine = playIndex
         pausedAt = wordAt
-        tts?.stop()
+        SpeechOut.stop(tts)
         highlight(pausedLine)
         playButton?.text = TalkText.t("s_resume")
     }
@@ -716,7 +716,7 @@ class SituationView(
         playing = false
         pausedLine = -1
         pausedAt = 0
-        if (wasPlaying) tts?.stop()
+        if (wasPlaying) SpeechOut.stop(tts)
         if (cards.isNotEmpty()) highlight(-1)
         clearWords()
         playButton?.text = TalkText.t("s_play")
@@ -724,7 +724,7 @@ class SituationView(
 
     fun stopPlayback() {
         stopPlay()
-        tts?.stop()
+        SpeechOut.stop(tts)
     }
 
     /* ---------- Saving words from a line ---------- */
