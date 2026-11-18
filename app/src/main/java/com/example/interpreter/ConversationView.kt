@@ -549,7 +549,8 @@ class ConversationView(
             textSize = 13f
             setTypeface(null, Typeface.BOLD)
         })
-        box.addView(text(say, 17f, Color.BLACK, true))
+        val sayView = text(say, 17f, Color.BLACK, true)
+        box.addView(sayView)
         if (meaning.isNotEmpty()) box.addView(text(meaning, 14f, blue))
         box.addView(row(
             action(TalkText.t("listen")) { speak(say, lang.voice) },
@@ -559,6 +560,8 @@ class ConversationView(
         messages.addView(box, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
             setMargins(dp(20), dp(10), dp(20), 0)
         })
+        // Reading in my alphabet under the hint, the same as under the AI's replies.
+        Pronunciation.attach(activity, box, sayView, say, lang.code, home.code)
         scrollDown()
     }
 

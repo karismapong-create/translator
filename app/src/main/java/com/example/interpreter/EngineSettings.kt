@@ -185,14 +185,18 @@ class EngineSettings(
             net.execute {
                 val r: Any = try { Providers.fetchModels(prefs, id) } catch (ex: Exception) { ex }
                 activity.runOnUiThread {
-                    val names = (r as? List<*>)?.map { it.toString() }.orEmpty()
+                    val raw = (r as? List<*>)?.map { it.toString() }.orEmpty()
+                    val names = if (id == "gemini") Providers.geminiOrder(raw) else raw
+                    val shown = if (id == "gemini") names.map { n ->
+                        Providers.geminiNote(n).let { if (it.isEmpty()) n else "$n\n   $it" }
+                    } else names
                     if (names.isEmpty()) {
                         dialog.setMessage(I18n.t("e_models_fail") + ((r as? Exception)?.let { "\n" + describe(it) } ?: ""))
                     } else {
                         dialog.setMessage(I18n.f("e_found", names.size))
                         AlertDialog.Builder(activity)
                             .setTitle(I18n.t("e_pick"))
-                            .setItems(names.toTypedArray()) { _, w ->
+                            .setItems(shown.toTypedArray()) { _, w ->
                                 modelEd?.setText(names[w])
                                 dialog.setMessage(I18n.f("e_selected", names[w]))
                             }
