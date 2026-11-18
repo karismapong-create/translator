@@ -97,7 +97,6 @@ class SituationView(
     private var playButton: Button? = null
 
     private val langSpinner: Spinner
-    private val backButton: Button
     private val titleView: TextView
     private val gridScroll: ScrollView
     private val questionsBox: LinearLayout
@@ -110,11 +109,6 @@ class SituationView(
     init {
         orientation = VERTICAL
 
-        backButton = Button(activity).apply {
-            text = TalkText.t("back")
-            visibility = View.GONE
-            setOnClickListener { goBack() }
-        }
         titleView = TextView(activity).apply {
             textSize = 16f
             setTypeface(null, Typeface.BOLD)
@@ -139,7 +133,6 @@ class SituationView(
         val header = LinearLayout(activity).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(backButton)
             addView(titleView, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(langSpinner, LayoutParams(dp(140), LayoutParams.WRAP_CONTENT))
         }
@@ -237,7 +230,6 @@ class SituationView(
         gridScroll.visibility = if (n == 0) View.VISIBLE else View.GONE
         questionsScroll.visibility = if (n == 1) View.VISIBLE else View.GONE
         dialogueScroll.visibility = if (n == 2) View.VISIBLE else View.GONE
-        backButton.visibility = if (n == 0) View.GONE else View.VISIBLE
         if (n == 0) titleView.text = TalkText.t("s_where")
     }
 
