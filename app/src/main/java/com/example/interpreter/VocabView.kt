@@ -124,10 +124,22 @@ class VocabView(
             text = StudyText.t("news_btn")
             setOnClickListener { Pro.gate(context) { context.startActivity(android.content.Intent(context, NewsActivity::class.java)) } }
         }
+        val booksButton = Button(context).apply {
+            text = StudyText.t("books_btn")
+            setOnClickListener {
+                Pro.gate(context) {
+                    context.startActivity(android.content.Intent(context, NewsActivity::class.java).putExtra("books", true))
+                }
+            }
+        }
         val study = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            addView(reviewButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(newsButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            orientation = VERTICAL
+            addView(reviewButton, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            addView(LinearLayout(context).apply {
+                orientation = HORIZONTAL
+                addView(newsButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+                addView(booksButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
         list = LinearLayout(context).apply { orientation = VERTICAL }
         val scroll = ScrollView(context).apply { addView(list) }
