@@ -921,7 +921,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         if (listening) stop()
-        convPage.stopListening()
+        convPage.stopMic()
         super.onStop()
     }
 

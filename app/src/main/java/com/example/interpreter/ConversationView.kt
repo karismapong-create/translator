@@ -633,6 +633,11 @@ class ConversationView(
 
     fun stopListening() {
         situationView.stopPlayback()
+        stopMic()
+    }
+
+    // Only the microphone; situation playback may go on with the screen off.
+    fun stopMic() {
         if (recognizer != null) {
             recognizer?.cancel()
             finishListen()

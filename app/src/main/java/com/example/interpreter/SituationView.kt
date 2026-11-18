@@ -649,6 +649,9 @@ class SituationView(
         playing = true
         playIndex = i
         playButton?.text = TalkText.t("s_stop")
+        // Keeps playing with the screen off; the notification can stop it.
+        PlaybackService.onStopRequested = { post { stopPlay() } }
+        place?.let { p -> PlaybackService.start(activity, "${placeName(p)} · ${question?.title.orEmpty()}") }
         playCurrent(from)
     }
 
@@ -668,6 +671,7 @@ class SituationView(
         playing = false
         pausedLine = playIndex
         pausedAt = wordAt
+        PlaybackService.stop(activity)
         SpeechOut.stop(tts)
         highlight(pausedLine)
         playButton?.text = TalkText.t("s_resume")
@@ -739,6 +743,7 @@ class SituationView(
         playing = false
         pausedLine = -1
         pausedAt = 0
+        PlaybackService.stop(activity)
         if (wasPlaying) SpeechOut.stop(tts)
         if (cards.isNotEmpty()) highlight(-1)
         clearWords()
