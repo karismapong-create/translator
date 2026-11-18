@@ -237,7 +237,7 @@ object ContentBuilder {
         for ((pi, p) in list.withIndex()) {
             if (stopRequested) return
             val f = file(ctx, foreign, pi)
-            val o = current(ctx, foreign, pi)
+            var o = current(ctx, foreign, pi)
             var qs = o.optJSONArray("questions")
             val step = "${pi + 1}/${list.size} ${p.name}"
 
@@ -286,9 +286,11 @@ object ContentBuilder {
                 save(f, o)
             }
 
-            val ds = o.optJSONArray("dialogues") ?: JSONArray().also { o.put("dialogues", it) }
             for (qi in 0 until minOf(qs.length(), 10)) {
                 if (stopRequested) return
+                // Read the file fresh: the phrasebook screen may have saved a dialogue meanwhile.
+                o = current(ctx, foreign, pi)
+                val ds = o.optJSONArray("dialogues") ?: JSONArray().also { o.put("dialogues", it) }
                 val q = qs.optJSONObject(qi) ?: continue
                 val d = ds.optJSONObject(qi)
                 if (d == null) {
@@ -448,10 +450,36 @@ object ContentBuilder {
         return true
     }
 
+    // The file the phrasebook screen shows for this language and place, as an editable copy, so a
+    // change lands in exactly what the screen and the progress grid read.
+    private fun shown(ctx: Context, lang: String, place: Int, home: String): JSONObject =
+        BasePack.source(ctx, lang, place, home)?.let { JSONObject(it.toString()) } ?: current(ctx, lang, place)
+
+    // Saves a dialogue made in the phrasebook screen for the question at this position of the list it
+    // shows. lines: (who, text, meaning in my language). Returns null when saved, or why it couldn't be.
+    @Synchronized
+    fun putDialogue(
+        ctx: Context, lang: String, place: Int, index: Int, home: String,
+        lines: List<Triple<String, String, String>>, tips: String
+    ): String? {
+        val o = shown(ctx, lang, place, home)
+        val qs = o.optJSONArray("questions") ?: return "no question list"
+        if (index !in 0 until qs.length()) return "question ${index + 1} not in list (${qs.length()})"
+        val built = JSONArray()
+        lines.filter { it.second.isNotBlank() }.forEach { (who, text, meaning) ->
+            built.put(JSONObject().put("who", who).put("text", text).put("m", JSONObject().put(home, meaning)))
+        }
+        if (built.length() == 0) return "empty dialogue"
+        val ds = o.optJSONArray("dialogues") ?: JSONArray().also { o.put("dialogues", it) }
+        ds.put(index, JSONObject().put("lines", built).put("tips", JSONObject().put(home, tips)))
+        save(file(ctx, lang, place), o)
+        return null
+    }
+
     // A remade dialogue can bring a better key sentence for its question.
     @Synchronized
     fun setPhrase(ctx: Context, lang: String, place: Int, index: Int, home: String, phrase: String, meaning: String) {
-        val o = current(ctx, lang, place)
+        val o = shown(ctx, lang, place, home)
         val q = o.optJSONArray("questions")?.optJSONObject(index) ?: return
         q.put("phrase", phrase)
         child(q, "meaning").put(home, meaning)
