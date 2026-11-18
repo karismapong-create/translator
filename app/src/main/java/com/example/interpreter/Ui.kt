@@ -45,6 +45,9 @@ object Ui {
         "⇄" to R.drawable.ic_swap_horiz, "📖" to R.drawable.ic_menu_book, "📦" to R.drawable.ic_inventory_2,
         "🛠" to R.drawable.ic_build, "✔" to R.drawable.ic_check_circle, "✘" to R.drawable.ic_cancel,
         "ℹ" to R.drawable.ic_info, "⚙" to R.drawable.ic_settings,
+        "🗣" to R.drawable.ic_record_voice_over, "🔗" to R.drawable.ic_link, "⛓" to R.drawable.ic_link_off,
+        "🕘" to R.drawable.ic_history, "🎧" to R.drawable.ic_headphones, "✨" to R.drawable.ic_auto_awesome,
+        "💬" to R.drawable.ic_forum,
         // places
         "✈" to R.drawable.ic_flight_takeoff, "🛂" to R.drawable.ic_badge, "🧳" to R.drawable.ic_luggage,
         "🛍" to R.drawable.ic_shopping_bag, "💱" to R.drawable.ic_currency_exchange, "🚇" to R.drawable.ic_subway,

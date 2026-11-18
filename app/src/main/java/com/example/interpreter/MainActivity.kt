@@ -257,6 +257,13 @@ class MainActivity : Activity() {
         val interpPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(top, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(12) })
+            addView(Button(context).apply {
+                text = LiveText.t("open")
+                setOnClickListener {
+                    if (listening) stop()
+                    startActivity(Intent(this@MainActivity, LiveTalkActivity::class.java))
+                }
+            }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(6) })
             addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply { topMargin = dp(4) })
             addView(interimView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(statusView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -660,60 +667,7 @@ class MainActivity : Activity() {
 
     // Runs on a background thread.
     private fun remote(id: String, text: String, sl: Lang, tl: Lang, context: String): String =
-        if (id == "deepl") {
-            deepl(text, sl.code, tl.code, p("deepl"), context)
-        } else if (id == OnDevice.ID) {
-            OnDevice.translate(text, sl.code, tl.code, context)
-        } else {
-            clean(Providers.complete(prefs, id, systemPrompt(sl, tl), listOf("user" to userPrompt(text, context)), 1024, 20000))
-        }
-
-    private fun systemPrompt(sl: Lang, tl: Lang) =
-        "You are a professional simultaneous interpreter. Translate the user's text from ${sl.english} " +
-        "to ${tl.english}. The text may be an unfinished fragment of ongoing speech; translate it as it is " +
-        "without completing or guessing the rest. Lines marked as context are earlier conversation, given " +
-        "only so you understand the flow; never translate or repeat them. Keep placeholder codes such as " +
-        "XZ1 or XZ2 exactly as written. Use natural, polite spoken ${tl.english}. Reply with the translation " +
-        "only, with no quotes, notes, romanization or explanations."
-
-    private fun userPrompt(text: String, context: String) =
-        if (context.isBlank()) text
-        else "Context (do not translate):\n$context\n\nTranslate:\n$text"
-
-    private fun clean(s: String) =
-        s.replace(Regex("(?s)<think>.*?</think>"), "").trim().trim('"', '“', '”').trim()
-
-    private fun deeplCode(code: String, asTarget: Boolean): String =
-        if (code == "en" && asTarget) "EN-US" else code.uppercase()
-
-    private fun deepl(text: String, source: String, target: String, key: String, context: String): String {
-        val host = if (key.endsWith(":fx")) "api-free.deepl.com" else "api.deepl.com"
-        val body = JSONObject()
-            .put("text", JSONArray().put(text))
-            .put("source_lang", deeplCode(source, false))
-            .put("target_lang", deeplCode(target, true))
-            .put("formality", "prefer_more")
-        if (context.isNotBlank()) body.put("context", context)
-        val conn = URL("https://$host/v2/translate").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = 4000
-        conn.readTimeout = 6000
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Authorization", "DeepL-Auth-Key $key")
-        try {
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                val err = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                throw Providers.HttpException(code, err)
-            }
-            val json = JSONObject(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
-            return json.getJSONArray("translations").getJSONObject(0).getString("text")
-        } finally {
-            conn.disconnect()
-        }
-    }
+        RemoteTranslate.translate(prefs, id, text, sl, tl, context)
 
     private fun remoteFailed(id: String, e: Exception?) {
         val name = engineLabel(id)
