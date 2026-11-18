@@ -50,6 +50,8 @@ object BasePack {
                 } catch (_: Exception) {
                     // This build has no pack yet.
                 }
+                // New shipped content fills in what this phone's DB lacks.
+                try { ContentBuilder.absorbShipped(ctx) } catch (_: Exception) {}
                 prefs.edit().putLong("basepack_stamp", stamp).apply()
             }
             ready = true
@@ -59,20 +61,15 @@ object BasePack {
     private fun parse(f: File): JSONObject? =
         if (f.exists()) try { JSONObject(f.readText()) } catch (_: Exception) { null } else null
 
-    // One file per foreign language and place, never a mix: the questions and their dialogues must come
-    // from the same file, or a dialogue can belong to a different question. The more complete of the
-    // shipped file and the one built or imported on this phone wins (this phone's on a tie).
+    // One file per foreign language and place, never a mix: the questions and their dialogues come
+    // from the same file. This phone's DB (built, imported or made in the phrasebook screen) is what
+    // the user made, so it wins when it has a usable list; otherwise the shipped file.
     fun source(ctx: Context, lang: String, place: Int, home: String): JSONObject? {
         prepare(ctx)
-        val shipped = parse(File(dir(ctx), "$lang/$place.json"))
         val mine = parse(File(ContentBuilder.dir(ctx), "$lang/$place.json"))
-        val a = LangCheck.score(mine, home, lang)
-        val b = LangCheck.score(shipped, home, lang)
-        return when {
-            a < 0 && b < 0 -> null
-            a >= b -> mine
-            else -> shipped
-        }
+        if (LangCheck.score(mine, home, lang) >= 0) return mine
+        val shipped = parse(File(dir(ctx), "$lang/$place.json"))
+        return if (LangCheck.score(shipped, home, lang) >= 0) shipped else null
     }
 
     private fun text(o: JSONObject?, home: String): String = o?.optString(home).orEmpty()
