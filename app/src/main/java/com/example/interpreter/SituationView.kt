@@ -273,7 +273,18 @@ class SituationView(
     // Dialogues made for a remade question list no longer match it.
     private fun clearDialogues(code: String, placeIdx: Int) {
         val start = "${cachePrefix}${FORCED}d_${code}_${placeIdx}_"
-        cacheDir.listFiles()?.filter { it.name.startsWith(start) }?.forEach { it.delete() }
+        val phrases = "${cachePrefix}${phraseKey(FORCED, code, placeIdx, -1).dropLast(2)}"
+        cacheDir.listFiles()?.filter { it.name.startsWith(start) || it.name.startsWith(phrases) }?.forEach { it.delete() }
+    }
+
+    // A remade dialogue can change the situation's key sentence; the list shows the new one.
+    private fun phraseKey(src: String, code: String, placeIdx: Int, i: Int) = "qo_${src}${code}_${placeIdx}_$i"
+
+    private fun withNewPhrase(q: Question, i: Int): Question {
+        val p = place ?: return q
+        val o = readCache(phraseKey(source, lang.code, places.indexOf(p), i))?.let { Tutor.json(it) } ?: return q
+        val phrase = o.optString("phrase")
+        return if (phrase.isBlank()) q else Question(q.title, phrase, o.optString("meaning"))
     }
 
     /* ---------- Questions ---------- */
@@ -367,7 +378,8 @@ class SituationView(
         }
     }
 
-    private fun renderQuestions(qs: List<Question>) {
+    private fun renderQuestions(list: List<Question>) {
+        val qs = list.mapIndexed { i, q -> withNewPhrase(q, i) }
         questions = qs
         questionsBox.removeAllViews()
         questionsBox.addView(note(TalkText.t("s_q_help")))
@@ -458,6 +470,21 @@ class SituationView(
         }
     }
 
+    // Saves the remade dialogue's key sentence and refreshes the question list behind it.
+    private fun updatePhrase(p: Place, l: LangInfo, raw: String) {
+        val o = Tutor.json(raw) ?: return
+        val phrase = o.optString("phrase").trim()
+        val i = questionIndex
+        val old = questions.getOrNull(i) ?: return
+        if (phrase.isEmpty() || phrase == old.phrase) return
+        val meaning = o.optString("meaning").trim()
+        writeCache(phraseKey(source, l.code, places.indexOf(p), i),
+            org.json.JSONObject().put("phrase", phrase).put("meaning", meaning).toString())
+        val updated = Question(old.title, phrase, meaning)
+        question = updated
+        renderQuestions(questions.toMutableList().also { it[i] = updated })
+    }
+
     private fun generateDialogue(p: Place, q: Question, l: LangInfo, key: String, token: Int) {
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
@@ -471,7 +498,9 @@ class SituationView(
             "$name dialogue of 20 to 30 short lines, about 2 to 3 minutes when spoken, between the traveler (A) and " +
             "${p.role} (B) at ${p.en}. The traveler is polite; the other person speaks naturally, including the " +
             "questions they typically ask and one small realistic complication. Reply with JSON only, no code " +
-            "fences: {\"lines\":[{\"who\":\"A\",\"text\":\"$name line\",\"ko\":\"$mine translation\"}]," +
+            "fences: {\"phrase\":\"the traveler's single most useful $name sentence in this dialogue, copied from " +
+            "one of A's lines\",\"meaning\":\"$mine meaning of that sentence\"," +
+            "\"lines\":[{\"who\":\"A\",\"text\":\"$name line\",\"ko\":\"$mine translation\"}]," +
             "\"tips\":\"one or two short $mine tips about local customs or useful points\"}"
         val user = "Situation: ${q.title} — ${q.phrase}"
         net.execute {
@@ -487,7 +516,8 @@ class SituationView(
                     return@post
                 }
                 writeCache(key, raw)
-                renderDialogue(p, q, parsed.first, parsed.second)
+                updatePhrase(p, l, raw)
+                renderDialogue(p, question ?: q, parsed.first, parsed.second)
             }
         }
     }
