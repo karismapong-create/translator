@@ -65,6 +65,16 @@ class NewsActivity : Activity() {
             ?: foreignLangs.firstOrNull { it.code == "en" } ?: foreignLangs.first()
         level = prefs.getInt("news_level", 1)
         tts = TextToSpeech(this) { }
+        tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+            override fun onStart(id: String?) { runOnUiThread { sentenceOf(id)?.let { markSentence(it) } } }
+            override fun onDone(id: String?) { runOnUiThread { sentenceDone(id) } }
+            @Deprecated("Deprecated in Java")
+            override fun onError(id: String?) { runOnUiThread { sentenceDone(id) } }
+            override fun onStop(id: String?, interrupted: Boolean) { runOnUiThread { sentenceDone(id) } }
+            override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
+                runOnUiThread { sentenceOf(id)?.let { markWord(it, start, end, wordColor) } }
+            }
+        })
 
         dateSpinner = Spinner(this).apply {
             onItemSelectedListener = picked { pos -> dates.getOrNull(pos)?.let { if (it != date) { date = it; showDay() } } }
@@ -350,24 +360,40 @@ class NewsActivity : Activity() {
             lessonBox.addView(tv)
         }
         val sentences = o.optJSONArray("sentences") ?: JSONArray()
-        val all = StringBuilder()
+        sentViews.clear()
+        sentTexts.clear()
+        lessonWords.clear()
+        o.optJSONArray("words")?.let { ws ->
+            for (i in 0 until ws.length()) ws.optJSONObject(i)?.let { lessonWords.add(it) }
+        }
+        playLang = l
+        // Play all sits at the top, before the article.
+        playButton = Button(this).apply {
+            text = TalkText.t("s_play")
+            setOnClickListener { if (playing) stopPlay() else playFrom(0) }
+            Ui.primary(this)
+        }
+        lessonBox.addView(playButton,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)).apply { bottomMargin = dp(6) })
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
             background = Ui.card(context)
         }
+        lessonBox.addView(note(StudyText.t("press_hint")))
         for (i in 0 until sentences.length()) {
             val s = sentences.optJSONObject(i) ?: continue
             val text = s.optString("text")
-            all.append(text).append(' ')
+            val index = sentTexts.size
+            sentTexts.add(text)
             val tv = TextView(this).apply {
                 this.text = text
                 textSize = 18f
                 setTextColor(Ui.INK)
-                setTextIsSelectable(true)
-                setPadding(0, dp(8), 0, 0)
-                setOnClickListener { say(text, l) }
+                setPadding(dp(6), dp(8), dp(6), dp(2))
             }
+            sentViews.add(tv)
+            attachInspector(tv, index, l)
             body.addView(tv)
             Pronunciation.attach(this, body, tv, text, l.code, home.code)
             s.optString("meaning").takeIf { it.isNotBlank() }?.let {
@@ -375,15 +401,12 @@ class NewsActivity : Activity() {
                     this.text = it
                     textSize = 14f
                     setTextColor(Ui.PRIMARY)
+                    setPadding(dp(6), 0, dp(6), dp(4))
                 })
             }
         }
         lessonBox.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(8)
-        })
-        lessonBox.addView(Button(this).apply {
-            text = "🔊 " + StudyText.t("all")
-            setOnClickListener { say(all.toString().trim(), l) }
+            topMargin = dp(4)
         })
 
         val words = o.optJSONArray("words") ?: JSONArray()
@@ -479,11 +502,206 @@ class NewsActivity : Activity() {
         return row
     }
 
+    /* ---------- Reading along ---------- */
+
+    private val sentViews = ArrayList<TextView>()
+    private val sentTexts = ArrayList<String>()
+    private val lessonWords = ArrayList<JSONObject>()
+    private var playLang: Lang = Languages.byCode("en")
+    private var playButton: Button? = null
+    private var playing = false
+    private val sentenceColor = Color.rgb(255, 241, 204)
+    private val wordColor = Color.argb(230, 255, 160, 0)
+    private val pickColor = Color.argb(120, 47, 91, 234)
+
+    private fun sentenceOf(id: String?): Int? = id?.takeIf { it.startsWith("ns_") }?.removePrefix("ns_")?.toIntOrNull()
+
+    // Sentence by sentence, so the one being read can be shown and words lit up as they are spoken.
+    private fun playFrom(i: Int) {
+        val engine = tts ?: return
+        playing = true
+        playButton?.text = TalkText.t("s_stop")
+        for (k in i until sentTexts.size) {
+            SpeechOut.speak(engine, sentTexts[k], playLang.speechTag, k == i, "ns_$k")
+        }
+    }
+
+    private fun stopPlay() {
+        playing = false
+        SpeechOut.stop(tts)
+        playButton?.text = TalkText.t("s_play")
+        markSentence(-1)
+    }
+
+    private fun sentenceDone(id: String?) {
+        val i = sentenceOf(id) ?: return
+        sentViews.getOrNull(i)?.let { it.text = sentTexts[i] }
+        if (i == sentTexts.size - 1 || !playing) {
+            playing = false
+            playButton?.text = TalkText.t("s_play")
+            markSentence(-1)
+        }
+    }
+
+    private fun markSentence(i: Int) {
+        sentViews.forEachIndexed { k, v ->
+            v.background = if (k == i) Ui.rounded(sentenceColor, 10, this) else null
+            if (k != i) v.text = sentTexts[k]
+        }
+        sentViews.getOrNull(i)?.let { v -> lessonPage.post { lessonPage.smoothScrollTo(0, (v.top - dp(80)).coerceAtLeast(0)) } }
+    }
+
+    private fun markWord(i: Int, start: Int, end: Int, color: Int) {
+        val v = sentViews.getOrNull(i) ?: return
+        val text = sentTexts[i]
+        if (start < 0 || end <= start || end > text.length) return
+        val span = android.text.SpannableString(text)
+        span.setSpan(android.text.style.BackgroundColorSpan(color), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        v.text = span
+    }
+
+    // The word around a character position (dictionary-based breaks, so it also works for Japanese and Chinese).
+    private fun wordAt(text: String, offset: Int, l: Lang): Pair<Int, Int>? {
+        if (text.isEmpty()) return null
+        val o = offset.coerceIn(0, text.length - 1)
+        val it = java.text.BreakIterator.getWordInstance(java.util.Locale.forLanguageTag(l.speechTag))
+        it.setText(text)
+        val end = it.following(o).let { e -> if (e == java.text.BreakIterator.DONE) text.length else e }
+        val start = it.previous().let { b -> if (b == java.text.BreakIterator.DONE) 0 else b }
+        val w = text.substring(start, end)
+        return if (w.isBlank() || w.all { c -> !Character.isLetterOrDigit(c) }) null else start to end
+    }
+
+    // Long-press a word: its meaning appears. Keep the finger down and slide: each word under the finger
+    // lights up and is spoken, and the meaning follows. A short tap reads the sentence from there.
+    private fun attachInspector(tv: TextView, index: Int, l: Lang) {
+        var inspecting = false
+        var last: Pair<Int, Int>? = null
+        var downX = 0f
+        var downY = 0f
+        val longPress = Runnable {
+            inspecting = true
+            tv.parent?.requestDisallowInterceptTouchEvent(true)
+            tv.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            last = null
+            inspect(tv, index, l, downX, downY) { last = it }
+        }
+        tv.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = e.x; downY = e.y
+                    inspecting = false
+                    tv.postDelayed(longPress, android.view.ViewConfiguration.getLongPressTimeout().toLong())
+                    true
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (inspecting) {
+                        val w = rangeAt(tv, index, l, e.x, e.y)
+                        if (w != null && w != last) {
+                            last = w
+                            inspect(tv, index, l, e.x, e.y) { }
+                        }
+                    } else if (Math.abs(e.x - downX) > dp(10) || Math.abs(e.y - downY) > dp(10)) {
+                        tv.removeCallbacks(longPress)
+                    }
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    tv.removeCallbacks(longPress)
+                    if (!inspecting) {
+                        if (playing) stopPlay()
+                        playFrom(index)
+                    } else {
+                        tv.parent?.requestDisallowInterceptTouchEvent(false)
+                        tv.text = sentTexts[index]
+                    }
+                    inspecting = false
+                    true
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    tv.removeCallbacks(longPress)
+                    if (inspecting) tv.text = sentTexts[index]
+                    inspecting = false
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun rangeAt(tv: TextView, index: Int, l: Lang, x: Float, y: Float): Pair<Int, Int>? {
+        val offset = tv.getOffsetForPosition(x, y)
+        if (offset < 0) return null
+        return wordAt(sentTexts[index], offset, l)
+    }
+
+    private fun inspect(tv: TextView, index: Int, l: Lang, x: Float, y: Float, picked: (Pair<Int, Int>) -> Unit) {
+        val w = rangeAt(tv, index, l, x, y) ?: return
+        picked(w)
+        if (playing) stopPlay()
+        markWord(index, w.first, w.second, pickColor)
+        val word = sentTexts[index].substring(w.first, w.second)
+        tts?.let { SpeechOut.speak(it, word, l.speechTag, true, "nw") }
+        val loc = IntArray(2)
+        tv.getLocationOnScreen(loc)
+        showMeaning(word, l, loc[0] + x.toInt(), loc[1] + y.toInt())
+    }
+
+    private var popup: android.widget.PopupWindow? = null
+    private var popupWord: TextView? = null
+    private var popupMeaning: TextView? = null
+    private var popupSave: TextView? = null
+    private val meanings = HashMap<String, String>()
+
+    // A small card above the finger with the word, its meaning and a save button.
+    private fun showMeaning(word: String, l: Lang, x: Int, y: Int) {
+        if (popup == null) {
+            val w = TextView(this).apply { textSize = 18f; setTextColor(Color.WHITE); Ui.bold(this) }
+            val m = TextView(this).apply { textSize = 15f; setTextColor(Color.rgb(220, 228, 255)) }
+            val save = TextView(this).apply {
+                textSize = 14f
+                setTextColor(Ui.ACCENT)
+                setPadding(0, dp(6), 0, 0)
+            }
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                background = Ui.rounded(Color.rgb(26, 31, 54), 14, context)
+                addView(w); addView(m); addView(save)
+            }
+            popup = android.widget.PopupWindow(box, LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, false).apply {
+                isOutsideTouchable = true
+                elevation = dp(6).toFloat()
+            }
+            popupWord = w; popupMeaning = m; popupSave = save
+        }
+        popupWord?.text = word
+        val known = meanings[word] ?: lessonWords.firstOrNull { it.optString("word") == word || word.contains(it.optString("word")) && it.optString("word").length > 1 }
+            ?.let { it.optString("meaning") + it.optString("reading").takeIf { r -> r.isNotBlank() }?.let { r -> " ($r)" }.orEmpty() }
+        popupMeaning?.text = known ?: "…"
+        if (known == null) translate(word, l.code, home.code) { m ->
+            meanings[word] = m
+            if (popupWord?.text == word) popupMeaning?.text = m
+        }
+        popupSave?.text = "☆ " + LiveText.t("to_vocab")
+        popupSave?.setOnClickListener {
+            val m = meanings[word] ?: popupMeaning?.text?.toString().orEmpty()
+            if (VocabStore.save(prefs, word, m, l.code)) toast(StudyText.f("saved_n", 1))
+            popupSave?.text = "★ " + LiveText.t("to_vocab")
+        }
+        val px = (x - dp(70)).coerceAtLeast(dp(8))
+        val py = (y - dp(120)).coerceAtLeast(dp(40))
+        val p = popup!!
+        if (p.isShowing) p.update(px, py, -1, -1)
+        else p.showAtLocation(window.decorView, Gravity.NO_GRAVITY, px, py)
+    }
+
     /* ---------- Back ---------- */
 
     private fun closeLesson(): Boolean {
         if (lessonPage.visibility != View.VISIBLE) return false
-        SpeechOut.stop(tts)
+        stopPlay()
+        popup?.dismiss()
         lessonPage.visibility = View.GONE
         listPage.visibility = View.VISIBLE
         unregisterBack()
