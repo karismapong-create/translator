@@ -44,6 +44,9 @@ class NewsActivity : Activity() {
     private var entries: List<Entry> = emptyList()
     // "" = the last 7 days together.
     private var lessonDate = ""
+    // Opened as "study with books" instead of news.
+    private var books = false
+    private var currentBook: BookStore.Book? = null
     private val translators = HashMap<String, Translator>()
     private val glosses = HashMap<String, String>()
     private var tts: TextToSpeech? = null
@@ -68,6 +71,7 @@ class NewsActivity : Activity() {
         lang = foreignLangs.firstOrNull { it.code == prefs.getString("news_lang", null) }
             ?: foreignLangs.firstOrNull { it.code == "en" } ?: foreignLangs.first()
         level = prefs.getInt("news_level", 1)
+        books = intent.getBooleanExtra("books", false)
         tts = TextToSpeech(this) { }
         tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
             override fun onStart(id: String?) { runOnUiThread { sentenceOf(id)?.let { sentenceStarted(it, id) } } }
@@ -139,6 +143,7 @@ class NewsActivity : Activity() {
                 isHorizontalScrollBarEnabled = false
                 addView(chips)
                 setPadding(0, dp(6), 0, 0)
+                if (books) visibility = View.GONE
             })
             addView(status)
             addView(ScrollView(context).apply { addView(list) },
@@ -161,8 +166,13 @@ class NewsActivity : Activity() {
         Ui.edgeToEdge(this, root)
         Ui.watch(root)
 
-        loadDates()
-        update()
+        if (books) {
+            row1.visibility = View.GONE
+            showShelf()
+        } else {
+            loadDates()
+            update()
+        }
     }
 
     private fun picked(f: (Int) -> Unit) = object : AdapterView.OnItemSelectedListener {
@@ -300,7 +310,7 @@ class NewsActivity : Activity() {
         item.read = true
         val cached = NewsStore.lesson(this, d, index, l.code, lv)
         if (cached != null) {
-            renderLesson(item, cached, l)
+            renderLesson(cached, l, newsHeader(item)) { newsFooter() }
             return
         }
         val engine = RemoteTranslate.engine(prefs)
@@ -335,7 +345,7 @@ class NewsActivity : Activity() {
                     return@runOnUiThread
                 }
                 NewsStore.saveLesson(this, d, index, l.code, lv, o)
-                renderLesson(item, o, l)
+                renderLesson(o, l, newsHeader(item)) { newsFooter() }
             }
         }
     }
@@ -349,7 +359,7 @@ class NewsActivity : Activity() {
                 val o = JSONObject().put("title", item.topic)
                     .put("sentences", JSONArray().put(JSONObject().put("text", inLang).put("meaning", mine)))
                     .put("words", JSONArray())
-                renderLesson(item, o, l)
+                renderLesson(o, l, newsHeader(item)) { newsFooter() }
             }
         }
     }
@@ -365,9 +375,22 @@ class NewsActivity : Activity() {
         tts?.let { SpeechOut.speak(it, text, l.speechTag, true, "news") }
     }
 
-    private fun renderLesson(item: NewsStore.Item, o: JSONObject, l: Lang) {
+    private fun newsHeader(item: NewsStore.Item) = StudyText.category(item.category) + " · " + label(lessonDate)
+
+    private fun newsFooter() {
+        lessonBox.addView(note(StudyText.t("source")))
+        lessonBox.addView(Button(this).apply {
+            text = StudyText.t("open_source")
+            setOnClickListener {
+                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NewsStore.portalUrl(lessonDate)))) } catch (_: Exception) {}
+            }
+        })
+    }
+
+    // The reader: sentences with every reading tool, then key words, then the footer.
+    private fun renderLesson(o: JSONObject, l: Lang, header: String, footer: () -> Unit) {
         lessonBox.addView(TextView(this).apply {
-            text = StudyText.category(item.category) + " · " + label(lessonDate)
+            text = header
             textSize = 12f
             setTextColor(Ui.PRIMARY)
         })
@@ -482,13 +505,7 @@ class NewsActivity : Activity() {
                 }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)).apply { topMargin = dp(10) })
         }
-        lessonBox.addView(note(StudyText.t("source")))
-        lessonBox.addView(Button(this).apply {
-            text = StudyText.t("open_source")
-            setOnClickListener {
-                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(NewsStore.portalUrl(lessonDate)))) } catch (_: Exception) {}
-            }
-        })
+        footer()
     }
 
     private fun saveWord(w: JSONObject, l: Lang): Boolean {
@@ -967,6 +984,284 @@ class NewsActivity : Activity() {
         else p.showAtLocation(window.decorView, Gravity.NO_GRAVITY, px, py)
     }
 
+    /* ---------- Books ---------- */
+
+    private fun heading(t: String) = TextView(this).apply {
+        text = t
+        textSize = 16f
+        setTextColor(Ui.INK)
+        Ui.bold(this)
+        setPadding(dp(4), dp(14), dp(4), dp(6))
+    }
+
+    private fun bookRow(b: BookStore.Book, sub: String, onClick: () -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        background = Ui.pressable(context)
+        isClickable = true
+        setOnClickListener { onClick() }
+        addView(TextView(context).apply {
+            text = b.title
+            textSize = 16f
+            setTextColor(Ui.INK)
+            Ui.bold(this)
+        })
+        addView(TextView(context).apply {
+            text = sub
+            textSize = 13f
+            setTextColor(Ui.INK_SOFT)
+        })
+    }
+
+    private fun addRow(v: View) {
+        list.addView(v, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+    }
+
+    // The shelf: my books with progress, a search box, and books to start.
+    private fun showShelf(search: String? = null) {
+        list.removeAllViews()
+        status.text = StudyText.t("books_intro")
+        val box = android.widget.EditText(this).apply {
+            hint = StudyText.t("books_search")
+            setSingleLine(true)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            setText(search.orEmpty())
+        }
+        val go = Button(this).apply { text = "🔍" }
+        val doSearch = { showShelf(box.text.toString().trim().ifEmpty { null }) }
+        go.setOnClickListener { doSearch() }
+        box.setOnEditorActionListener { _, _, _ -> doSearch(); true }
+        list.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(box, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(go)
+        })
+        val mine = BookStore.shelf(this)
+        if (search == null && mine.isNotEmpty()) {
+            list.addView(heading(StudyText.t("books_mine")))
+            for (b in mine) {
+                val total = BookStore.sections(this, b.id).size
+                val done = BookStore.read(this, b.id).size
+                addRow(bookRow(b, "${b.author} · ${StudyText.f("books_progress", done, total)}") { openBook(b) })
+            }
+        }
+        list.addView(heading(StudyText.t(if (search == null) "books_pick" else "books_found")))
+        val shown = HashSet<Int>(mine.map { it.id })
+        if (search == null) {
+            for (b in BookStore.starter) if (shown.add(b.id)) addRow(bookRow(b, b.author) { openBook(b) })
+        }
+        val more = note(StudyText.t("books_loading"))
+        list.addView(more)
+        net.execute {
+            val r: Any = try { BookStore.catalog(search) } catch (e: Exception) { e }
+            runOnUiThread {
+                if (currentBook != null || lessonPage.visibility == View.VISIBLE) return@runOnUiThread
+                val found = (r as? List<*>)?.filterIsInstance<BookStore.Book>()
+                if (found == null) { more.text = StudyText.t("books_offline"); return@runOnUiThread }
+                list.removeView(more)
+                var n = 0
+                for (b in found) if (shown.add(b.id)) { addRow(bookRow(b, b.author) { openBook(b) }); n++ }
+                if (n == 0 && search != null) list.addView(note(StudyText.t("books_none")))
+                list.addView(note(StudyText.t("books_source")))
+            }
+        }
+    }
+
+    private fun openBook(b: BookStore.Book) {
+        currentBook = b
+        registerBack()
+        if (BookStore.has(this, b.id)) { showBook(b); return }
+        list.removeAllViews()
+        list.addView(heading(b.title))
+        list.addView(note(StudyText.t("books_downloading")))
+        net.execute {
+            val err = try { BookStore.download(this, b); null } catch (e: Exception) { e }
+            runOnUiThread {
+                if (currentBook !== b) return@runOnUiThread
+                if (err != null) {
+                    list.addView(note(StudyText.f("failed", err.message ?: "")))
+                    return@runOnUiThread
+                }
+                showBook(b)
+            }
+        }
+    }
+
+    // A book's sections by chapter, with what I've read; "continue" opens the next one.
+    private fun showBook(b: BookStore.Book) {
+        list.removeAllViews()
+        status.text = ""
+        val secs = BookStore.sections(this, b.id)
+        val read = BookStore.read(this, b.id)
+        list.addView(TextView(this).apply {
+            text = b.title
+            textSize = 20f
+            setTextColor(Ui.INK)
+            Ui.bold(this)
+            setPadding(dp(4), dp(4), dp(4), 0)
+        })
+        list.addView(note(b.author + " · " + StudyText.f("books_progress", read.size, secs.size)))
+        if (secs.isEmpty()) {
+            list.addView(note(StudyText.t("books_empty")))
+            return
+        }
+        val next = if (read.isEmpty()) 0 else (secs.indices.firstOrNull { it > BookStore.last(this, b.id) && it !in read }
+            ?: secs.indices.firstOrNull { it !in read } ?: 0)
+        list.addView(Button(this).apply {
+            text = StudyText.f(if (read.isEmpty()) "books_start" else "books_continue", next + 1)
+            Ui.primary(this)
+            setOnClickListener { openSection(b, next) }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
+        var lastChapter: String? = null
+        for (s in secs) {
+            if (s.chapter != lastChapter) {
+                lastChapter = s.chapter
+                list.addView(heading(s.chapter.ifBlank { "—" }))
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                background = Ui.pressable(context)
+                isClickable = true
+                setOnClickListener { openSection(b, s.index) }
+                addView(TextView(context).apply {
+                    text = (if (s.index in read) "✔ " else "") + StudyText.f("books_part", s.index + 1)
+                    textSize = 14f
+                    setTextColor(if (s.index in read) Ui.GOOD else Ui.PRIMARY)
+                    Ui.bold(this)
+                })
+                addView(TextView(context).apply {
+                    text = s.preview + "…"
+                    textSize = 13f
+                    setTextColor(Ui.INK_SOFT)
+                    maxLines = 2
+                })
+            }
+            addRow(row)
+        }
+        val del = Button(this).apply {
+            text = StudyText.t("books_remove")
+            setOnClickListener {
+                BookStore.remove(this@NewsActivity, b.id)
+                closeBook()
+            }
+        }
+        list.addView(del)
+    }
+
+    private fun bookHeader(b: BookStore.Book, s: BookStore.Section) =
+        "📚 ${b.title} · ${s.chapter.ifBlank { "" }} · " + StudyText.f("books_part", s.index + 1)
+
+    private fun bookFooter(b: BookStore.Book, s: BookStore.Section) {
+        val secs = BookStore.sections(this, b.id)
+        lessonBox.addView(note(StudyText.t("books_source")))
+        lessonBox.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            if (s.index > 0) addView(Button(context).apply {
+                text = StudyText.t("books_prev")
+                setOnClickListener { openSection(b, s.index - 1) }
+            }, LinearLayout.LayoutParams(0, dp(56), 1f))
+            if (s.index < secs.size - 1) addView(Button(context).apply {
+                text = StudyText.t("books_next")
+                Ui.primary(this)
+                setOnClickListener { openSection(b, s.index + 1) }
+            }, LinearLayout.LayoutParams(0, dp(56), 1f))
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+    }
+
+    // A section as a lesson in my language and level (AI), or the text with phone translation (offline).
+    private fun openSection(b: BookStore.Book, index: Int) {
+        val s = BookStore.sections(this, b.id).getOrNull(index) ?: return
+        stopPlay()
+        popup?.dismiss()
+        listPage.visibility = View.GONE
+        lessonPage.visibility = View.VISIBLE
+        lessonPage.scrollTo(0, 0)
+        registerBack()
+        lessonBox.removeAllViews()
+        BookStore.markRead(this, b.id, index)
+        val l = lang
+        val lv = level
+        val cached = BookStore.lesson(this, b.id, index, l.code, lv)
+        if (cached != null) {
+            renderLesson(cached, l, bookHeader(b, s)) { bookFooter(b, s) }
+            return
+        }
+        val passage = BookStore.sectionText(this, b.id, s)
+        val engine = RemoteTranslate.engine(prefs)
+        if (!RemoteTranslate.canWrite(engine)) {
+            offlineBookLesson(b, s, passage, l)
+            return
+        }
+        lessonBox.addView(note(StudyText.f("making", StudyText.t("level$lv"))))
+        val spec = when {
+            lv == 0 -> "beginner graded reader: retell the passage in 6 to 8 short, simple sentences with very common words"
+            lv == 1 -> "intermediate graded reader: retell the passage in 10 to 12 sentences with everyday words, keeping the important dialogue"
+            l.code == "en" -> "advanced: keep the original English wording exactly, only split it into sentences"
+            else -> "advanced: translate the passage faithfully into natural ${l.english}, sentence by sentence"
+        }
+        val keyWords = when (lv) { 0 -> 5; 1 -> 7; else -> 10 }
+        val system = "You are a language teacher making reading lessons for ${home.english} speakers learning ${l.english}. " +
+            "The text is part of the public-domain book \"${b.title}\" by ${b.author}. Write it in ${l.english} as a $spec. " +
+            "Keep the story's events and add nothing. Then list $keyWords key words or idioms from your text. " +
+            "For Japanese or Chinese words give the reading in kana or pinyin, otherwise leave reading empty. " +
+            "Reply with JSON only, no code fences: {\"title\":\"short ${l.english} title for this part\"," +
+            "\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
+            "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from your text\"}]}"
+        net.execute {
+            val result: Any = try {
+                Tutor.json(RemoteTranslate.ask(prefs, engine!!, system, passage, 4000)) ?: IllegalStateException("format")
+            } catch (e: Exception) { e }
+            runOnUiThread {
+                if (lessonPage.visibility != View.VISIBLE || currentBook !== b) return@runOnUiThread
+                lessonBox.removeAllViews()
+                val o = result as? JSONObject
+                if (o == null || (o.optJSONArray("sentences")?.length() ?: 0) == 0) {
+                    lessonBox.addView(note(StudyText.f("failed", (result as? Exception)?.message ?: "")))
+                    offlineBookLesson(b, s, passage, l)
+                    return@runOnUiThread
+                }
+                BookStore.saveLesson(this, b.id, index, l.code, lv, o)
+                renderLesson(o, l, bookHeader(b, s)) { bookFooter(b, s) }
+            }
+        }
+    }
+
+    // Without an AI engine: the original sentences (translated on the phone for other languages).
+    private fun offlineBookLesson(b: BookStore.Book, s: BookStore.Section, passage: String, l: Lang) {
+        lessonBox.addView(note(StudyText.t("need_ai")))
+        val it = java.text.BreakIterator.getSentenceInstance(java.util.Locale.ENGLISH)
+        it.setText(passage)
+        val sents = ArrayList<String>()
+        var a = it.first()
+        var e = it.next()
+        while (e != java.text.BreakIterator.DONE) {
+            passage.substring(a, e).trim().takeIf { t -> t.isNotEmpty() }?.let { t -> sents += t }
+            a = e
+            e = it.next()
+        }
+        val items = sents.take(30)
+        val out = arrayOfNulls<JSONObject>(items.size)
+        var left = items.size
+        if (left == 0) return
+        items.forEachIndexed { i, en ->
+            translate(en, "en", l.code) { inLang ->
+                translate(en, "en", home.code) { mine ->
+                    out[i] = JSONObject().put("text", inLang).put("meaning", if (mine == inLang) "" else mine)
+                    left--
+                    if (left == 0 && lessonPage.visibility == View.VISIBLE && currentBook === b) {
+                        val o = JSONObject().put("title", s.chapter)
+                            .put("sentences", JSONArray().apply { out.forEach { x -> if (x != null) put(x) } })
+                            .put("words", JSONArray())
+                        lessonBox.removeAllViews()
+                        renderLesson(o, l, bookHeader(b, s)) { bookFooter(b, s) }
+                    }
+                }
+            }
+        }
+    }
+
     /* ---------- Back ---------- */
 
     private fun closeLesson(): Boolean {
@@ -975,15 +1270,25 @@ class NewsActivity : Activity() {
         popup?.dismiss()
         lessonPage.visibility = View.GONE
         listPage.visibility = View.VISIBLE
-        unregisterBack()
-        renderList()
+        val b = currentBook
+        if (books && b != null) showBook(b) else { unregisterBack(); renderList() }
         return true
     }
+
+    private fun closeBook(): Boolean {
+        if (!books || currentBook == null) return false
+        currentBook = null
+        unregisterBack()
+        showShelf()
+        return true
+    }
+
+    private fun goBack(): Boolean = closeLesson() || closeBook()
 
     // Android 13+ delivers the back gesture through a callback; older phones call onBackPressed.
     private fun registerBack() {
         if (Build.VERSION.SDK_INT < 33 || backCallback != null) return
-        val cb = android.window.OnBackInvokedCallback { closeLesson() }
+        val cb = android.window.OnBackInvokedCallback { goBack() }
         onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, cb)
         backCallback = cb
     }
@@ -996,7 +1301,7 @@ class NewsActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (!closeLesson()) @Suppress("DEPRECATION") super.onBackPressed()
+        if (!goBack()) @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     override fun onDestroy() {
