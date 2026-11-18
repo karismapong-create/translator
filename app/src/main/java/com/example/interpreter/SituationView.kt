@@ -479,6 +479,7 @@ class SituationView(
             addView(play, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(practice, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         })
+        dialogueBox.addView(note(TalkText.t("s_tap_hint")))
         dialogueBox.addView(note(TalkText.t("s_disclaimer")))
         cards = ls.mapIndexed { i, line -> lineCard(i, line, p) }
         cards.forEachIndexed { i, card ->
@@ -504,6 +505,7 @@ class SituationView(
             orientation = VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
             setBackgroundColor(baseColor(line))
+            setOnClickListener { lineTapped(i) }
         }
         card.addView(TextView(activity).apply {
             text = when {
@@ -514,9 +516,10 @@ class SituationView(
             textSize = 12f
             setTextColor(Color.GRAY)
         })
-        val tv = text(line.text, 19f, Color.BLACK, true)
+        // Not selectable, so a tap anywhere on the line reaches the card.
+        val tv = text(line.text, 19f, Color.BLACK, true).apply { setTextIsSelectable(false) }
         card.addView(tv)
-        if (line.meaning.isNotEmpty()) card.addView(text(line.meaning, 14f, blue))
+        if (line.meaning.isNotEmpty()) card.addView(text(line.meaning, 14f, blue).apply { setTextIsSelectable(false) })
         card.addView(LinearLayout(activity).apply {
             orientation = HORIZONTAL
             addView(action("🔊") {
@@ -555,16 +558,29 @@ class SituationView(
         }
     }
 
-    private fun playAll() {
-        if (lines.isEmpty()) return
+    private fun playAll() = playFrom(0)
+
+    private fun playFrom(i: Int) {
+        if (i !in lines.indices) return
         if (!ttsReady) {
             toast(TalkText.t("tts_wait"))
             return
         }
         playing = true
-        playIndex = 0
+        playIndex = i
         playButton?.text = TalkText.t("s_stop")
         playCurrent()
+    }
+
+    // Tapping a line while playing pauses on it; tapping a line while stopped plays from there.
+    private fun lineTapped(i: Int) {
+        if (playing) {
+            val at = playIndex
+            stopPlay()
+            highlight(at)
+        } else {
+            playFrom(i)
+        }
     }
 
     private fun playCurrent() {
