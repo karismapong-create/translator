@@ -460,8 +460,7 @@ class MainActivity : Activity() {
         setMusicMuted(false)
         val uid = "u${++utterCount}"
         if (seg != null) utter[uid] = seg
-        engine.language = Locale.forLanguageTag(voice)
-        engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, uid)
+        SpeechOut.speak(engine, text, voice, flush, uid)
     }
 
     /* ---------- Translators ---------- */
