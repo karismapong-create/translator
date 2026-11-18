@@ -149,6 +149,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         Providers.migrate(prefs)
         OnDevice.refresh()
+        Pro.init(this)
         // Daily world news for the vocabulary tab is fetched in the background once a day.
         try { NewsStore.schedule(this) } catch (_: Exception) {}
         home = Languages.home(prefs)
@@ -610,7 +611,8 @@ class MainActivity : Activity() {
             I18n.f("m_engine", engineLabel(activeEngine)),
             I18n.f("m_silent", I18n.t(if (silent) "on" else "off")),
             I18n.t("m_privacy"),
-            I18n.t("m_licenses")
+            I18n.t("m_licenses"),
+            ProText.t("menu")
         )
         AlertDialog.Builder(this)
             .setTitle(I18n.t("settings") + "  ·  " + buildLabel())
@@ -624,7 +626,8 @@ class MainActivity : Activity() {
                     5 -> settings.open()
                     6 -> toggleSilent()
                     7 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
-                    else -> showLicenses()
+                    8 -> showLicenses()
+                    else -> Pro.showPaywall(this)
                 }
             }
             .show().also { Ui.watch(it) }
@@ -905,6 +908,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        Pro.refresh()
         if (::vocabPage.isInitialized && currentTab == 2) vocabPage.refresh()
     }
 
