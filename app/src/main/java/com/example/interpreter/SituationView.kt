@@ -484,11 +484,20 @@ class SituationView(
                     dialogueBox.addView(button(TalkText.t("retry")) { loadDialogue(true) })
                     return@post
                 }
-                // Saved into the DB for this question (replacing an older dialogue), before the key
-                // sentence update below, which runs after it on the same thread.
+                // Saved into the DB at this question's position, then read back to be sure: if it
+                // didn't stick, the screen says so instead of quietly making it again next time.
                 val placeIdx = places.indexOf(p)
-                val phrase = q.phrase
-                net.execute { ContentBuilder.adoptDialogue(activity, l.code, placeIdx, qi, home.code, raw, phrase) }
+                val toSave = checked.map { Triple(it.who, it.text, it.meaning) }
+                val tips = parsed.second
+                net.execute {
+                    val err = try {
+                        ContentBuilder.putDialogue(activity, l.code, placeIdx, qi, home.code, toSave, tips)
+                    } catch (ex: Exception) { ex.message ?: ex.toString() }
+                    val ok = err == null && BasePack.dialogue(activity, l.code, placeIdx, qi, home.code) != null
+                    post {
+                        if (!ok) dialogueBox.addView(note("⚠ " + TalkText.f("s_not_saved", err ?: "read-back"), Color.rgb(207, 34, 46)), 0)
+                    }
+                }
                 updatePhrase(p, l, raw)
                 renderDialogue(p, question ?: q, checked, parsed.second)
             }
