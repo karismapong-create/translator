@@ -7,6 +7,9 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
 import android.view.ActionMode
 import android.view.Gravity
 import android.view.Menu
@@ -90,6 +93,7 @@ class SituationView(
     private val home: Lang = Languages.home(prefs)
     private val blue = Color.rgb(47, 91, 234)
     private val highlightColor = Color.argb(80, 255, 200, 0)
+    private val wordColor = Color.argb(230, 255, 160, 0)
     private val density = resources.displayMetrics.density
     private val net = Executors.newSingleThreadExecutor()
     private val cacheDir = File(activity.filesDir, "situations").apply { mkdirs() }
@@ -102,6 +106,8 @@ class SituationView(
     private var questionIndex = -1
     private var lines: List<Line> = emptyList()
     private var cards: List<View> = emptyList()
+    // The sentence text of each line, for highlighting the word being spoken.
+    private val lineViews = ArrayList<TextView>()
     private var screen = 0
     // Where the current question list came from; also the cache prefix for its dialogues.
     private var source = AUTO
@@ -185,6 +191,9 @@ class SituationView(
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) { post { lineFinished(utteranceId) } }
             override fun onError(utteranceId: String?) { post { lineFinished(utteranceId) } }
+            override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+                post { wordHighlight(utteranceId, start, end) }
+            }
         })
         net.execute { BasePack.prepare(activity) }
         show(0)
@@ -436,6 +445,7 @@ class SituationView(
         titleView.text = "${p.emoji} ${q.title}"
         dialogueBox.removeAllViews()
         cards = emptyList()
+        lineViews.clear()
         val token = ++loadToken
         val cacheKey = source + key
         if (force) {
@@ -514,6 +524,7 @@ class SituationView(
         })
         dialogueBox.addView(note(TalkText.t("s_tap_hint")))
         dialogueBox.addView(note(TalkText.t("s_disclaimer")))
+        lineViews.clear()
         cards = ls.mapIndexed { i, line -> lineCard(i, line, p) }
         cards.forEachIndexed { i, card ->
             val me = ls[i].me
@@ -556,12 +567,13 @@ class SituationView(
         // Not selectable, so a tap anywhere on the line reaches the card.
         val tv = text(line.text, 19f, Color.BLACK, true).apply { setTextIsSelectable(false) }
         card.addView(tv)
+        lineViews.add(tv)
         if (line.meaning.isNotEmpty()) card.addView(text(line.meaning, 14f, blue).apply { setTextIsSelectable(false) })
         card.addView(LinearLayout(activity).apply {
             orientation = HORIZONTAL
             addView(action("🔊") {
                 stopPlay()
-                speak(line, "one")
+                speak(line, "one_$i")
             })
             addView(action("☆") { v ->
                 save(line.text, line.meaning)
@@ -630,7 +642,27 @@ class SituationView(
         speak(lines[playIndex], "line_$playIndex")
     }
 
+    // Line index from an utterance id such as "line_3" or "one_3".
+    private fun lineOf(id: String?): Int = id?.substringAfter('_', "")?.toIntOrNull() ?: -1
+
+    // Moves a highlight over the word the voice is saying. Needs a voice engine that reports word positions.
+    private fun wordHighlight(id: String?, start: Int, end: Int) {
+        val i = lineOf(id)
+        val tv = lineViews.getOrNull(i) ?: return
+        val text = lines.getOrNull(i)?.text ?: return
+        if (start < 0 || end <= start || end > text.length) return
+        val span = SpannableString(text)
+        span.setSpan(BackgroundColorSpan(wordColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        tv.text = span
+    }
+
+    private fun clearWords() {
+        lineViews.forEachIndexed { k, v -> lines.getOrNull(k)?.let { v.text = it.text } }
+    }
+
     private fun lineFinished(id: String?) {
+        val done = lineOf(id)
+        lines.getOrNull(done)?.let { lineViews.getOrNull(done)?.text = it.text }
         if (playing && id == "line_$playIndex") {
             playIndex++
             playCurrent()
@@ -642,6 +674,7 @@ class SituationView(
         playing = false
         if (wasPlaying) tts?.stop()
         if (cards.isNotEmpty()) highlight(-1)
+        clearWords()
         playButton?.text = TalkText.t("s_play")
     }
 
