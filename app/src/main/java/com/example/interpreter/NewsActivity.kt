@@ -70,13 +70,19 @@ class NewsActivity : Activity() {
         level = prefs.getInt("news_level", 1)
         tts = TextToSpeech(this) { }
         tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-            override fun onStart(id: String?) { runOnUiThread { sentenceOf(id)?.let { markSentence(it) } } }
+            override fun onStart(id: String?) { runOnUiThread { sentenceOf(id)?.let { sentenceStarted(it, id) } } }
             override fun onDone(id: String?) { runOnUiThread { sentenceDone(id) } }
             @Deprecated("Deprecated in Java")
             override fun onError(id: String?) { runOnUiThread { sentenceDone(id) } }
             override fun onStop(id: String?, interrupted: Boolean) { runOnUiThread { sentenceDone(id) } }
             override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
-                runOnUiThread { sentenceOf(id)?.let { markWord(it, start, end, wordColor) } }
+                runOnUiThread {
+                    sentenceOf(id)?.let { i ->
+                        val base = offsets[id] ?: 0
+                        if (playing) wordStart = start + base
+                        markWord(i, start + base, end + base, wordColor)
+                    }
+                }
             }
         })
 
@@ -387,7 +393,13 @@ class NewsActivity : Activity() {
         // Play all sits at the top, before the article.
         playButton = Button(this).apply {
             text = TalkText.t("s_play")
-            setOnClickListener { if (playing) stopPlay() else playFrom(0) }
+            setOnClickListener {
+                when {
+                    playing -> stopPlay()
+                    pausedSentence >= 0 -> resumePlay()
+                    else -> playFrom(0)
+                }
+            }
             Ui.primary(this)
         }
         lessonBox.addView(playButton,
@@ -411,7 +423,22 @@ class NewsActivity : Activity() {
             }
             sentViews.add(tv)
             attachInspector(tv, index, l)
-            body.addView(tv)
+            // Each paragraph has its own play button.
+            body.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+                addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(TextView(context).apply {
+                    this.text = "🔊"
+                    textSize = 17f
+                    setTextColor(Ui.PRIMARY)
+                    setPadding(dp(8), dp(10), dp(4), dp(4))
+                    setOnClickListener {
+                        if (playing || pausedSentence >= 0) stopPlay()
+                        playFrom(index, 0, index + 1)
+                    }
+                })
+            })
             Pronunciation.attach(this, body, tv, text, l.code, home.code)
             s.optString("meaning").takeIf { it.isNotBlank() }?.let {
                 body.addView(TextView(this).apply {
@@ -533,28 +560,82 @@ class NewsActivity : Activity() {
 
     private fun sentenceOf(id: String?): Int? = id?.takeIf { it.startsWith("ns_") }?.removePrefix("ns_")?.toIntOrNull()
 
+    // Where reading is: the sentence being spoken, the start of the word being spoken, and where an
+    // utterance began inside its sentence (a resumed sentence starts mid-way).
+    private var current = -1
+    private var wordStart = 0
+    private var until = 0
+    private var pausedSentence = -1
+    private var pausedAt = 0
+    private val offsets = HashMap<String, Int>()
+
     // Sentence by sentence, so the one being read can be shown and words lit up as they are spoken.
-    private fun playFrom(i: Int) {
+    // from: start inside the first sentence; end: stop before this sentence.
+    private fun playFrom(i: Int, from: Int = 0, end: Int = sentTexts.size) {
         val engine = tts ?: return
+        if (i !in sentTexts.indices) return
         playing = true
+        pausedSentence = -1
+        until = end.coerceAtMost(sentTexts.size)
         playButton?.text = TalkText.t("s_stop")
-        for (k in i until sentTexts.size) {
-            SpeechOut.speak(engine, sentTexts[k], playLang.speechTag, k == i, "ns_$k")
+        for (k in i until until) {
+            val start = if (k == i) from.coerceIn(0, sentTexts[k].length) else 0
+            val id = "ns_$k"
+            offsets[id] = start
+            SpeechOut.speak(engine, sentTexts[k].substring(start), playLang.speechTag, k == i, id)
         }
     }
 
     private fun stopPlay() {
         playing = false
+        pausedSentence = -1
         SpeechOut.stop(tts)
         playButton?.text = TalkText.t("s_play")
         markSentence(-1)
     }
 
+    // Stops on the word being spoken and keeps it lit, ready to go on from there.
+    private fun pausePlay() {
+        if (!playing || current < 0) return
+        playing = false
+        pausedSentence = current
+        pausedAt = wordStart
+        SpeechOut.stop(tts)
+        playButton?.text = TalkText.t("s_resume")
+    }
+
+    private fun resumePlay() {
+        val i = pausedSentence
+        if (i < 0) playFrom(0) else playFrom(i, pausedAt, until.takeIf { it > i } ?: sentTexts.size)
+    }
+
+    // Tapping the sentence being read pauses on its word; tapping it again goes on from that word;
+    // tapping another sentence reads from there.
+    private fun sentenceTapped(index: Int) {
+        when {
+            playing && index == current -> pausePlay()
+            !playing && index == pausedSentence -> resumePlay()
+            else -> {
+                if (playing) SpeechOut.stop(tts)
+                playFrom(index)
+            }
+        }
+    }
+
+    private fun sentenceStarted(i: Int, id: String?) {
+        current = i
+        wordStart = offsets[id] ?: 0
+        markSentence(i)
+    }
+
     private fun sentenceDone(id: String?) {
         val i = sentenceOf(id) ?: return
+        // A pause keeps the sentence and its word lit.
+        if (pausedSentence >= 0) return
         sentViews.getOrNull(i)?.let { it.text = sentTexts[i] }
-        if (i == sentTexts.size - 1 || !playing) {
+        if (i >= until - 1 || !playing) {
             playing = false
+            current = -1
             playButton?.text = TalkText.t("s_play")
             markSentence(-1)
         }
@@ -626,8 +707,7 @@ class NewsActivity : Activity() {
                 android.view.MotionEvent.ACTION_UP -> {
                     tv.removeCallbacks(longPress)
                     if (!inspecting) {
-                        if (playing) stopPlay()
-                        playFrom(index)
+                        sentenceTapped(index)
                     } else {
                         tv.parent?.requestDisallowInterceptTouchEvent(false)
                         tv.text = sentTexts[index]
