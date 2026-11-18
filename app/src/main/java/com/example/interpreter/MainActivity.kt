@@ -147,6 +147,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Providers.migrate(prefs)
+        OnDevice.refresh()
         home = Languages.home(prefs)
         I18n.use(home.code)
         foreign = langs.first { it.code != home.code }
@@ -647,6 +648,8 @@ class MainActivity : Activity() {
     private fun remote(id: String, text: String, sl: Lang, tl: Lang, context: String): String =
         if (id == "deepl") {
             deepl(text, sl.code, tl.code, p("deepl"), context)
+        } else if (id == OnDevice.ID) {
+            OnDevice.translate(text, sl.code, tl.code, context)
         } else {
             clean(Providers.complete(prefs, id, systemPrompt(sl, tl), listOf("user" to userPrompt(text, context)), 1024, 20000))
         }

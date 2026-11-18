@@ -142,6 +142,7 @@ object Providers {
     fun label(id: String): String = find(id)?.label ?: when (id) {
         "deepl" -> "DeepL"
         "mlkit" -> "기기 번역만"
+        OnDevice.ID -> OnDevice.label()
         else -> id
     }
 

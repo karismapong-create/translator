@@ -29,7 +29,7 @@ class EngineSettings(
         const val DEEPL_KEY_URL = "https://www.deepl.com/pro-api"
     }
 
-    private val ids = listOf("mlkit", "deepl") + Providers.llms.map { it.id }
+    private val ids = listOf("mlkit", OnDevice.ID, "deepl") + Providers.llms.map { it.id }
 
     private fun p(key: String) = prefs.getString(key, "").orEmpty().trim()
     private fun dp(v: Int) = (v * activity.resources.displayMetrics.density).toInt()
@@ -40,6 +40,7 @@ class EngineSettings(
     fun ready(id: String): Boolean = when (id) {
         "deepl" -> p("deepl").isNotEmpty()
         "mlkit" -> false
+        OnDevice.ID -> OnDevice.ready
         else -> Providers.ready(prefs, id)
     }
 
@@ -57,7 +58,11 @@ class EngineSettings(
             .setSingleChoiceItems(labels, current) { d, which ->
                 d.dismiss()
                 val id = ids[which]
-                if (id == "mlkit") onUse("mlkit") else config(id)
+                when (id) {
+                    "mlkit" -> onUse("mlkit")
+                    OnDevice.ID -> OnDevice.openDialog(activity, onUse)
+                    else -> config(id)
+                }
             }
             .setNegativeButton(I18n.t("close"), null)
             .show()
