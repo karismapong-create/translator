@@ -245,6 +245,10 @@ class LiveTalkActivity : Activity() {
             }
         }
         splitButton = Button(this).apply { setOnClickListener { toggleSplit() } }
+        autoButton = Button(this).apply {
+            setOnClickListener { toggleAuto() }
+            setOnLongClickListener { openSensitivity(); true }
+        }
         linkButton = Button(this).apply {
             text = LiveText.t("link")
             setOnClickListener { if (link?.linked == true) unlink() else startLink() }
@@ -262,6 +266,7 @@ class LiveTalkActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             addView(partnerSpinner, LinearLayout.LayoutParams(dp(140), LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(sceneSpinner, LinearLayout.LayoutParams(dp(170), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6) })
+            addView(autoButton)
             addView(splitButton)
             addView(linkButton)
             addView(newButton)
@@ -284,12 +289,13 @@ class LiveTalkActivity : Activity() {
         Ui.watch(root)
         refreshHeaders()
         updateSplitButton()
+        updateAutoButton()
         restore()
 
         tts = TextToSpeech(this) { }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(id: String?) {}
-            override fun onDone(id: String?) { runOnUiThread { synthDone(id) } }
+            override fun onStart(id: String?) { runOnUiThread { if (id?.startsWith("live_") == true) speechStarted() } }
+            override fun onDone(id: String?) { runOnUiThread { synthDone(id); if (id?.startsWith("live_") == true) speechMaybeEnded() } }
             @Deprecated("Deprecated in Java")
             override fun onError(id: String?) { runOnUiThread { synthDone(id) } }
         })
@@ -305,6 +311,8 @@ class LiveTalkActivity : Activity() {
     /* ---------- Listening ---------- */
 
     private fun micTapped(side: Side) {
+        // Tapping a mic takes over from automatic listening.
+        if (auto) stopAuto()
         if (listening == side) {
             recognizer?.stopListening()
             return
@@ -573,6 +581,209 @@ class LiveTalkActivity : Activity() {
         translateFor(Side.ME, r.mine, home, partner, r.theirs, own)
     }
 
+    /* ---------- Automatic listening ---------- */
+
+    // Hands-free: the mic keeps listening; a nearby voice (loud enough) is recognised, the language
+    // decides who spoke, and listening pauses while the app speaks so it never hears itself.
+    private lateinit var autoButton: Button
+    private var auto = false
+    private var speaking = false
+    private var maxRms = -100f
+    private var muted = false
+    private val audio by lazy { getSystemService(AUDIO_SERVICE) as android.media.AudioManager }
+    private val restartAuto = Runnable { startAuto() }
+    // If a heard sentence is never spoken (translation failed, or the other phone speaks it), listen again.
+    private val speechFallback = Runnable { if (auto && !speaking) startAuto() }
+
+    // Sensitivity 0..10: higher reacts to quieter (farther) voices.
+    private val level: Int get() = prefs.getInt("live_auto_level", 5)
+    private val threshold: Float get() = 8f - level * 0.7f
+
+    private fun toggleAuto() {
+        if (auto) {
+            stopAuto()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
+            return
+        }
+        cancelListening()
+        auto = true
+        setBeepsMuted(true)
+        updateAutoButton()
+        if (!prefs.getBoolean("live_auto_seen", false)) {
+            prefs.edit().putBoolean("live_auto_seen", true).apply()
+            AlertDialog.Builder(this)
+                .setMessage(LiveText.t("auto_help"))
+                .setPositiveButton(LiveText.t("close"), null)
+                .show().also { Ui.watch(it) }
+        }
+        startAuto()
+    }
+
+    private fun stopAuto() {
+        auto = false
+        me.live.removeCallbacks(restartAuto)
+        me.live.removeCallbacks(speechFallback)
+        recognizer?.destroy()
+        recognizer = null
+        me.live.text = ""
+        setBeepsMuted(false)
+        updateAutoButton()
+    }
+
+    private fun updateAutoButton() {
+        autoButton.setCompoundDrawables(null, null, null, null)
+        autoButton.text = LiveText.t(if (auto) "auto_on" else "auto_off")
+        autoButton.alpha = if (auto) 1f else 0.75f
+        if (auto) Ui.primary(autoButton) else autoButton.setBackgroundResource(R.drawable.btn_bg)
+        if (!auto) autoButton.setTextColor(Ui.PRIMARY_DARK)
+    }
+
+    // The recogniser beeps every time it starts; quiet those system sounds while listening hands-free.
+    private fun setBeepsMuted(on: Boolean) {
+        if (muted == on) return
+        muted = on
+        for (stream in listOf(android.media.AudioManager.STREAM_NOTIFICATION, android.media.AudioManager.STREAM_SYSTEM)) {
+            try {
+                audio.adjustStreamVolume(stream,
+                    if (on) android.media.AudioManager.ADJUST_MUTE else android.media.AudioManager.ADJUST_UNMUTE, 0)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun scheduleAuto(delay: Long) {
+        me.live.removeCallbacks(restartAuto)
+        if (auto) me.live.postDelayed(restartAuto, delay)
+    }
+
+    private fun startAuto() {
+        if (!auto || speaking || listening != null) return
+        recognizer?.destroy()
+        maxRms = -100f
+        val r = SpeechRecognizer.createSpeechRecognizer(this)
+        recognizer = r
+        r.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(p: Bundle?) {
+                if (auto) me.live.text = LiveText.t("auto_listening")
+            }
+            override fun onRmsChanged(v: Float) { if (v > maxRms) maxRms = v }
+            override fun onPartialResults(b: Bundle?) {
+                val t = first(b)
+                if (auto && t.isNotBlank()) me.live.text = "🎧 $t"
+            }
+            override fun onResults(b: Bundle?) {
+                val text = first(b).trim()
+                val detected = if (Build.VERSION.SDK_INT >= 34) b?.getString(SpeechRecognizer.DETECTED_LANGUAGE) else null
+                recognizer?.destroy()
+                recognizer = null
+                if (!auto) return
+                me.live.text = LiveText.t("auto_listening")
+                // Too quiet: someone farther away, not the person in front of me.
+                if (text.isEmpty() || maxRms < threshold) {
+                    scheduleAuto(150)
+                    return
+                }
+                heard(sideOf(text, detected), text)
+                me.live.removeCallbacks(speechFallback)
+                me.live.postDelayed(speechFallback, 8000)
+            }
+            override fun onError(error: Int) {
+                recognizer?.destroy()
+                recognizer = null
+                when (error) {
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> { stopAuto(); toast(LiveText.t("mic_perm")) }
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> scheduleAuto(800)
+                    else -> scheduleAuto(250)
+                }
+            }
+            override fun onBeginningOfSpeech() {}
+            override fun onBufferReceived(b: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onEvent(type: Int, p: Bundle?) {}
+        })
+        val both = arrayListOf(partner.speechTag, home.speechTag)
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, partner.speechTag)
+            putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf(home.speechTag))
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+            if (Build.VERSION.SDK_INT >= 34) {
+                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+                putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, both)
+                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
+                putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, both)
+            }
+        }
+        try { r.startListening(intent) } catch (_: Exception) { scheduleAuto(800) }
+    }
+
+    // Who spoke: the recogniser's detected language when it has one, otherwise the script of the
+    // words (Hangul, kana, Latin…). Unclear short words count as the other person's.
+    private fun sideOf(text: String, detected: String?): Side {
+        val d = detected?.lowercase().orEmpty()
+        if (d.startsWith(home.code)) return Side.ME
+        if (d.startsWith(partner.code)) return Side.THEM
+        val mine = LangCheck.looks(text, home.code)
+        val theirs = LangCheck.looks(text, partner.code)
+        return if (mine && !theirs) Side.ME else Side.THEM
+    }
+
+    private fun speechStarted() {
+        speaking = true
+        me.live.removeCallbacks(speechFallback)
+        me.live.removeCallbacks(restartAuto)
+        if (auto) {
+            recognizer?.destroy()
+            recognizer = null
+        }
+    }
+
+    // Listening resumes a moment after the last spoken sentence, so the end of it isn't picked up.
+    private fun speechMaybeEnded() {
+        if (tts?.isSpeaking == true || routing || routed.isNotEmpty()) return
+        speaking = false
+        scheduleAuto(600)
+    }
+
+    private fun openSensitivity() {
+        val label = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Ui.INK_SOFT)
+            setPadding(dp(4), 0, dp(4), dp(8))
+        }
+        fun show(v: Int) { label.text = LiveText.f("sens_value", v) }
+        val bar = android.widget.SeekBar(this).apply {
+            max = 10
+            progress = level
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar?, v: Int, user: Boolean) = show(v)
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {}
+            })
+        }
+        show(level)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(TextView(context).apply {
+                text = LiveText.t("sens_help")
+                textSize = 13f
+                setTextColor(Ui.INK_SOFT)
+                setPadding(0, 0, 0, dp(12))
+            })
+            addView(label)
+            addView(bar)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(LiveText.t("sens_title"))
+            .setView(box)
+            .setPositiveButton(LiveText.t("close")) { _, _ -> prefs.edit().putInt("live_auto_level", bar.progress).apply() }
+            .show().also { Ui.watch(it) }
+    }
+
     /* ---------- Speaking ---------- */
 
     // Speaks a translation for one side. With split audio, my translations go to the earbuds and
@@ -599,9 +810,10 @@ class LiveTalkActivity : Activity() {
 
     private fun playNextRouted() {
         if (routing) return
-        val (id, listener) = routed.removeFirstOrNull() ?: return
+        val (id, listener) = routed.removeFirstOrNull() ?: run { speechMaybeEnded(); return }
         val file = routeFiles.remove(id)?.first ?: return playNextRouted()
         routing = true
+        speechStarted()
         val device = if (listener == Side.THEM) AudioRoute.speaker(this) else AudioRoute.earbuds(this)
         AudioRoute.play(file, device) {
             runOnUiThread {
@@ -862,6 +1074,7 @@ class LiveTalkActivity : Activity() {
     }
 
     override fun onStop() {
+        if (auto) stopAuto()
         cancelListening()
         saveSession()
         super.onStop()
