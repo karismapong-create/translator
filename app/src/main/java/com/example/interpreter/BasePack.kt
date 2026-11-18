@@ -66,8 +66,8 @@ object BasePack {
         prepare(ctx)
         val shipped = parse(File(dir(ctx), "$lang/$place.json"))
         val mine = parse(File(ContentBuilder.dir(ctx), "$lang/$place.json"))
-        val a = LangCheck.score(mine, home)
-        val b = LangCheck.score(shipped, home)
+        val a = LangCheck.score(mine, home, lang)
+        val b = LangCheck.score(shipped, home, lang)
         return when {
             a < 0 && b < 0 -> null
             a >= b -> mine

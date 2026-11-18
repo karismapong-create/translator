@@ -67,12 +67,31 @@ object LangCheck {
         return bad <= maxOf(1, lines.length() / 10)
     }
 
+    // Questions that stay wrong even after swapping back (for example a Korean "Japanese" sentence).
+    fun brokenQuestions(o: JSONObject, foreign: String): Int {
+        val qs = o.optJSONArray("questions") ?: return 0
+        val homes = Languages.all.map { it.code }.filter { it != foreign }
+        return (0 until qs.length()).count { i ->
+            val q = qs.optJSONObject(i)?.let { JSONObject(it.toString()) } ?: return@count false
+            val withMeaning = homes.filter { q.optJSONObject("meaning")?.optString(it)?.isNotBlank() == true }
+            if (withMeaning.isEmpty()) !looks(q.optString("phrase"), foreign)
+            else withMeaning.any { fixQuestion(JSONObject(q.toString()), foreign, it) == null }
+        }
+    }
+
     // Cleans a whole place file in place: swaps reversed entries back and drops broken dialogues so
-    // they are made again. Returns how many entries it fixed or dropped.
+    // they are made again. A question list with more than two broken sentences is dropped whole, with
+    // its dialogues, so the place is made again from scratch. Returns how many entries changed.
     fun repair(o: JSONObject, foreign: String): Int {
         var changes = 0
         val homes = Languages.all.map { it.code }.filter { it != foreign }
         val qs = o.optJSONArray("questions") ?: return 0
+        if (brokenQuestions(o, foreign) > 2) {
+            val n = qs.length() + (o.optJSONArray("dialogues")?.length() ?: 0)
+            o.put("questions", JSONArray())
+            o.put("dialogues", JSONArray())
+            return n
+        }
         for (i in 0 until qs.length()) {
             val q = qs.optJSONObject(i) ?: continue
             val before = q.toString()
@@ -93,9 +112,10 @@ object LangCheck {
     }
 
     // How complete a place file is for a meaning language: questions plus dialogues with that meaning.
-    fun score(o: JSONObject?, home: String): Int {
+    fun score(o: JSONObject?, home: String, foreign: String? = null): Int {
         if (o == null) return -1
         val qs = o.optJSONArray("questions") ?: return -1
+        if (foreign != null && brokenQuestions(o, foreign) > 2) return -1
         if (qs.optJSONObject(0)?.optJSONObject("title")?.optString(home).isNullOrBlank()) return -1
         val ds = o.optJSONArray("dialogues") ?: JSONArray()
         var n = 1
