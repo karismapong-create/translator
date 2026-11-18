@@ -61,6 +61,8 @@ object I18n {
         "m_clear" to m("화면 지우기", "画面を消去", "Clear screen", "Effacer l'écran", "Borrar pantalla", "Bildschirm leeren", "清空屏幕"),
         "m_export" to m("화면 내용 내보내기", "画面の内容を共有", "Share screen text", "Partager le contenu", "Compartir contenido", "Inhalt teilen", "分享屏幕内容"),
         "m_engine" to m("번역 엔진 (지금: %s)", "翻訳エンジン (現在: %s)", "Translation engine (now: %s)", "Moteur de traduction (actuel : %s)", "Motor de traducción (actual: %s)", "Übersetzungs-Engine (aktuell: %s)", "翻译引擎（当前：%s）"),
+        "m_privacy" to m("개인정보처리방침", "プライバシーポリシー", "Privacy policy", "Politique de confidentialité", "Política de privacidad", "Datenschutzerklärung", "隐私政策"),
+        "m_licenses" to m("오픈소스 라이선스", "オープンソースライセンス", "Open source licenses", "Licences open source", "Licencias de código abierto", "Open-Source-Lizenzen", "开源许可"),
         "m_silent" to m("무음 모드 (지금: %s)", "サイレントモード (現在: %s)", "Silent mode (now: %s)", "Mode silencieux (actuel : %s)", "Modo silencio (actual: %s)", "Stummmodus (aktuell: %s)", "静音模式（当前：%s）"),
         "m_country" to m("🌐 내 나라·언어 (%s)", "🌐 国・言語 (%s)", "🌐 Country & language (%s)", "🌐 Pays et langue (%s)", "🌐 País e idioma (%s)", "🌐 Land & Sprache (%s)", "🌐 国家与语言（%s）"),
         "on" to m("켜짐", "オン", "On", "Activé", "Activado", "An", "开"),

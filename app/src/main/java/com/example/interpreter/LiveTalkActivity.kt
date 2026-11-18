@@ -256,6 +256,7 @@ class LiveTalkActivity : Activity() {
             addView(me.root, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         setContentView(root)
+        Ui.edgeToEdge(this, root)
         Ui.watch(root)
         refreshHeaders()
         updateSplitButton()

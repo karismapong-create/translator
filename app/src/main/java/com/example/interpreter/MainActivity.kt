@@ -67,6 +67,7 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        const val PRIVACY_URL = "https://karismapong-create.github.io/translator/privacy.html"
         const val MENU_SAVE_WORD = 1001
         private val SAMPLES = mapOf(
             "ko" to "안녕하세요. 만나서 반갑습니다.",
@@ -326,6 +327,7 @@ class MainActivity : Activity() {
             addView(container, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         }
         setContentView(root)
+        Ui.edgeToEdge(this, root)
         Ui.watch(root)
         showTab(0)
         setupBack()
@@ -604,7 +606,9 @@ class MainActivity : Activity() {
             I18n.t("m_clear"),
             I18n.t("m_export"),
             I18n.f("m_engine", engineLabel(activeEngine)),
-            I18n.f("m_silent", I18n.t(if (silent) "on" else "off"))
+            I18n.f("m_silent", I18n.t(if (silent) "on" else "off")),
+            I18n.t("m_privacy"),
+            I18n.t("m_licenses")
         )
         AlertDialog.Builder(this)
             .setTitle(I18n.t("settings"))
@@ -616,9 +620,27 @@ class MainActivity : Activity() {
                     3 -> clearScreen()
                     4 -> exportScreen()
                     5 -> settings.open()
-                    else -> toggleSilent()
+                    6 -> toggleSilent()
+                    7 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
+                    else -> showLicenses()
                 }
             }
+            .show().also { Ui.watch(it) }
+    }
+
+    private fun showLicenses() {
+        val text = try { assets.open("licenses/NOTICES.txt").bufferedReader().use { it.readText() } } catch (_: Exception) { "" }
+        AlertDialog.Builder(this)
+            .setTitle(I18n.t("m_licenses"))
+            .setView(ScrollView(this).apply {
+                addView(TextView(context).apply {
+                    this.text = text
+                    textSize = 12f
+                    setTextIsSelectable(true)
+                    setPadding(dp(20), dp(8), dp(20), dp(8))
+                })
+            })
+            .setPositiveButton(android.R.string.ok, null)
             .show().also { Ui.watch(it) }
     }
 

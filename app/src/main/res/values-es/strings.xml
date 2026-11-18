@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Búho Intérprete</string>
+    <string name="camera_title">Traducción con cámara</string>
+    <string name="mic_title">Prueba de micrófono</string>
+</resources>
