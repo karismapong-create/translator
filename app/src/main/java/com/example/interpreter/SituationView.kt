@@ -52,9 +52,6 @@ class SituationView(
     private val nameOrder = listOf("ko", "ja", "en", "fr", "es", "de", "zh")
 
     private companion object {
-        const val AUTO = ""
-        const val FORCED = "f_"
-        const val BUILT_IN = "b_"
         const val SAVE_WORD = 1001
     }
 
@@ -64,9 +61,6 @@ class SituationView(
     private val wordColor = Color.argb(230, 255, 160, 0)
     private val density = resources.displayMetrics.density
     private val net = Executors.newSingleThreadExecutor()
-    private val cacheDir = File(activity.filesDir, "situations").apply { mkdirs() }
-    // Korean speakers keep the files saved by earlier versions; other languages get their own.
-    private val cachePrefix = if (home.code == "ko") "" else "${home.code}_"
 
     private var place: Place? = null
     private var questions: List<Question> = emptyList()
@@ -77,8 +71,6 @@ class SituationView(
     // The sentence text of each line, for highlighting the word being spoken.
     private val lineViews = ArrayList<TextView>()
     private var screen = 0
-    // Where the current question list came from; also the cache prefix for its dialogues.
-    private var source = AUTO
     private var loadToken = 0
 
     private var tts: TextToSpeech? = null
@@ -171,7 +163,11 @@ class SituationView(
                 post { wordHighlight(utteranceId, start, end) }
             }
         })
-        net.execute { BasePack.prepare(activity) }
+        net.execute {
+            BasePack.prepare(activity)
+            // Content made here by earlier versions moves into the phrasebook DB once.
+            try { ContentBuilder.migratePhoneCache(activity) } catch (_: Exception) {}
+        }
         show(0)
     }
 
@@ -263,30 +259,6 @@ class SituationView(
         }
     }
 
-    /* ---------- Cache of content made or remade on this phone ---------- */
-
-    private fun readCache(key: String): String? =
-        File(cacheDir, "$cachePrefix$key.json").takeIf { it.exists() }?.readText()
-
-    private fun writeCache(key: String, text: String) = File(cacheDir, "$cachePrefix$key.json").writeText(text)
-
-    // Dialogues made for a remade question list no longer match it.
-    private fun clearDialogues(code: String, placeIdx: Int) {
-        val start = "${cachePrefix}${FORCED}d_${code}_${placeIdx}_"
-        val phrases = "${cachePrefix}${phraseKey(FORCED, code, placeIdx, -1).dropLast(2)}"
-        cacheDir.listFiles()?.filter { it.name.startsWith(start) || it.name.startsWith(phrases) }?.forEach { it.delete() }
-    }
-
-    // A remade dialogue can change the situation's key sentence; the list shows the new one.
-    private fun phraseKey(src: String, code: String, placeIdx: Int, i: Int) = "qo_${src}${code}_${placeIdx}_$i"
-
-    private fun withNewPhrase(q: Question, i: Int): Question {
-        val p = place ?: return q
-        val o = readCache(phraseKey(source, lang.code, places.indexOf(p), i))?.let { Tutor.json(it) } ?: return q
-        val phrase = o.optString("phrase")
-        return if (phrase.isBlank()) q else Question(q.title, phrase, o.optString("meaning"))
-    }
-
     /* ---------- Questions ---------- */
 
     private fun openPlace(p: Place) {
@@ -310,48 +282,30 @@ class SituationView(
         }.filter { it.phrase.isNotBlank() }
     }
 
-    // Order: remade on this phone, then built-in content, then a fresh AI request.
-    // Order: remade with "recreate" on this phone, then the built-in DB, then made automatically on this phone
-    // before the DB had it, then a fresh AI request. Dialogues are cached with the same prefix as their list.
+    // One store: the phrasebook DB (shipped, built, imported, or made here). Missing → ask the AI and
+    // save the answer into the DB, so the builder's progress and export always match this screen.
     private fun loadQuestions(force: Boolean) {
         val p = place ?: return
         val l = lang
         val placeIdx = places.indexOf(p)
-        val key = "q_${l.code}_$placeIdx"
         titleView.text = "${p.emoji} ${placeName(p)}"
         questionsBox.removeAllViews()
         val token = ++loadToken
         if (force) {
-            generateQuestions(p, l, placeIdx, key, true, token)
-            return
-        }
-        val remade = readCache(FORCED + key)?.let { parseQuestions(it) }
-        if (!remade.isNullOrEmpty()) {
-            source = FORCED
-            renderQuestions(remade)
+            generateQuestions(p, l, placeIdx, true, token)
             return
         }
         net.execute {
             val base = BasePack.questions(activity, l.code, placeIdx, home.code)?.let { parseQuestions(it) }
             post {
                 if (token != loadToken) return@post
-                if (!base.isNullOrEmpty()) {
-                    source = BUILT_IN
-                    renderQuestions(base)
-                    return@post
-                }
-                val auto = readCache(key)?.let { parseQuestions(it) }
-                if (!auto.isNullOrEmpty()) {
-                    source = AUTO
-                    renderQuestions(auto)
-                } else {
-                    generateQuestions(p, l, placeIdx, key, false, token)
-                }
+                if (!base.isNullOrEmpty()) renderQuestions(base)
+                else generateQuestions(p, l, placeIdx, false, token)
             }
         }
     }
 
-    private fun generateQuestions(p: Place, l: LangInfo, placeIdx: Int, key: String, force: Boolean, token: Int) {
+    private fun generateQuestions(p: Place, l: LangInfo, placeIdx: Int, force: Boolean, token: Int) {
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
             questionsBox.addView(note(TalkText.t("s_need_llm"), Color.rgb(207, 34, 46)))
@@ -378,18 +332,14 @@ class SituationView(
                     questionsBox.addView(button(TalkText.t("retry")) { loadQuestions(true) })
                     return@post
                 }
-                source = if (force) FORCED else AUTO
-                if (force) clearDialogues(l.code, placeIdx)
-                writeCache(source + key, raw)
-                // Joins the DB when the DB has no usable list for this place yet.
-                net.execute { ContentBuilder.adoptQuestions(activity, l.code, placeIdx, home.code, raw) }
+                // Saved into the DB (a hand-remade list replaces the old one and its dialogues).
+                net.execute { ContentBuilder.setQuestions(activity, l.code, placeIdx, home.code, raw, replace = true) }
                 renderQuestions(qs)
             }
         }
     }
 
-    private fun renderQuestions(list: List<Question>) {
-        val qs = list.mapIndexed { i, q -> withNewPhrase(q, i) }
+    private fun renderQuestions(qs: List<Question>) {
         questions = qs
         questionsBox.removeAllViews()
         questionsBox.addView(note(TalkText.t("s_q_help")))
@@ -448,27 +398,14 @@ class SituationView(
         val l = lang
         val placeIdx = places.indexOf(p)
         val index = questionIndex
-        val key = "d_${l.code}_${placeIdx}_$index"
         stopPlay()
         titleView.text = "${p.emoji} ${q.title}"
         dialogueBox.removeAllViews()
         cards = emptyList()
         lineViews.clear()
         val token = ++loadToken
-        val cacheKey = source + key
         if (force) {
-            generateDialogue(p, q, l, cacheKey, token)
-            return
-        }
-        val cached = readCache(cacheKey)?.let { parseDialogue(it) }
-        val cachedLines = cached?.let { checkDialogue(it.first, l) }
-        if (cached != null && cachedLines != null) {
-            renderDialogue(p, q, cachedLines, cached.second)
-            return
-        }
-        // Built-in dialogues only match the built-in question list.
-        if (source != BUILT_IN) {
-            generateDialogue(p, q, l, cacheKey, token)
+            generateDialogue(p, q, l, token)
             return
         }
         net.execute {
@@ -476,7 +413,7 @@ class SituationView(
             post {
                 if (token != loadToken) return@post
                 if (base != null) renderDialogue(p, q, base.first, base.second)
-                else generateDialogue(p, q, l, cacheKey, token)
+                else generateDialogue(p, q, l, token)
             }
         }
     }
@@ -489,8 +426,8 @@ class SituationView(
         val old = questions.getOrNull(i) ?: return
         if (phrase.isEmpty() || phrase == old.phrase) return
         val meaning = o.optString("meaning").trim()
-        writeCache(phraseKey(source, l.code, places.indexOf(p), i),
-            org.json.JSONObject().put("phrase", phrase).put("meaning", meaning).toString())
+        val placeIdx = places.indexOf(p)
+        net.execute { ContentBuilder.setPhrase(activity, l.code, placeIdx, i, home.code, phrase, meaning) }
         val updated = Question(old.title, phrase, meaning)
         question = updated
         renderQuestions(questions.toMutableList().also { it[i] = updated })
@@ -510,7 +447,7 @@ class SituationView(
         return if (bad <= maxOf(1, lines.size / 10)) fixed else null
     }
 
-    private fun generateDialogue(p: Place, q: Question, l: LangInfo, key: String, token: Int, attempt: Int = 1) {
+    private fun generateDialogue(p: Place, q: Question, l: LangInfo, token: Int, attempt: Int = 1) {
         val qi = questionIndex
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
@@ -538,7 +475,7 @@ class SituationView(
                 val checked = parsed?.let { checkDialogue(it.first, l) }
                 if (parsed != null && checked == null && attempt < 2) {
                     // Mixed-up languages: ask once more before giving up.
-                    generateDialogue(p, q, l, key, token, attempt + 1)
+                    generateDialogue(p, q, l, token, attempt + 1)
                     return@post
                 }
                 dialogueBox.removeAllViews()
@@ -547,8 +484,8 @@ class SituationView(
                     dialogueBox.addView(button(TalkText.t("retry")) { loadDialogue(true) })
                     return@post
                 }
-                writeCache(key, raw)
-                // Joins the DB (progress, export) when it was made for the DB's own sentence at this index.
+                // Saved into the DB for this question (replacing an older dialogue), before the key
+                // sentence update below, which runs after it on the same thread.
                 val placeIdx = places.indexOf(p)
                 val phrase = q.phrase
                 net.execute { ContentBuilder.adoptDialogue(activity, l.code, placeIdx, qi, home.code, raw, phrase) }

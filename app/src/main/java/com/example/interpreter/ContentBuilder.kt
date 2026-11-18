@@ -417,14 +417,18 @@ object ContentBuilder {
         return true
     }
 
-    // A question list the phrasebook screen made because the DB had none for my language joins the DB.
+    // A question list made in the phrasebook screen. replace = the user remade it by hand: it becomes
+    // the DB's list for this language and place. Otherwise it is used only where the DB has no usable
+    // list. Every question keeps its position so dialogues stay with their question.
     // raw: {"questions":[{"ko" (title),"phrase","phrase_ko" (meaning)}]}.
     @Synchronized
-    fun adoptQuestions(ctx: Context, lang: String, place: Int, home: String, raw: String): Boolean {
+    fun setQuestions(ctx: Context, lang: String, place: Int, home: String, raw: String, replace: Boolean): Boolean {
         val arr = Tutor.json(raw)?.optJSONArray("questions") ?: return false
         val o = current(ctx, lang, place)
         val qs = o.optJSONArray("questions")
-        if (qs != null && qs.length() > 0 && LangCheck.brokenQuestions(o, lang) <= 2) return false
+        val usable = qs != null && qs.length() > 0 && LangCheck.brokenQuestions(o, lang) <= 2 &&
+            has(qs.optJSONObject(0)?.optJSONObject("title"), home)
+        if (usable && !replace) return false
         val built = JSONArray()
         for (i in 0 until arr.length()) {
             val q = arr.optJSONObject(i) ?: continue
@@ -432,47 +436,86 @@ object ContentBuilder {
             val entry = JSONObject().put("phrase", q.optString("phrase"))
                 .put("title", JSONObject().put(home, q.optString("ko")))
                 .put("meaning", JSONObject().put(home, q.optString("phrase_ko")))
-            built.put(LangCheck.fixQuestion(entry, lang, home) ?: continue)
+            built.put(LangCheck.fixQuestion(entry, lang, home) ?: entry)
         }
-        if (built.length() < 5) return false
+        if (built.length() == 0) return false
         o.put("questions", built)
         o.put("dialogues", JSONArray())
         save(file(ctx, lang, place), o)
         return true
     }
 
-    // Brings content made in the phrasebook screen into the DB: lists made there (by hand or
-    // automatically) where the DB has no usable list, and dialogues whose list is the DB's list.
-    // Safe to run again; it only adds what fits.
-    fun adoptPhoneCache(ctx: Context) {
+    // A remade dialogue can bring a better key sentence for its question.
+    @Synchronized
+    fun setPhrase(ctx: Context, lang: String, place: Int, index: Int, home: String, phrase: String, meaning: String) {
+        val o = current(ctx, lang, place)
+        val q = o.optJSONArray("questions")?.optJSONObject(index) ?: return
+        q.put("phrase", phrase)
+        child(q, "meaning").put(home, meaning)
+        save(file(ctx, lang, place), o)
+    }
+
+    // Newer shipped content (after an app update) fills what this phone's DB lacks, without
+    // replacing anything made on the phone.
+    fun absorbShipped(ctx: Context) {
+        val root = shipped(ctx)
+        if (!root.exists()) return
+        root.walkTopDown().filter { it.isFile && it.extension == "json" }.forEach { f ->
+            val path = f.relativeTo(root).path.replace('\\', '/')
+            val mine = File(dir(ctx), path)
+            if (!mine.exists()) return@forEach
+            val lang = path.substringBefore('/')
+            try { save(mine, merge(load(mine), load(f), lang, keepBase = true)) } catch (_: Exception) {}
+        }
+    }
+
+    // Earlier versions kept content made in the phrasebook screen in a separate cache. This moves it
+    // into the DB, as the screen showed it, then removes the cache: from now on there is one store.
+    @Synchronized
+    fun migratePhoneCache(ctx: Context) {
         val dir = File(ctx.filesDir, "situations")
-        val files = dir.listFiles() ?: return
+        val files = dir.listFiles()?.filter { it.isFile && it.name.endsWith(".json") } ?: return
+        if (files.isEmpty()) return
         val listName = Regex("^(?:([a-z]{2})_)?(f_)?q_([a-z]{2})_(\\d+)\\.json$")
         val dlgName = Regex("^(?:([a-z]{2})_)?(b_|f_)?d_([a-z]{2})_(\\d+)_(\\d+)\\.json$")
-        // Hand-made lists first: they are the newest choice of the user.
-        for (f in files.sortedByDescending { listName.find(it.name)?.groupValues?.get(2).orEmpty() }) {
-            val m = listName.find(f.name) ?: continue
-            val home = m.groupValues[1].ifEmpty { "ko" }
-            try { adoptQuestions(ctx, m.groupValues[3], m.groupValues[4].toInt(), home, f.readText()) } catch (_: Exception) {}
+        val phraseName = Regex("^(?:([a-z]{2})_)?qo_(b_|f_)?([a-z]{2})_(\\d+)_(\\d+)\\.json$")
+        fun home(m: MatchResult) = m.groupValues[1].ifEmpty { "ko" }
+        fun prefix(home: String) = if (home == "ko") "" else "${home}_"
+        fun listText(home: String, kind: String, lang: String, place: Int) =
+            File(dir, "${prefix(home)}${kind}q_${lang}_$place.json").takeIf { it.exists() }?.readText()
+        fun dialogues(kind: String) = files.mapNotNull { f -> dlgName.find(f.name)?.takeIf { it.groupValues[2] == kind }?.let { f to it } }
+        fun adoptAll(kind: String) {
+            for ((f, m) in dialogues(kind)) {
+                val h = home(m)
+                val lang = m.groupValues[3]
+                val place = m.groupValues[4].toInt()
+                val index = m.groupValues[5].toInt()
+                val phrase: String? = if (kind == "b_") null else (listText(h, kind, lang, place)
+                    ?.let { Tutor.json(it)?.optJSONArray("questions")?.optJSONObject(index)?.optString("phrase") } ?: continue)
+                try { adoptDialogue(ctx, lang, place, index, h, f.readText(), phrase) } catch (_: Exception) {}
+            }
         }
-        for (f in files) {
-            val m = dlgName.find(f.name) ?: continue
-            val home = m.groupValues[1].ifEmpty { "ko" }
-            val kind = m.groupValues[2]
-            val lang = m.groupValues[3]
-            val place = m.groupValues[4].toInt()
-            val index = m.groupValues[5].toInt()
-            try {
-                var phrase: String? = null
-                if (kind != "b_") {
-                    // Made for a list of this phone: find that list and its sentence at this index.
-                    val prefix = if (home == "ko") "" else "${home}_"
-                    val list = File(dir, "${prefix}${kind}q_${lang}_$place.json").takeIf { it.exists() }?.readText()
-                        ?.let { Tutor.json(it)?.optJSONArray("questions") } ?: continue
-                    phrase = list.optJSONObject(index)?.optString("phrase") ?: continue
-                }
-                adoptDialogue(ctx, lang, place, index, home, f.readText(), phrase)
-            } catch (_: Exception) {}
+        try {
+            // 1. Dialogues made for the DB's list, while it is still that list.
+            adoptAll("b_")
+            // 2. Automatic lists where the DB had none, with their dialogues.
+            files.mapNotNull { f -> listName.find(f.name)?.takeIf { it.groupValues[2].isEmpty() }?.let { f to it } }.forEach { (f, m) ->
+                setQuestions(ctx, m.groupValues[3], m.groupValues[4].toInt(), home(m), f.readText(), replace = false)
+            }
+            adoptAll("")
+            // 3. Lists the user remade by hand replace the DB's list, with their dialogues.
+            files.mapNotNull { f -> listName.find(f.name)?.takeIf { it.groupValues[2] == "f_" }?.let { f to it } }.forEach { (f, m) ->
+                setQuestions(ctx, m.groupValues[3], m.groupValues[4].toInt(), home(m), f.readText(), replace = true)
+            }
+            adoptAll("f_")
+            // 4. Key sentences updated by remade dialogues.
+            files.mapNotNull { f -> phraseName.find(f.name)?.let { f to it } }.forEach { (f, m) ->
+                val o = Tutor.json(f.readText()) ?: return@forEach
+                val phrase = o.optString("phrase")
+                if (phrase.isNotBlank()) setPhrase(ctx, m.groupValues[3], m.groupValues[4].toInt(), m.groupValues[5].toInt(), home(m), phrase, o.optString("meaning"))
+            }
+        } finally {
+            files.forEach { it.delete() }
         }
     }
 
@@ -506,14 +549,19 @@ object ContentBuilder {
     // Same sentences: meanings of every language are combined, and a broken dialogue is replaced by a
     // good one. Different sentences: the more complete file is kept whole (the imported one on a tie),
     // so questions and dialogues never get mixed from two lists. Both are cleaned first.
-    private fun merge(base: JSONObject, add: JSONObject, lang: String): JSONObject {
+    // keepBase: base is this phone's DB and add is newer shipped content. Then a different list or a
+    // different dialogue in base is kept (the user made it), and add only fills what base lacks.
+    private fun merge(base: JSONObject, add: JSONObject, lang: String, keepBase: Boolean = false): JSONObject {
         LangCheck.repair(base, lang)
         LangCheck.repair(add, lang)
         val bq = base.optJSONArray("questions")
         val aq = add.optJSONArray("questions")
         if (aq == null || aq.length() == 0) return base
         if (bq == null || bq.length() == 0) return add
-        if (phrases(bq) != phrases(aq)) return if (completeness(base) > completeness(add)) base else add
+        if (phrases(bq) != phrases(aq)) {
+            if (keepBase) return base
+            return if (completeness(base) > completeness(add)) base else add
+        }
         for (i in 0 until bq.length()) {
             val b = bq.optJSONObject(i) ?: continue
             val a = aq.optJSONObject(i) ?: continue
@@ -525,8 +573,12 @@ object ContentBuilder {
         for (i in 0 until ad.length()) {
             val a = ad.optJSONObject(i) ?: continue
             val b = bd.optJSONObject(i)
-            if (b == null || lineTexts(b) != lineTexts(a)) {
+            if (b == null) {
                 bd.put(i, a)
+                continue
+            }
+            if (lineTexts(b) != lineTexts(a)) {
+                if (!keepBase) bd.put(i, a)
                 continue
             }
             val bl = b.optJSONArray("lines") ?: continue
@@ -631,10 +683,11 @@ object ContentBuilder {
             val lang = path.substringBefore('/')
             val a = load(File(shipped(ctx), path))
             val b = load(File(dir(ctx), path))
+            // The same as the app shows: this phone's DB, filled in from the shipped file.
             val o = when {
                 a.length() == 0 -> b.also { LangCheck.repair(it, lang) }
                 b.length() == 0 -> a.also { LangCheck.repair(it, lang) }
-                else -> merge(a, b, lang)
+                else -> merge(b, a, lang, keepBase = true)
             }
             entries[path] = o.toString().toByteArray(Charsets.UTF_8)
         }
@@ -731,7 +784,7 @@ object ContentBuilder {
             val f = foreign()
             val m = meaning()
             Thread {
-                try { adoptPhoneCache(activity) } catch (_: Exception) {}
+                try { migratePhoneCache(activity) } catch (_: Exception) {}
                 val rows = status(activity, f, m, list.size)
                 val count = rows.sumOf { row -> row.count { it == DONE } }
                 val names = Places.all.take(list.size).map { Places.name(it, home) }
