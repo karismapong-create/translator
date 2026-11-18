@@ -279,7 +279,8 @@ class MainActivity : Activity() {
         convPage = ConversationView(
             this, prefs, langInfos,
             { text, voice -> speakNow(text, voice, null, true) },
-            { SpeechOut.stop(tts) }
+            { SpeechOut.stop(tts) },
+            { text, voice -> speakNow(text, voice, null, false) }
         )
         vocabPage = VocabView(this, prefs, langInfos) { text, voice -> speakNow(text, voice, null, true) }
         glossaryPage = GlossaryView(this, prefs, langInfos) { text ->
