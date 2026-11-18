@@ -382,12 +382,14 @@ object ContentBuilder {
     // so it counts in progress and goes out with "export". Runs on a background thread.
     // raw: {"lines":[{"who","text","ko"}],"tips"} as the phrasebook screen stores it.
     @Synchronized
-    fun adoptDialogue(ctx: Context, lang: String, place: Int, index: Int, home: String, raw: String): Boolean {
+    // phrase: the question's sentence the dialogue was made for; it must be the DB's sentence at that index.
+    fun adoptDialogue(ctx: Context, lang: String, place: Int, index: Int, home: String, raw: String, phrase: String? = null): Boolean {
         val src = Tutor.json(raw) ?: return false
         val lines = src.optJSONArray("lines") ?: return false
         val o = current(ctx, lang, place)
         val qs = o.optJSONArray("questions") ?: return false
         if (index !in 0 until qs.length()) return false
+        if (phrase != null && qs.optJSONObject(index)?.optString("phrase")?.trim() != phrase.trim()) return false
         val built = JSONArray()
         for (i in 0 until lines.length()) {
             val l = lines.optJSONObject(i) ?: continue
@@ -439,34 +441,37 @@ object ContentBuilder {
         return true
     }
 
-    // Brings content made in the phrasebook screen before this version into the DB, once.
+    // Brings content made in the phrasebook screen into the DB: lists made there (by hand or
+    // automatically) where the DB has no usable list, and dialogues whose list is the DB's list.
+    // Safe to run again; it only adds what fits.
     fun adoptPhoneCache(ctx: Context) {
         val dir = File(ctx.filesDir, "situations")
         val files = dir.listFiles() ?: return
-        val autoQ = Regex("^(?:([a-z]{2})_)?q_([a-z]{2})_(\\d+)\\.json$")
-        val dlg = Regex("^(?:([a-z]{2})_)?(b_)?d_([a-z]{2})_(\\d+)_(\\d+)\\.json$")
-        // Lists first, so dialogues made for them have a place to go.
-        for (f in files) {
-            val m = autoQ.find(f.name) ?: continue
+        val listName = Regex("^(?:([a-z]{2})_)?(f_)?q_([a-z]{2})_(\\d+)\\.json$")
+        val dlgName = Regex("^(?:([a-z]{2})_)?(b_|f_)?d_([a-z]{2})_(\\d+)_(\\d+)\\.json$")
+        // Hand-made lists first: they are the newest choice of the user.
+        for (f in files.sortedByDescending { listName.find(it.name)?.groupValues?.get(2).orEmpty() }) {
+            val m = listName.find(f.name) ?: continue
             val home = m.groupValues[1].ifEmpty { "ko" }
-            try { adoptQuestions(ctx, m.groupValues[2], m.groupValues[3].toInt(), home, f.readText()) } catch (_: Exception) {}
+            try { adoptQuestions(ctx, m.groupValues[3], m.groupValues[4].toInt(), home, f.readText()) } catch (_: Exception) {}
         }
         for (f in files) {
-            val m = dlg.find(f.name) ?: continue
+            val m = dlgName.find(f.name) ?: continue
             val home = m.groupValues[1].ifEmpty { "ko" }
+            val kind = m.groupValues[2]
             val lang = m.groupValues[3]
             val place = m.groupValues[4].toInt()
+            val index = m.groupValues[5].toInt()
             try {
-                // A dialogue made for an automatic list belongs to the DB only if that list is now the DB's.
-                if (m.groupValues[2].isEmpty()) {
+                var phrase: String? = null
+                if (kind != "b_") {
+                    // Made for a list of this phone: find that list and its sentence at this index.
                     val prefix = if (home == "ko") "" else "${home}_"
-                    val list = File(dir, "${prefix}q_${lang}_$place.json").takeIf { it.exists() }?.readText()
+                    val list = File(dir, "${prefix}${kind}q_${lang}_$place.json").takeIf { it.exists() }?.readText()
                         ?.let { Tutor.json(it)?.optJSONArray("questions") } ?: continue
-                    val db = current(ctx, lang, place).optJSONArray("questions") ?: continue
-                    val mine = (0 until list.length()).map { list.optJSONObject(it)?.optString("phrase").orEmpty() }
-                    if (mine.filter { it.isNotBlank() } != phrases(db)) continue
+                    phrase = list.optJSONObject(index)?.optString("phrase") ?: continue
                 }
-                adoptDialogue(ctx, lang, place, m.groupValues[5].toInt(), home, f.readText())
+                adoptDialogue(ctx, lang, place, index, home, f.readText(), phrase)
             } catch (_: Exception) {}
         }
     }
@@ -726,10 +731,7 @@ object ContentBuilder {
             val f = foreign()
             val m = meaning()
             Thread {
-                if (!prefs.getBoolean("adopted_phone_v1", false)) {
-                    try { adoptPhoneCache(activity) } catch (_: Exception) {}
-                    prefs.edit().putBoolean("adopted_phone_v1", true).apply()
-                }
+                try { adoptPhoneCache(activity) } catch (_: Exception) {}
                 val rows = status(activity, f, m, list.size)
                 val count = rows.sumOf { row -> row.count { it == DONE } }
                 val names = Places.all.take(list.size).map { Places.name(it, home) }
