@@ -221,19 +221,24 @@ object ContentBuilder {
 
             if (qs == null || qs.length() == 0) {
                 report("$step · 질문 목록 만드는 중…")
-                val r = ask(prefs, engine, questionsPrompt(name, mine), "Place: ${p.name} (${p.desc}). Language of the phrases: $name.")
-                val arr = r.optJSONArray("questions") ?: throw IllegalStateException("질문 목록 형식 오류")
-                val built = JSONArray()
-                for (i in 0 until arr.length()) {
-                    val q = arr.optJSONObject(i) ?: continue
-                    val phrase = q.optString("phrase")
-                    if (phrase.isBlank()) continue
-                    built.put(
-                        JSONObject()
-                            .put("phrase", phrase)
+                // Small engines sometimes answer in the wrong language; ask again until the list checks out.
+                var built = JSONArray()
+                for (attempt in 1..3) {
+                    val r = ask(prefs, engine, questionsPrompt(name, mine), "Place: ${p.name} (${p.desc}). Language of the phrases: $name.")
+                    val arr = r.optJSONArray("questions") ?: continue
+                    val good = JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val q = arr.optJSONObject(i) ?: continue
+                        if (q.optString("phrase").isBlank()) continue
+                        val entry = JSONObject()
+                            .put("phrase", q.optString("phrase"))
                             .put("title", JSONObject().put(home, q.optString("title")))
                             .put("meaning", JSONObject().put(home, q.optString("meaning")))
-                    )
+                        LangCheck.fixQuestion(entry, foreign, home)?.let { good.put(it) }
+                    }
+                    if (good.length() > built.length()) built = good
+                    if (built.length() >= 8) break
+                    report("$step · 언어가 섞인 답이 와서 다시 요청 ($attempt/3)…")
                 }
                 if (built.length() == 0) throw IllegalStateException("질문 목록이 비어 있어요")
                 qs = built
@@ -267,22 +272,29 @@ object ContentBuilder {
                 if (d == null) {
                     report("$step · 대화 ${qi + 1}/10 만드는 중…")
                     val title = anyText(q.optJSONObject("title"))
-                    val r = ask(prefs, engine, dialoguePrompt(name, mine, p), "Situation: $title — ${q.optString("phrase")}")
-                    val lines = r.optJSONArray("lines")
-                    if (lines == null || lines.length() < 8) continue
-                    val built = JSONArray()
-                    for (i in 0 until lines.length()) {
-                        val l = lines.optJSONObject(i) ?: continue
-                        val text = l.optString("text")
-                        if (text.isBlank()) continue
-                        built.put(
-                            JSONObject()
-                                .put("who", l.optString("who", "A"))
-                                .put("text", text)
-                                .put("m", JSONObject().put(home, l.optString("m")))
-                        )
+                    var made: JSONObject? = null
+                    for (attempt in 1..3) {
+                        val r = ask(prefs, engine, dialoguePrompt(name, mine, p), "Situation: $title — ${q.optString("phrase")}")
+                        val lines = r.optJSONArray("lines")
+                        if (lines == null || lines.length() < 8) continue
+                        val built = JSONArray()
+                        for (i in 0 until lines.length()) {
+                            val l = lines.optJSONObject(i) ?: continue
+                            val text = l.optString("text")
+                            if (text.isBlank()) continue
+                            built.put(
+                                JSONObject()
+                                    .put("who", l.optString("who", "A"))
+                                    .put("text", text)
+                                    .put("m", JSONObject().put(home, l.optString("m")))
+                            )
+                        }
+                        val d2 = JSONObject().put("lines", built).put("tips", JSONObject().put(home, r.optString("tips")))
+                        if (LangCheck.fixDialogue(d2, foreign, home)) { made = d2; break }
+                        report("$step · 대화 ${qi + 1}/10: 언어가 섞여서 다시 요청 ($attempt/3)…")
                     }
-                    ds.put(qi, JSONObject().put("lines", built).put("tips", JSONObject().put(home, r.optString("tips"))))
+                    if (made == null) continue
+                    ds.put(qi, made)
                     save(f, o)
                 } else if (!dialogueHas(d, home)) {
                     report("$step · 대화 ${qi + 1}/10에 ${native(home)} 뜻 추가 중…")
@@ -293,6 +305,8 @@ object ContentBuilder {
                     val r = ask(prefs, engine, dialogueTranslatePrompt(name, mine), input.toString())
                     val m = r.optJSONArray("m")
                     if (m == null || m.length() != lines.length()) continue
+                    val wrong = (0 until m.length()).count { !LangCheck.looks(m.optString(it), home) }
+                    if (wrong > maxOf(1, m.length() / 10)) continue
                     for (i in 0 until lines.length()) {
                         val l = lines.optJSONObject(i) ?: continue
                         child(l, "m").put(home, m.optString(i))
@@ -366,12 +380,21 @@ object ContentBuilder {
         return (0 until ls.length()).map { ls.optJSONObject(it)?.optString("text").orEmpty() }
     }
 
-    // Same sentences: meanings of every language are combined. Different sentences: the imported file wins.
-    private fun merge(base: JSONObject, add: JSONObject): JSONObject {
+    // Total completeness of a place file over every meaning language.
+    private fun completeness(o: JSONObject): Int =
+        Languages.all.sumOf { LangCheck.score(o, it.code).coerceAtLeast(0) }
+
+    // Same sentences: meanings of every language are combined, and a broken dialogue is replaced by a
+    // good one. Different sentences: the more complete file is kept whole (the imported one on a tie),
+    // so questions and dialogues never get mixed from two lists. Both are cleaned first.
+    private fun merge(base: JSONObject, add: JSONObject, lang: String): JSONObject {
+        LangCheck.repair(base, lang)
+        LangCheck.repair(add, lang)
         val bq = base.optJSONArray("questions")
         val aq = add.optJSONArray("questions")
         if (aq == null || aq.length() == 0) return base
-        if (bq == null || bq.length() == 0 || phrases(bq) != phrases(aq)) return add
+        if (bq == null || bq.length() == 0) return add
+        if (phrases(bq) != phrases(aq)) return if (completeness(base) > completeness(add)) base else add
         for (i in 0 until bq.length()) {
             val b = bq.optJSONObject(i) ?: continue
             val a = aq.optJSONObject(i) ?: continue
@@ -398,6 +421,39 @@ object ContentBuilder {
         return base
     }
 
+    // Saved dialogues and sentence updates on this phone were made for the old list; after an import
+    // they could show under the wrong question. Clears them for one language and place, keeping only
+    // what the user remade by hand.
+    private fun clearPhoneCache(ctx: Context, lang: String, place: Int) {
+        val mid = "_${lang}_${place}_"
+        val end = "_${lang}_${place}.json"
+        File(ctx.filesDir, "situations").listFiles()
+            ?.filter { (it.name.contains(mid) || it.name.endsWith(end)) && !it.name.contains("f_") }
+            ?.forEach { it.delete() }
+    }
+
+    // Cleans every file built or imported on this phone, and the shipped files it differs from.
+    // Returns how many entries were fixed or dropped (dropped dialogues are made again on the next run).
+    fun repairAll(ctx: Context): Int {
+        BasePack.prepare(ctx)
+        var total = 0
+        for (lang in Languages.all.map { it.code }) {
+            for (place in 0 until 64) {
+                val f = file(ctx, lang, place)
+                val shippedFile = File(shipped(ctx), "$lang/$place.json")
+                if (!f.exists() && !shippedFile.exists()) continue
+                val o = current(ctx, lang, place)
+                val n = LangCheck.repair(o, lang)
+                if (n > 0) {
+                    save(f, o)
+                    clearPhoneCache(ctx, lang, place)
+                    total += n
+                }
+            }
+        }
+        return total
+    }
+
     // Merges a zip made by "export" into this phone's content. Returns how many files were merged.
     // Runs on a background thread.
     fun importZip(ctx: Context, uri: Uri): Int {
@@ -422,7 +478,8 @@ object ContentBuilder {
                                 null
                             }
                             if (incoming != null) {
-                                save(file(ctx, lang, place), merge(current(ctx, lang, place), incoming))
+                                save(file(ctx, lang, place), merge(current(ctx, lang, place), incoming, lang))
+                                clearPhoneCache(ctx, lang, place)
                                 count++
                             }
                         }
@@ -441,14 +498,27 @@ object ContentBuilder {
     fun export(ctx: Context): String? {
         if (Build.VERSION.SDK_INT < 29) return null
         BasePack.prepare(ctx)
-        val entries = LinkedHashMap<String, File>()
+        val paths = LinkedHashSet<String>()
         for (root in listOf(shipped(ctx), dir(ctx))) {
             if (!root.exists()) continue
             root.walkTopDown()
                 .filter { it.isFile && it.extension == "json" }
-                .forEach { entries[it.relativeTo(root).path] = it }
+                .forEach { paths.add(it.relativeTo(root).path.replace('\\', '/')) }
         }
-        if (entries.isEmpty()) return null
+        if (paths.isEmpty()) return null
+        // Each file: shipped and this phone's version merged the same way as an import, then cleaned.
+        val entries = LinkedHashMap<String, ByteArray>()
+        for (path in paths) {
+            val lang = path.substringBefore('/')
+            val a = load(File(shipped(ctx), path))
+            val b = load(File(dir(ctx), path))
+            val o = when {
+                a.length() == 0 -> b.also { LangCheck.repair(it, lang) }
+                b.length() == 0 -> a.also { LangCheck.repair(it, lang) }
+                else -> merge(a, b, lang)
+            }
+            entries[path] = o.toString().toByteArray(Charsets.UTF_8)
+        }
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, "situations.zip")
             put(MediaStore.Downloads.MIME_TYPE, "application/zip")
@@ -456,9 +526,9 @@ object ContentBuilder {
         val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
         ctx.contentResolver.openOutputStream(uri)?.use { os ->
             ZipOutputStream(os).use { zip ->
-                for ((path, f) in entries) {
+                for ((path, bytes) in entries) {
                     zip.putNextEntry(ZipEntry(path))
-                    f.inputStream().use { it.copyTo(zip) }
+                    zip.write(bytes)
                     zip.closeEntry()
                 }
             }
@@ -579,6 +649,25 @@ object ContentBuilder {
             addView(button("⏸ 멈추기") {
                 stop()
                 refresh("멈추는 중… (지금 요청이 끝나면 멈춰요)")
+            })
+            addView(button("🔍 검사·정리 (언어 섞임 고치기)") {
+                if (running) {
+                    status.text = "만드는 중에는 정리할 수 없어요. 먼저 멈추세요."
+                } else {
+                    status.text = "검사하는 중…"
+                    Thread {
+                        val n = try { repairAll(activity) } catch (_: Exception) { -1 }
+                        activity.runOnUiThread {
+                            refresh(
+                                when {
+                                    n < 0 -> "검사하지 못했어요."
+                                    n == 0 -> "✔ 문제를 찾지 못했어요."
+                                    else -> "✔ ${n}곳을 고치거나 지웠어요. 지운 대화는 '시작 / 이어서'로 다시 만들 수 있어요."
+                                }
+                            )
+                        }
+                    }.start()
+                }
             })
             addView(button("📥 가져오기 (zip 합치기)") {
                 if (running) {
