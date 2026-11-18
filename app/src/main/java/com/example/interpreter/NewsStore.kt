@@ -53,10 +53,16 @@ object NewsStore {
     fun load(ctx: Context, date: String): List<Item> {
         val f = dayFile(ctx, date)
         if (!f.exists()) return emptyList()
-        val arr = try { JSONObject(f.readText()).optJSONArray("items") } catch (_: Exception) { null } ?: return emptyList()
+        val o = try { JSONObject(f.readText()) } catch (_: Exception) { null } ?: return emptyList()
+        val arr = o.optJSONArray("items") ?: return emptyList()
+        val sorted = o.optBoolean("classified")
         return (0 until arr.length()).mapNotNull { i ->
             arr.optJSONObject(i)?.let {
-                Item(it.optString("topic"), it.optString("text"), it.optString("section"), it.optInt("c", 23), it.optBoolean("r"))
+                val topic = it.optString("topic")
+                val text = it.optString("text")
+                val section = it.optString("section")
+                val c = if (sorted) it.optInt("c", 23) else guess(topic, text, section)
+                Item(topic, text, section, c, it.optBoolean("r"))
             }
         }
     }
@@ -167,7 +173,7 @@ object NewsStore {
             val nextDepth = if (next != null && next.startsWith("*")) next.takeWhile { it == '*' }.length else 0
             if (nextDepth <= depth && text.length > 25) {
                 val topic = stack.dropLast(1).filter { it.isNotBlank() }.joinToString(" — ")
-                out.add(Item(topic, text, section, sectionCategory(section), false))
+                out.add(Item(topic, text, section, guess(topic, text, section), false))
             }
         }
         return out
@@ -184,6 +190,49 @@ object NewsStore {
         repeat(3) { t = t.replace(Regex("\\{\\{[^{}]*\\}\\}"), "") }
         t = t.replace("'''", "").replace("''", "").replace(Regex("<[^>]+>"), "")
         return t.replace(Regex("\\s+"), " ").trim()
+    }
+
+    // Words that point to each of the 24 categories, matched as whole words in the English item.
+    private val keywords: List<List<String>> = listOf(
+        listOf("president", "prime minister", "parliament", "government", "cabinet", "senate", "congress", "minister", "lawmakers", "coalition", "impeach", "opposition leader", "political party", "governor", "mayor"),
+        listOf("election", "elections", "vote", "votes", "voters", "ballot", "polls", "referendum", "candidate", "campaign", "runoff", "elected", "re-elected"),
+        listOf("economy", "economic", "inflation", "gdp", "recession", "trade", "tariff", "tariffs", "unemployment", "interest rate", "central bank", "budget", "tax", "taxes", "exports", "imports"),
+        listOf("stock", "stocks", "shares", "market", "markets", "bond", "bonds", "currency", "bitcoin", "cryptocurrency", "investors", "index", "bank", "banks", "dollar", "yen", "euro"),
+        listOf("company", "companies", "ceo", "merger", "acquisition", "acquires", "layoffs", "profit", "revenue", "corporation", "startup", "billion deal", "bankruptcy", "airline company"),
+        listOf("summit", "diplomatic", "diplomats", "ambassador", "treaty", "united nations", "sanctions", "foreign minister", "bilateral", "nato", "european union", "talks", "visit to"),
+        listOf("war", "military", "troops", "airstrike", "airstrikes", "missile", "missiles", "attack", "attacks", "killed", "ceasefire", "rebels", "drone", "drones", "shelling", "hostages", "terrorist", "militants", "invasion", "bombing", "army", "insurgents"),
+        listOf("protest", "protests", "protesters", "strike", "refugees", "migrants", "human rights", "union", "poverty", "housing", "demonstrators", "community", "discrimination"),
+        listOf("court", "judge", "trial", "sentenced", "arrested", "police", "charged", "lawsuit", "murder", "convicted", "supreme court", "prison", "indicted", "fraud", "investigation", "verdict"),
+        listOf("earthquake", "flood", "floods", "flooding", "hurricane", "typhoon", "cyclone", "wildfire", "wildfires", "crash", "collapse", "explosion", "storm", "landslide", "derailment", "tsunami", "volcano", "eruption", "fire", "accident"),
+        listOf("health", "hospital", "disease", "virus", "outbreak", "vaccine", "cancer", "pandemic", "cholera", "measles", "patients", "medical", "who", "epidemic", "drug"),
+        listOf("climate", "emissions", "environment", "environmental", "pollution", "wildlife", "species", "deforestation", "carbon", "biodiversity", "heatwave", "drought", "glacier"),
+        listOf("scientists", "study", "research", "researchers", "discovery", "discovered", "fossil", "physics", "archaeologists", "archaeological", "genome", "experiment"),
+        listOf("nasa", "space", "rocket", "satellite", "moon", "mars", "astronaut", "astronauts", "orbit", "spacecraft", "spacex", "telescope", "asteroid"),
+        listOf("artificial intelligence", "ai", "technology", "software", "internet", "cyberattack", "hackers", "app", "google", "apple", "microsoft", "openai", "chip", "chips", "semiconductor", "smartphone", "data breach"),
+        listOf("oil", "gas", "energy", "nuclear power", "electricity", "solar", "opec", "pipeline", "power plant", "blackout", "renewable", "coal"),
+        listOf("airline", "flight", "flights", "airport", "railway", "train", "trains", "transport", "highway", "traffic", "ship", "ferry", "port", "metro", "bridge"),
+        listOf("school", "schools", "university", "universities", "students", "education", "teachers", "exam", "campus"),
+        listOf("film festival", "museum", "art", "artist", "music", "book", "novel", "literature", "heritage", "unesco", "theatre", "opera", "exhibition", "prize"),
+        listOf("actor", "actress", "singer", "celebrity", "album", "television", "tv series", "movie", "film", "box office", "grammy", "oscar", "oscars", "concert", "streaming"),
+        listOf("football", "soccer", "olympic", "olympics", "world cup", "championship", "tennis", "cricket", "basketball", "baseball", "league", "match", "tournament", "grand prix", "formula one", "marathon", "medal", "club", "coach", "nba", "fifa"),
+        listOf("pope", "church", "religious", "mosque", "temple", "christian", "christians", "muslim", "muslims", "buddhist", "vatican", "bishop", "hindu", "jewish"),
+        listOf("dies", "died", "death of", "obituary", "aged", "passes away", "funeral", "dead at"),
+        emptyList()
+    )
+    private val patterns = keywords.map { ws ->
+        ws.map { Regex("(?<![a-z])" + Regex.escape(it) + "(?![a-z])") }
+    }
+
+    // The category whose words appear most often; the portal section decides when nothing matches.
+    fun guess(topic: String, text: String, section: String): Int {
+        val t = "$topic $text".lowercase()
+        var best = -1
+        var bestScore = 0
+        patterns.forEachIndexed { i, ps ->
+            val score = ps.count { it.containsMatchIn(t) }
+            if (score > bestScore) { best = i; bestScore = score }
+        }
+        return if (best >= 0) best else sectionCategory(section)
     }
 
     // The portal's ten sections, mapped to the app's categories (refined by the AI when available).
@@ -213,14 +262,19 @@ object NewsStore {
         val items = load(ctx, date)
         if (items.isEmpty()) return
         val names = StudyText.categories.mapIndexed { i, c -> "$i=${c["en"]}" }.joinToString(", ")
-        val list = items.mapIndexed { i, it -> "$i. ${it.topic.take(80)} | ${it.text.take(200)}" }.joinToString("\n")
-        val system = "Classify each news item into one category. Categories: $names. " +
-            "Reply with JSON only: {\"c\":[category number for item 0, item 1, ...]} with exactly ${items.size} numbers."
-        val raw = RemoteTranslate.ask(prefs, engine!!, system, list, 1200)
-        val arr = Tutor.json(raw)?.optJSONArray("c") ?: return
-        if (arr.length() != items.size) return
-        items.forEachIndexed { i, it -> it.category = arr.optInt(i, it.category).coerceIn(0, StudyText.categories.size - 1) }
-        save(ctx, date, items, true)
+        // In batches, so a long day never overflows one answer; a failed batch keeps the keyword guess.
+        var allDone = true
+        items.chunked(25).forEachIndexed { b, batch ->
+            val list = batch.mapIndexed { i, it -> "$i. ${it.topic.take(80)} | ${it.text.take(200)}" }.joinToString("\n")
+            val system = "Classify each news item into the single most specific category. Categories: $names. " +
+                "Prefer a specific category (Elections, Finance & markets, Space, Technology, Energy, Transport, " +
+                "Education, Entertainment, Religion, People & obituaries…) over a general one when it fits. " +
+                "Reply with JSON only: {\"c\":[number for item 0, item 1, ...]} with exactly ${batch.size} numbers."
+            val arr = try { Tutor.json(RemoteTranslate.ask(prefs, engine!!, system, list, 600))?.optJSONArray("c") } catch (_: Exception) { null }
+            if (arr == null || arr.length() != batch.size) { allDone = false; return@forEachIndexed }
+            batch.forEachIndexed { i, it -> it.category = arr.optInt(i, it.category).coerceIn(0, StudyText.categories.size - 1) }
+        }
+        save(ctx, date, items, allDone)
     }
 
     /* ---------- Lessons ---------- */
