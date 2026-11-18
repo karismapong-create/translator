@@ -64,6 +64,7 @@ class VocabView(
     private val list: LinearLayout
     private val listPanel: LinearLayout
     private val quizHolder: FrameLayout
+    private val reviewButton: Button
 
     init {
         orientation = VERTICAL
@@ -114,10 +115,25 @@ class VocabView(
             addView(quizButton)
             addView(exportButton)
         }
+        // Daily review (spaced repetition) and news study.
+        reviewButton = Button(context).apply {
+            setOnClickListener { context.startActivity(android.content.Intent(context, StudyActivity::class.java)) }
+        }
+        Ui.primary(reviewButton)
+        val newsButton = Button(context).apply {
+            text = StudyText.t("news_btn")
+            setOnClickListener { context.startActivity(android.content.Intent(context, NewsActivity::class.java)) }
+        }
+        val study = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            addView(reviewButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            addView(newsButton, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        }
         list = LinearLayout(context).apply { orientation = VERTICAL }
         val scroll = ScrollView(context).apply { addView(list) }
         listPanel = LinearLayout(context).apply {
             orientation = VERTICAL
+            addView(study, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
             addView(filters, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
             addView(actions, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
             addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
@@ -196,6 +212,7 @@ class VocabView(
     /* ---------- List ---------- */
 
     fun refresh() {
+        reviewButton.text = StudyText.f("review_btn", VocabStore.dueCount(prefs, home.code))
         val pos = langFilter.selectedItemPosition
         val code = if (pos <= 0) null else langs[pos - 1].code
         val q = search.text.toString().trim()

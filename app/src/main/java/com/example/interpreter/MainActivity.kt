@@ -149,6 +149,8 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         Providers.migrate(prefs)
         OnDevice.refresh()
+        // Daily world news for the vocabulary tab is fetched in the background once a day.
+        try { NewsStore.schedule(this) } catch (_: Exception) {}
         home = Languages.home(prefs)
         I18n.use(home.code)
         foreign = langs.first { it.code != home.code }
@@ -899,6 +901,11 @@ class MainActivity : Activity() {
         if (rc != 1) return
         if (res.firstOrNull() == PackageManager.PERMISSION_GRANTED) start()
         else status(I18n.t("mic_perm"))
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::vocabPage.isInitialized && currentTab == 2) vocabPage.refresh()
     }
 
     override fun onStop() {

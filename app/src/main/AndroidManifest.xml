@@ -60,6 +60,16 @@
         <activity
             android:name=".LiveTalkActivity"
             android:exported="false" />
+        <activity
+            android:name=".StudyActivity"
+            android:exported="false" />
+        <activity
+            android:name=".NewsActivity"
+            android:exported="false" />
+        <service
+            android:name=".NewsJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <service
             android:name=".PlaybackService"
             android:exported="false"
