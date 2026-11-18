@@ -1,6 +1,18 @@
 package com.example.interpreter
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.job.JobInfo
+import android.app.job.JobParameters
+import android.app.job.JobScheduler
+import android.app.job.JobService
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -45,7 +57,15 @@ object BookStore {
         Book(1342, "Pride and Prejudice", "Jane Austen", txt(1342)),
         Book(84, "Frankenstein", "Mary Wollstonecraft Shelley", txt(84)),
         Book(2591, "Grimms' Fairy Tales", "Jacob Grimm, Wilhelm Grimm", txt(2591)),
-        Book(1597, "Andersen's Fairy Tales", "Hans Christian Andersen", txt(1597))
+        Book(1597, "Andersen's Fairy Tales", "Hans Christian Andersen", txt(1597)),
+        Book(74, "The Adventures of Tom Sawyer", "Mark Twain", txt(74)),
+        Book(76, "Adventures of Huckleberry Finn", "Mark Twain", txt(76)),
+        Book(514, "Little Women", "Louisa May Alcott", txt(514)),
+        Book(271, "Black Beauty", "Anna Sewell", txt(271)),
+        Book(174, "The Picture of Dorian Gray", "Oscar Wilde", txt(174)),
+        Book(345, "Dracula", "Bram Stoker", txt(345)),
+        Book(1260, "Jane Eyre", "Charlotte Brontë", txt(1260)),
+        Book(768, "Wuthering Heights", "Emily Brontë", txt(768))
     )
 
     private fun dir(ctx: Context) = File(ctx.filesDir, "books").apply { mkdirs() }
@@ -124,9 +144,43 @@ object BookStore {
 
     fun has(ctx: Context, id: Int) = textFile(ctx, id).exists()
 
+    // The same book file in several places: the main site first, then mirrors (old folder layout:
+    // book 1342 lives in 1/3/4/1342/). A busy server (503) is retried after a short wait.
+    private fun candidates(id: Int): List<String> {
+        val digits = id.toString()
+        val folders = if (digits.length == 1) "0/$digits" else digits.dropLast(1).toCharArray().joinToString("/") + "/$digits"
+        val out = mutableListOf(
+            "https://www.gutenberg.org/cache/epub/$id/pg$id.txt",
+            "https://www.gutenberg.org/ebooks/$id.txt.utf-8"
+        )
+        for (m in listOf("https://gutenberg.pglaf.org", "https://aleph.gutenberg.org", "https://mirrors.xmission.com/gutenberg")) {
+            out += "$m/$folders/$id-0.txt"
+            out += "$m/$folders/$id.txt"
+        }
+        return out
+    }
+
+    private fun fetchBook(id: Int): String {
+        var last: Exception? = null
+        for (url in candidates(id)) {
+            for (attempt in 0..1) {
+                try {
+                    val t = get(url)
+                    if (t.length > 2000) return t
+                    break
+                } catch (e: Exception) {
+                    last = e
+                    val busy = e.message?.contains("503") == true || e.message?.contains("429") == true
+                    if (busy && attempt == 0) Thread.sleep(3000) else break
+                }
+            }
+        }
+        throw last ?: IllegalStateException("not found")
+    }
+
     /** Downloads and cleans a book. Runs on a background thread. Throws on failure. */
     fun download(ctx: Context, book: Book) {
-        val raw = get(book.url)
+        val raw = fetchBook(book.id)
         val blocks = clean(raw)
         if (blocks.size < 5) throw IllegalStateException("empty")
         val arr = JSONArray()
@@ -249,4 +303,96 @@ object BookStore {
 
     fun saveLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, o: JSONObject) =
         lessonFile(ctx, id, sec, lang, level).writeText(o.toString())
+
+    /* ---------------- Background download ---------------- */
+
+    private const val JOB_ID = 7311
+    private const val CHANNEL = "books"
+    private val main = Handler(Looper.getMainLooper())
+
+    /** Called on the main thread when a book has finished downloading (or failed for good). */
+    @Volatile var listener: ((Int, Boolean) -> Unit)? = null
+
+    private fun queueFile(ctx: Context) = File(dir(ctx), "queue.json")
+
+    @Synchronized
+    fun queue(ctx: Context): List<Book> = try {
+        val a = JSONArray(queueFile(ctx).takeIf { it.exists() }?.readText() ?: "[]")
+        (0 until a.length()).mapNotNull { i ->
+            a.optJSONObject(i)?.let { Book(it.optInt("id"), it.optString("title"), it.optString("author"), it.optString("url")) }
+        }
+    } catch (_: Exception) { emptyList() }
+
+    @Synchronized
+    private fun saveQueue(ctx: Context, list: List<Book>) {
+        queueFile(ctx).writeText(JSONArray().apply { list.forEach { put(it.toJson()) } }.toString())
+    }
+
+    fun pending(ctx: Context, id: Int) = queue(ctx).any { it.id == id }
+
+    /** Downloads in the background until it succeeds, even if the app is closed. */
+    fun enqueue(ctx: Context, book: Book) {
+        if (has(ctx, book.id)) return
+        val q = queue(ctx)
+        if (q.none { it.id == book.id }) saveQueue(ctx, q + book)
+        schedule(ctx)
+    }
+
+    private fun schedule(ctx: Context) {
+        val js = ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
+        if (js.getPendingJob(JOB_ID) != null) return
+        js.schedule(
+            JobInfo.Builder(JOB_ID, ComponentName(ctx, BookJob::class.java))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setBackoffCriteria(30_000, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
+                .build()
+        )
+    }
+
+    /** Works through the queue. Returns true when something is left to retry later. */
+    fun runQueue(ctx: Context): Boolean {
+        var left = false
+        for (b in queue(ctx)) {
+            val ok = try { download(ctx, b); true } catch (_: Exception) { false }
+            if (ok) {
+                saveQueue(ctx, queue(ctx).filter { it.id != b.id })
+                notifyDone(ctx, b)
+            } else {
+                left = true
+            }
+            main.post { listener?.invoke(b.id, ok) }
+        }
+        return left
+    }
+
+    private fun notifyDone(ctx: Context, b: Book) {
+        try {
+            val nm = ctx.getSystemService(NotificationManager::class.java)
+            nm.createNotificationChannel(NotificationChannel(CHANNEL, StudyText.t("books_btn"), NotificationManager.IMPORTANCE_DEFAULT))
+            val open = Intent(ctx, NewsActivity::class.java).putExtra("books", true).putExtra("book", b.id)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            val pi = PendingIntent.getActivity(ctx, b.id, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val n = Notification.Builder(ctx, CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle(StudyText.t("books_ready"))
+                .setContentText(b.title)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(9000 + b.id % 1000, n)
+        } catch (_: Exception) {}
+    }
+}
+
+// Downloads queued books whenever there is a network, retrying with growing waits until done.
+class BookJob : JobService() {
+    override fun onStartJob(params: JobParameters): Boolean {
+        Thread {
+            val retry = try { BookStore.runQueue(applicationContext) } catch (_: Exception) { true }
+            jobFinished(params, retry)
+        }.start()
+        return true
+    }
+
+    override fun onStopJob(params: JobParameters) = true
 }
