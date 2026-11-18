@@ -646,7 +646,24 @@ class NewsActivity : Activity() {
             v.background = if (k == i) Ui.rounded(sentenceColor, 10, this) else null
             if (k != i) v.text = sentTexts[k]
         }
-        sentViews.getOrNull(i)?.let { v -> lessonPage.post { lessonPage.smoothScrollTo(0, (v.top - dp(80)).coerceAtLeast(0)) } }
+        sentViews.getOrNull(i)?.let { v -> lessonPage.post { followSentence(v) } }
+    }
+
+    // Scrolls just enough to keep the sentence being read in view. Its position is added up through
+    // its rows and cards (a view's top is only relative to its own parent).
+    private fun followSentence(v: View) {
+        var y = 0
+        var cur: View = v
+        while (cur !== lessonBox) {
+            y += cur.top
+            cur = (cur.parent as? View) ?: return
+        }
+        val top = lessonPage.scrollY
+        val bottom = top + lessonPage.height
+        val margin = dp(80)
+        if (y - margin < top || y + v.height + margin > bottom) {
+            lessonPage.smoothScrollTo(0, (y - margin).coerceAtLeast(0))
+        }
     }
 
     private fun markWord(i: Int, start: Int, end: Int, color: Int) {
