@@ -79,7 +79,7 @@ class NewsActivity : Activity() {
                 runOnUiThread {
                     sentenceOf(id)?.let { i ->
                         val base = offsets[id] ?: 0
-                        if (playing) wordStart = start + base
+                        if (playing) { current = i; wordStart = start + base }
                         markWord(i, start + base, end + base, wordColor)
                     }
                 }
@@ -148,7 +148,7 @@ class NewsActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(4), 0, dp(4), dp(24))
         }
-        lessonPage = ScrollView(this).apply {
+        lessonPage = SeekScroll().apply {
             addView(lessonBox)
             visibility = View.GONE
         }
@@ -385,6 +385,7 @@ class NewsActivity : Activity() {
         val sentences = o.optJSONArray("sentences") ?: JSONArray()
         sentViews.clear()
         sentTexts.clear()
+        wordStarts.clear()
         lessonWords.clear()
         o.optJSONArray("words")?.let { ws ->
             for (i in 0 until ws.length()) ws.optJSONObject(i)?.let { lessonWords.add(it) }
@@ -558,7 +559,14 @@ class NewsActivity : Activity() {
     private val wordColor = Color.argb(230, 255, 160, 0)
     private val pickColor = Color.argb(120, 47, 91, 234)
 
-    private fun sentenceOf(id: String?): Int? = id?.takeIf { it.startsWith("ns_") }?.removePrefix("ns_")?.toIntOrNull()
+    // Utterance ids carry the run they belong to ("ns_<run>_<sentence>"). Reports from a stopped or
+    // paused run arrive late; they are ignored so they can't move the position or end the new run.
+    private var run = 0
+    private fun sentenceOf(id: String?): Int? {
+        val parts = id?.takeIf { it.startsWith("ns_") }?.split("_") ?: return null
+        if (parts.size != 3 || parts[1].toIntOrNull() != run) return null
+        return parts[2].toIntOrNull()
+    }
 
     // Where reading is: the sentence being spoken, the start of the word being spoken, and where an
     // utterance began inside its sentence (a resumed sentence starts mid-way).
@@ -574,19 +582,24 @@ class NewsActivity : Activity() {
     private fun playFrom(i: Int, from: Int = 0, end: Int = sentTexts.size) {
         val engine = tts ?: return
         if (i !in sentTexts.indices) return
+        run++
         playing = true
         pausedSentence = -1
+        current = i
+        wordStart = from.coerceIn(0, sentTexts[i].length)
         until = end.coerceAtMost(sentTexts.size)
         playButton?.text = TalkText.t("s_stop")
+        offsets.clear()
         for (k in i until until) {
             val start = if (k == i) from.coerceIn(0, sentTexts[k].length) else 0
-            val id = "ns_$k"
+            val id = "ns_${run}_$k"
             offsets[id] = start
             SpeechOut.speak(engine, sentTexts[k].substring(start), playLang.speechTag, k == i, id)
         }
     }
 
     private fun stopPlay() {
+        run++
         playing = false
         pausedSentence = -1
         SpeechOut.stop(tts)
@@ -597,10 +610,13 @@ class NewsActivity : Activity() {
     // Stops on the word being spoken and keeps it lit, ready to go on from there.
     private fun pausePlay() {
         if (!playing || current < 0) return
+        run++
         playing = false
         pausedSentence = current
         pausedAt = wordStart
         SpeechOut.stop(tts)
+        markSentence(current)
+        markWordAt(current, pausedAt)
         playButton?.text = TalkText.t("s_resume")
     }
 
@@ -639,6 +655,147 @@ class NewsActivity : Activity() {
             playButton?.text = TalkText.t("s_play")
             markSentence(-1)
         }
+    }
+
+    /* ---------- Seeking by dragging sideways ---------- */
+
+    // Drag right or left anywhere except on the article's sentences: reading jumps forward or back
+    // word by word, and starts again from there when the finger lifts.
+    private inner class SeekScroll : ScrollView(this@NewsActivity) {
+        private var downX = 0f
+        private var downY = 0f
+        private var onSentence = false
+        private var seeking = false
+        private var decided = false
+        private val slop = android.view.ViewConfiguration.get(this@NewsActivity).scaledTouchSlop
+
+        private fun hitsSentence(ev: android.view.MotionEvent): Boolean {
+            val r = android.graphics.Rect()
+            val x = ev.rawX.toInt()
+            val y = ev.rawY.toInt()
+            return sentViews.any { it.getGlobalVisibleRect(r) && r.contains(x, y) }
+        }
+
+        // Returns true once the gesture is a sideways seek.
+        private fun watch(ev: android.view.MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = ev.x; downY = ev.y
+                    onSentence = hitsSentence(ev)
+                    seeking = false
+                    decided = false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> if (!decided && !onSentence && sentTexts.isNotEmpty()) {
+                    val dx = Math.abs(ev.x - downX)
+                    val dy = Math.abs(ev.y - downY)
+                    if (dx > slop * 2 && dx > dy * 1.5f) {
+                        decided = true
+                        seeking = true
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        seekStart()
+                    } else if (dy > slop) {
+                        decided = true
+                    }
+                }
+            }
+            return seeking
+        }
+
+        override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+            if (watch(ev)) return true
+            return super.onInterceptTouchEvent(ev)
+        }
+
+        override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+            if (!seeking) {
+                if (watch(ev)) return true
+                return super.onTouchEvent(ev)
+            }
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_MOVE -> seekMove(ev.x - downX)
+                android.view.MotionEvent.ACTION_UP -> { seeking = false; seekEnd(true) }
+                android.view.MotionEvent.ACTION_CANCEL -> { seeking = false; seekEnd(true) }
+            }
+            return true
+        }
+    }
+
+    private var seekFrom = 0 to 0
+    private var seekAt = 0 to 0
+    private val wordStarts = HashMap<Int, List<Int>>()
+
+    // Where each word of a sentence begins.
+    private fun starts(i: Int): List<Int> = wordStarts.getOrPut(i) {
+        val text = sentTexts[i]
+        val it = java.text.BreakIterator.getWordInstance(java.util.Locale.forLanguageTag(playLang.speechTag))
+        it.setText(text)
+        val out = ArrayList<Int>()
+        var a = it.first()
+        var b = it.next()
+        while (b != java.text.BreakIterator.DONE) {
+            if (text.substring(a, b).any { c -> Character.isLetterOrDigit(c) }) out += a
+            a = b
+            b = it.next()
+        }
+        if (out.isEmpty()) out += 0
+        out
+    }
+
+    private fun seekStart() {
+        val from = when {
+            playing && current >= 0 -> current to wordStart
+            pausedSentence >= 0 -> pausedSentence to pausedAt
+            current >= 0 -> current to 0
+            else -> 0 to 0
+        }
+        if (playing) {
+            run++
+            playing = false
+            SpeechOut.stop(tts)
+        }
+        seekFrom = from
+        seekAt = from
+        lessonPage.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+    }
+
+    // One word per step of finger travel; crosses into the next or previous sentence.
+    private fun seekMove(dx: Float) {
+        var steps = (dx / dp(14)).toInt()
+        var s = seekFrom.first.coerceIn(0, sentTexts.size - 1)
+        var list = starts(s)
+        var w = list.indexOfLast { it <= seekFrom.second }.coerceAtLeast(0)
+        while (steps > 0) {
+            if (w < list.size - 1) w++
+            else if (s < sentTexts.size - 1) { s++; list = starts(s); w = 0 }
+            else break
+            steps--
+        }
+        while (steps < 0) {
+            if (w > 0) w--
+            else if (s > 0) { s--; list = starts(s); w = list.size - 1 }
+            else break
+            steps++
+        }
+        val at = s to list[w]
+        if (at == seekAt) return
+        seekAt = at
+        lessonPage.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+        if (current != s) { current = s; markSentence(s) }
+        markWordAt(s, list[w])
+    }
+
+    private fun seekEnd(play: Boolean) {
+        val (s, o) = seekAt
+        pausedSentence = s
+        pausedAt = o
+        if (play) playFrom(s, o, sentTexts.size)
+    }
+
+    // Lights the word that begins at a position.
+    private fun markWordAt(i: Int, start: Int) {
+        val text = sentTexts.getOrNull(i) ?: return
+        val w = wordAt(text, start, playLang) ?: return
+        markWord(i, w.first, w.second, wordColor)
     }
 
     private fun markSentence(i: Int) {
