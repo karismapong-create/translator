@@ -274,14 +274,43 @@ class LiveTalkActivity : Activity() {
         }
         val bar = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
+            // The edge fades where more buttons continue, so it reads as scrollable.
+            isHorizontalFadingEdgeEnabled = true
+            setFadingEdgeLength(dp(36))
             addView(controls)
             setPadding(0, dp(6), 0, dp(6))
+        }
+        // Arrows on the sides show there are more buttons; they hide at each end.
+        val more = arrow(R.drawable.ic_chevron_right)
+        val less = arrow(R.drawable.ic_chevron_left).apply { visibility = View.GONE }
+        val barBox = android.widget.FrameLayout(this).apply {
+            addView(bar)
+            addView(less, android.widget.FrameLayout.LayoutParams(dp(28), dp(28), Gravity.START or Gravity.CENTER_VERTICAL))
+            addView(more, android.widget.FrameLayout.LayoutParams(dp(28), dp(28), Gravity.END or Gravity.CENTER_VERTICAL))
+        }
+        fun updateArrows() {
+            val max = (controls.width - bar.width).coerceAtLeast(0)
+            more.visibility = if (bar.scrollX < max - dp(4)) View.VISIBLE else View.GONE
+            less.visibility = if (bar.scrollX > dp(4)) View.VISIBLE else View.GONE
+        }
+        bar.setOnScrollChangeListener { _, _, _, _, _ -> updateArrows() }
+        more.setOnClickListener { bar.smoothScrollBy(bar.width * 2 / 3, 0) }
+        less.setOnClickListener { bar.smoothScrollBy(-bar.width * 2 / 3, 0) }
+        bar.post {
+            updateArrows()
+            // First visits: the bar slides a little and back, showing that it moves.
+            val shown = prefs.getInt("live_bar_hint", 0)
+            if (shown < 3 && controls.width > bar.width) {
+                prefs.edit().putInt("live_bar_hint", shown + 1).apply()
+                bar.postDelayed({ bar.smoothScrollTo(dp(120), 0) }, 600)
+                bar.postDelayed({ bar.smoothScrollTo(0, 0) }, 1400)
+            }
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(12), dp(12), dp(12))
             addView(them.root, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-            addView(bar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(barBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(me.root, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         setContentView(root)
@@ -299,6 +328,17 @@ class LiveTalkActivity : Activity() {
             @Deprecated("Deprecated in Java")
             override fun onError(id: String?) { runOnUiThread { synthDone(id) } }
         })
+    }
+
+    // A round arrow button over the edge of the button bar.
+    private fun arrow(res: Int) = android.widget.ImageView(this).apply {
+        setImageDrawable(getDrawable(res)?.mutate()?.apply { setTint(Color.WHITE) })
+        background = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(Ui.PRIMARY)
+        }
+        setPadding(dp(4), dp(4), dp(4), dp(4))
+        elevation = dp(3).toFloat()
     }
 
     private fun refreshHeaders() {
