@@ -17,6 +17,7 @@ object Engines {
         val ready = when (id) {
             "deepl" -> p(prefs, "deepl").isNotEmpty()
             "mlkit" -> false
+            OnDevice.ID -> OnDevice.ready
             else -> Providers.ready(prefs, id)
         }
         return if (ready) id else "mlkit"
@@ -27,6 +28,7 @@ object Engines {
     // Runs on a background thread. Throws on failure.
     fun translate(prefs: SharedPreferences, id: String, text: String, source: String, target: String): String =
         if (id == "deepl") deepl(p(prefs, "deepl"), text, source, target)
+        else if (id == OnDevice.ID) OnDevice.translate(text, source, target, "")
         else Providers.complete(prefs, id, prompt(source, target), listOf("user" to text), 1024, 20000)
             .trim().trim('"', '“', '”').trim()
 
