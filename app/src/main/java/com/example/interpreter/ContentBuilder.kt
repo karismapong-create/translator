@@ -126,6 +126,8 @@ object ContentBuilder {
     const val DONE = 1
     const val NEEDS_MEANING = 2
     const val BROKEN = 3
+    // A place with fewer than 10 questions has no dialogue for the cells past its last question.
+    const val NONE = -1
 
     // Per place: [question list, dialogue 1..10] states for one foreign + meaning language, read from
     // the same file the phrasebook shows (shipped DB or the one built or imported on this phone).
@@ -135,6 +137,7 @@ object ContentBuilder {
             val o = BasePack.source(ctx, foreign, pi, home) ?: current(ctx, foreign, pi)
             val qs = o.optJSONArray("questions")
             if (qs == null || qs.length() == 0) return@map row
+            for (i in qs.length() until 10) row[i + 1] = NONE
             row[0] = when {
                 LangCheck.brokenQuestions(o, foreign) > 2 -> BROKEN
                 has(qs.optJSONObject(0)?.optJSONObject("title"), home) -> DONE
@@ -740,7 +743,6 @@ object ContentBuilder {
         fun foreign() = langs[foreignSpinner.selectedItemPosition].code
         fun meaning() = langs[meaningSpinner.selectedItemPosition].code
 
-        val total = list.size * 11
         val engineView = TextView(activity).apply {
             textSize = 13f
             setPadding(0, px(8), 0, 0)
@@ -787,6 +789,8 @@ object ContentBuilder {
                 try { migratePhoneCache(activity) } catch (_: Exception) {}
                 val rows = status(activity, f, m, list.size)
                 val count = rows.sumOf { row -> row.count { it == DONE } }
+                // Cells that can exist: a list and one dialogue per question (empty places count as 11).
+                val total = rows.sumOf { row -> row.count { it != NONE } }.coerceAtLeast(1)
                 val names = Places.all.take(list.size).map { Places.name(it, home) }
                 activity.runOnUiThread {
                     progress.text = "${native(f)} + ${native(m)} 뜻 · 완료 $count / $total (${count * 100 / total}%)" +

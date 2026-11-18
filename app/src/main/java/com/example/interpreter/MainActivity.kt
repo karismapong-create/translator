@@ -611,7 +611,7 @@ class MainActivity : Activity() {
             I18n.t("m_licenses")
         )
         AlertDialog.Builder(this)
-            .setTitle(I18n.t("settings"))
+            .setTitle(I18n.t("settings") + "  ·  " + buildLabel())
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> chooseCountry(firstRun = false)
@@ -627,6 +627,12 @@ class MainActivity : Activity() {
             }
             .show().also { Ui.watch(it) }
     }
+
+    // Version and build number, so it is clear which build is installed.
+    private fun buildLabel(): String = try {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        "v${info.versionName} (${info.longVersionCode - 1000})"
+    } catch (_: Exception) { "" }
 
     private fun showLicenses() {
         val text = try { assets.open("licenses/NOTICES.txt").bufferedReader().use { it.readText() } } catch (_: Exception) { "" }

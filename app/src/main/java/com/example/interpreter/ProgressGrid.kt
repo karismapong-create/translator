@@ -50,6 +50,8 @@ class ProgressGrid(context: Context) : View(context) {
             row.forEachIndexed { c, state ->
                 val x = labelW + c * (cell + gap)
                 box.set(x, y, x + cell, y + cell)
+                // No question for this cell: nothing to make, so nothing is drawn.
+                if (state == ContentBuilder.NONE) return@forEachIndexed
                 fill.color = color(state)
                 // The question list cell is drawn as a circle to set it apart from the dialogues.
                 if (c == 0) canvas.drawOval(box, fill) else canvas.drawRoundRect(box, 4 * d, 4 * d, fill)
