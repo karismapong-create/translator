@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">猫头鹰翻译</string>
+    <string name="camera_title">相机翻译</string>
+    <string name="mic_title">麦克风检测</string>
+</resources>

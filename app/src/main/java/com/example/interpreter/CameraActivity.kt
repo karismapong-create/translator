@@ -167,6 +167,7 @@ class CameraActivity : ComponentActivity() {
             addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
         }
         setContentView(root)
+        Ui.edgeToEdge(this, root)
         Ui.watch(root)
 
         val onChange = object : AdapterView.OnItemSelectedListener {

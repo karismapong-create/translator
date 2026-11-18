@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Hibou Interprète</string>
+    <string name="camera_title">Traduction photo</string>
+    <string name="mic_title">Test du micro</string>
+</resources>

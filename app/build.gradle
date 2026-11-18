@@ -1,18 +1,19 @@
 plugins {
-    id("com.android.application") version "8.5.2"
+    id("com.android.application") version "8.10.1"
     id("org.jetbrains.kotlin.android") version "2.3.21"
 }
 
 android {
     namespace = "com.example.interpreter"
-    compileSdk = 34
+    compileSdk = 36
     defaultConfig {
-        applicationId = "com.example.interpreter"
+        // The app's permanent ID on Google Play. Never change it after the first release.
+        applicationId = "com.owlinterpreter.app"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         // Goes up with every GitHub build, so a newer APK always installs over an older one.
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "5").toInteger() + 1000
-        versionName = "1.4"
+        versionName = "1.0.0"
     }
     // Every build is signed with the same key (keystore.b64), so new APKs install over the old app.
     signingConfigs {
@@ -22,7 +23,28 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        // Upload key for Google Play, supplied by GitHub secrets (see RELEASE.md). Never committed.
+        release {
+            def ks = System.getenv("RELEASE_KEYSTORE_PATH")
+            if (ks != null && file(ks).exists()) {
+                storeFile = file(ks)
+                storePassword = System.getenv("RELEASE_STORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "upload"
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: System.getenv("RELEASE_STORE_PASSWORD")
+            }
+        }
     }
+    buildTypes {
+        debug {
+            // Test builds install next to the store version instead of replacing it.
+            applicationIdSuffix = ".debug"
+        }
+        release {
+            minifyEnabled = false
+            if (System.getenv("RELEASE_KEYSTORE_PATH") != null) signingConfig = signingConfigs.release
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

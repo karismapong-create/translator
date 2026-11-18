@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Eulen-Dolmetscher</string>
+    <string name="camera_title">Kamera-Übersetzung</string>
+    <string name="mic_title">Mikrofontest</string>
+</resources>

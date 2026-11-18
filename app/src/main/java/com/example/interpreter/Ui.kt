@@ -1,6 +1,9 @@
 package com.example.interpreter
 
+import android.app.Activity
 import android.app.Dialog
+import android.os.Build
+import android.view.WindowInsets
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
@@ -14,7 +17,7 @@ import android.widget.TextView
 // Shared look of the app: colours, rounded surfaces, and icons.
 //
 // Icons are Google Material Symbols (Apache License 2.0, free for commercial use; the licence
-// text ships in assets/licenses). Many labels in the app start with an emoji; iconize() swaps
+// text ships in assets/licenses/NOTICES.txt). Many labels in the app start with an emoji; iconize() swaps
 // that emoji for the matching vector icon, so every screen gets the same crisp, consistent
 // icon set without rewriting each translated string.
 object Ui {
@@ -168,6 +171,26 @@ object Ui {
     fun watch(dialog: Dialog): Dialog {
         dialog.window?.decorView?.let { watch(it) }
         return dialog
+    }
+
+    // Android 15+ draws apps behind the status and navigation bars. We do that on every phone that
+    // supports it (Android 11+) and pad the screen by the bars and the keyboard, so nothing hides
+    // under them and text fields stay above the keyboard.
+    fun edgeToEdge(activity: Activity, root: View) {
+        if (Build.VERSION.SDK_INT < 30) return
+        activity.window.setDecorFitsSystemWindows(false)
+        val l = root.paddingLeft
+        val t = root.paddingTop
+        val r = root.paddingRight
+        val b = root.paddingBottom
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            val i = insets.getInsets(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.ime() or WindowInsets.Type.displayCutout()
+            )
+            v.setPadding(l + i.left, t + i.top, r + i.right, b + i.bottom)
+            insets
+        }
+        root.requestApplyInsets()
     }
 
     fun bold(tv: TextView) = tv.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))

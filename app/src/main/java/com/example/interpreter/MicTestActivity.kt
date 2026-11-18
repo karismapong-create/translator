@@ -155,7 +155,9 @@ class MicTestActivity : Activity() {
             text = I18n.t("close")
             setOnClickListener { finish() }
         })
-        setContentView(ScrollView(this).apply { addView(box) })
+        val page = ScrollView(this).apply { addView(box) }
+        setContentView(page)
+        Ui.edgeToEdge(this, page)
         Ui.watch(box)
 
         deviceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
