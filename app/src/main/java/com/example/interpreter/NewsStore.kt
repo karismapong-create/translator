@@ -24,6 +24,10 @@ import java.util.TimeZone
 // is later rewritten by the AI for the learner's language and level (cached per item, language, level).
 object NewsStore {
     private const val KEEP_DAYS = 60
+    // Raised when the categories or the way of sorting change, so saved days are sorted again.
+    private const val SORT_VERSION = 2
+
+    private fun sortedNow(o: JSONObject) = o.optBoolean("classified") && o.optInt("cv") == SORT_VERSION
     // Wikipedia asks API clients to identify themselves with a way to reach the maintainer.
     private const val UA = "OwlInterpreter/1.0 (Android app; https://karismapong-create.github.io/translator/)"
 
@@ -55,7 +59,7 @@ object NewsStore {
         if (!f.exists()) return emptyList()
         val o = try { JSONObject(f.readText()) } catch (_: Exception) { null } ?: return emptyList()
         val arr = o.optJSONArray("items") ?: return emptyList()
-        val sorted = o.optBoolean("classified")
+        val sorted = sortedNow(o)
         return (0 until arr.length()).mapNotNull { i ->
             arr.optJSONObject(i)?.let {
                 val topic = it.optString("topic")
@@ -75,7 +79,7 @@ object NewsStore {
         }
         dayFile(ctx, date).writeText(
             JSONObject().put("date", date).put("fetched", System.currentTimeMillis())
-                .put("classified", classified).put("items", arr).toString()
+                .put("classified", classified).put("cv", SORT_VERSION).put("items", arr).toString()
         )
     }
 
@@ -114,7 +118,7 @@ object NewsStore {
                         val o = old[n.text]
                         if (o != null) { n.category = o.category; n.read = o.read } else known = false
                     }
-                    save(ctx, date, items, known && m?.optBoolean("classified") == true)
+                    save(ctx, date, items, known && m != null && sortedNow(m))
                 }
             } catch (_: Exception) {}
         }
@@ -256,7 +260,7 @@ object NewsStore {
     // One AI call sorts a day's items into the 24 categories.
     private fun classify(ctx: Context, prefs: SharedPreferences, date: String) {
         val m = meta(ctx, date) ?: return
-        if (m.optBoolean("classified")) return
+        if (sortedNow(m)) return
         val engine = RemoteTranslate.engine(prefs)
         if (!RemoteTranslate.canWrite(engine)) return
         val items = load(ctx, date)
