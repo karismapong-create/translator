@@ -125,6 +125,13 @@ class LiveTalkActivity : Activity() {
             setTextColor(Ui.INK)
             setTextIsSelectable(true)
         }
+        // The same sentence in the other language, so either can be selected and copied from this side.
+        val orig = TextView(this@LiveTalkActivity).apply {
+            textSize = 14f
+            setTextColor(Ui.INK_SOFT)
+            setTextIsSelectable(true)
+            visibility = View.GONE
+        }
         val note = TextView(this@LiveTalkActivity).apply {
             textSize = 11.5f
             setTextColor(Ui.INK_SOFT)
@@ -135,13 +142,24 @@ class LiveTalkActivity : Activity() {
             setPadding(dp(14), dp(10), dp(14), dp(10))
             background = Ui.rounded(if (own) Ui.PRIMARY_SOFT else Ui.SURFACE, 18, context, if (own) 0 else Ui.LINE)
             addView(main)
+            addView(orig)
             addView(note)
+        }
+
+        init {
+            vocabOnSelect(main)
+            vocabOnSelect(orig)
         }
 
         fun set(text: String, noteText: String) {
             main.text = text
             note.text = noteText
             note.visibility = if (noteText.isEmpty()) View.GONE else View.VISIBLE
+        }
+
+        fun setOrig(text: String) {
+            orig.text = text
+            orig.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
         }
     }
 
@@ -155,7 +173,8 @@ class LiveTalkActivity : Activity() {
     private var terms: List<Glossary.Term> = emptyList()
     private val translators = HashMap<String, Translator>()
     private val turns = ArrayList<LiveStore.Line>()
-    private val started = System.currentTimeMillis()
+    // The conversation stays on screen (and is kept) until "New conversation" is tapped.
+    private var started = System.currentTimeMillis()
 
     private lateinit var them: Panel
     private lateinit var me: Panel
@@ -230,6 +249,10 @@ class LiveTalkActivity : Activity() {
             text = LiveText.t("link")
             setOnClickListener { if (link?.linked == true) unlink() else startLink() }
         }
+        val newButton = Button(this).apply {
+            text = LiveText.t("new_talk")
+            setOnClickListener { newConversation() }
+        }
         val historyButton = Button(this).apply {
             text = LiveText.t("history")
             setOnClickListener { openHistory() }
@@ -241,6 +264,7 @@ class LiveTalkActivity : Activity() {
             addView(sceneSpinner, LinearLayout.LayoutParams(dp(170), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6) })
             addView(splitButton)
             addView(linkButton)
+            addView(newButton)
             addView(historyButton)
         }
         val bar = HorizontalScrollView(this).apply {
@@ -260,6 +284,7 @@ class LiveTalkActivity : Activity() {
         Ui.watch(root)
         refreshHeaders()
         updateSplitButton()
+        restore()
 
         tts = TextToSpeech(this) { }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -364,30 +389,39 @@ class LiveTalkActivity : Activity() {
     /* ---------- Translating a finished sentence ---------- */
 
     private fun heard(side: Side, text: String) {
-        panelOf(side).add(text, own = true)
+        val own = panelOf(side).add(text, own = true)
         val linked = link?.linked == true
         if (side == Side.ME && linked) {
             // The other phone translates and speaks it in its own language.
             link?.send(JSONObject().put("type", "line").put("text", text).put("lang", home.code))
             turns.add(LiveStore.Line(true, text, home.code, "", partner.code))
+            saveSession()
             hideChips()
             return
         }
-        translateFor(side, text, langOf(side), langOf(other(side)), null)
+        translateFor(side, text, langOf(side), langOf(other(side)), null, own)
     }
 
     // Translates quickly on the phone, then refines with the AI engine if there is one, then speaks.
-    private fun translateFor(side: Side, text: String, sl: Lang, tl: Lang, known: String?) {
+    // own: the speaker's own bubble, which also gets the translation underneath.
+    private fun translateFor(side: Side, text: String, sl: Lang, tl: Lang, known: String?, own: Bubble? = null) {
         val listener = other(side)
         val target = panelOf(listener)
         val bubble = target.add("…", own = false)
-        val line = LiveStore.Line(side == Side.ME, text, sl.code, "", tl.code)
-        turns.add(line)
+        bubble.setOrig(text)
+        val line = turns.size
+        turns.add(LiveStore.Line(side == Side.ME, text, sl.code, "", tl.code))
         if (side == Side.ME) hideChips()
+        fun record(tr: String) {
+            own?.setOrig(tr)
+            val l = turns.getOrNull(line) ?: return
+            turns[line] = LiveStore.Line(l.mine, l.said, l.saidLang, tr, l.trLang)
+            saveSession()
+        }
 
         if (known != null) {
             bubble.set(known, "")
-            record(line, known)
+            record(known)
             speakFor(listener, known, tl)
             return
         }
@@ -396,7 +430,7 @@ class LiveTalkActivity : Activity() {
         fast(p.input, sl, tl) { raw ->
             val quick = p.restore(raw)
             bubble.set(quick, if (engine != null) LiveText.t("refining") else "")
-            record(line, quick)
+            record(quick)
             if (engine == null) {
                 speakFor(listener, quick, tl)
                 afterTurn(side)
@@ -411,7 +445,7 @@ class LiveTalkActivity : Activity() {
                 runOnUiThread {
                     val best = if (refined.isNotBlank()) p.restore(refined) else quick
                     bubble.set(best, if (refined.isNotBlank()) "" else LiveText.t("fast"))
-                    record(line, best)
+                    record(best)
                     speakFor(listener, best, tl)
                     afterTurn(side)
                 }
@@ -419,9 +453,38 @@ class LiveTalkActivity : Activity() {
         }
     }
 
-    private fun record(line: LiveStore.Line, tr: String) {
-        val i = turns.indexOf(line)
-        if (i >= 0) turns[i] = LiveStore.Line(line.mine, line.said, line.saidLang, tr, line.trLang)
+    // Selecting words in any bubble offers "Save to vocabulary" next to Copy.
+    private fun vocabOnSelect(tv: TextView) {
+        tv.customSelectionActionModeCallback = object : android.view.ActionMode.Callback {
+            override fun onCreateActionMode(mode: android.view.ActionMode, menu: android.view.Menu): Boolean {
+                menu.add(0, MENU_VOCAB, 0, LiveText.t("to_vocab"))
+                return true
+            }
+            override fun onPrepareActionMode(mode: android.view.ActionMode, menu: android.view.Menu) = false
+            override fun onActionItemClicked(mode: android.view.ActionMode, item: android.view.MenuItem): Boolean {
+                if (item.itemId != MENU_VOCAB) return false
+                val a = minOf(tv.selectionStart, tv.selectionEnd).coerceAtLeast(0)
+                val b = maxOf(tv.selectionStart, tv.selectionEnd).coerceAtMost(tv.text.length)
+                if (b > a) saveSelection(tv.text.substring(a, b).trim())
+                mode.finish()
+                return true
+            }
+            override fun onDestroyActionMode(mode: android.view.ActionMode) {}
+        }
+    }
+
+    // Saves selected words: a foreign phrase with its meaning in my language. Words in my own language
+    // are turned into the other person's language first.
+    private fun saveSelection(text: String) {
+        if (text.isBlank()) return
+        val mine = LangCheck.looks(text, home.code)
+        val (from, to) = if (mine) home to partner else partner to home
+        fast(text, from, to) { tr ->
+            val foreign = if (mine) tr else text
+            val meaning = if (mine) text else tr
+            val ok = LiveStore.toVocab(prefs, LiveStore.Line(false, foreign, partner.code, meaning, home.code), home.code)
+            toast(if (ok) LiveText.t("saved_one") + ": $foreign" else foreign)
+        }
     }
 
     // On-device translation (ML Kit); downloads the language pack the first time.
@@ -506,8 +569,8 @@ class LiveTalkActivity : Activity() {
             heard(Side.ME, r.mine)
             return
         }
-        me.add(r.mine, own = true)
-        translateFor(Side.ME, r.mine, home, partner, r.theirs)
+        val own = me.add(r.mine, own = true)
+        translateFor(Side.ME, r.mine, home, partner, r.theirs, own)
     }
 
     /* ---------- Speaking ---------- */
@@ -684,8 +747,37 @@ class LiveTalkActivity : Activity() {
 
     private fun saveSession() {
         if (turns.isEmpty()) return
+        prefs.edit().putLong("live_open", started).apply()
         LiveStore.delete(prefs, started)
         LiveStore.save(prefs, LiveStore.Session(started, partner.code, scene?.let { Places.name(it, home.code) }.orEmpty(), turns.toList()))
+    }
+
+    // Ends this conversation (it stays in the history) and starts an empty one.
+    private fun newConversation() {
+        cancelListening()
+        saveSession()
+        turns.clear()
+        started = System.currentTimeMillis()
+        prefs.edit().remove("live_open").apply()
+        them.reset()
+        me.reset()
+        hideChips()
+    }
+
+    // Brings back the conversation that was on screen last time.
+    private fun restore() {
+        val open = prefs.getLong("live_open", 0L)
+        if (open == 0L) return
+        val s = LiveStore.load(prefs).firstOrNull { it.time == open } ?: return
+        started = s.time
+        turns.addAll(s.lines)
+        for (l in s.lines) {
+            val side = if (l.mine) Side.ME else Side.THEM
+            panelOf(side).add(l.said, own = true).setOrig(l.tr)
+            if (link?.linked != true || side == Side.THEM) {
+                panelOf(other(side)).add(l.tr.ifBlank { "…" }, own = false).setOrig(l.said)
+            }
+        }
     }
 
     private fun openHistory() {
@@ -788,5 +880,6 @@ class LiveTalkActivity : Activity() {
     private companion object {
         const val REQ_MIC = 41
         const val REQ_NEARBY = 42
+        const val MENU_VOCAB = 4301
     }
 }

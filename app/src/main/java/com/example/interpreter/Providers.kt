@@ -238,6 +238,28 @@ object Providers {
         return text.replace(Regex("(?s)<think>.*?</think>"), "").trim()
     }
 
+    // How a Gemini model shows in the picker: free on a key without billing, or paid only.
+    // Since April 2026 Google keeps Pro models for projects with billing; Flash and Flash-Lite stay free.
+    fun geminiNote(model: String): String = when {
+        model.contains("pro", true) -> I18n.t("g_paid")
+        model.contains("lite", true) -> I18n.t("g_lite")
+        model.contains("flash", true) -> I18n.t("g_free")
+        else -> ""
+    }
+
+    // Recommended first: the newest Flash, then Pro, then Flash-Lite, then the rest; newest version first.
+    fun geminiOrder(models: List<String>): List<String> {
+        fun version(m: String) = Regex("(\\d+(?:\\.\\d+)?)").find(m)?.value?.toDoubleOrNull() ?: 0.0
+        fun rank(m: String) = when {
+            m.contains("lite", true) -> 2
+            m.contains("flash", true) -> 0
+            m.contains("pro", true) -> 1
+            else -> 3
+        }
+        val preview = { m: String -> if (m.contains("preview", true) || m.contains("exp", true)) 1 else 0 }
+        return models.sortedWith(compareBy<String>({ rank(it) }, { preview(it) }, { -version(it) }, { it }))
+    }
+
     // Runs on a background thread. Returns the chat models the service offers right now.
     fun fetchModels(prefs: SharedPreferences, id: String): List<String> {
         val url = if (id == "claude") "https://api.anthropic.com/v1/models?limit=100" else baseUrl(prefs, id) + "/models"

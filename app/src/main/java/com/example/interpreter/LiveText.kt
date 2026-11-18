@@ -48,6 +48,8 @@ object LiveText {
         "them" to m("상대", "相手", "Them", "L'autre", "La otra persona", "Gegenüber", "对方"),
         "remote_hint" to m("상대 폰에서 말하면 여기에 번역돼요", "相手のスマホで話すとここに訳が出ます", "What they say on their phone appears here", "Ce qu'il dit sur son téléphone s'affiche ici", "Lo que diga en su teléfono aparecerá aquí", "Was sie am eigenen Handy sagen, erscheint hier", "对方在其手机上说的话会翻译显示在这里"),
         "mic_perm" to m("마이크 권한이 필요해요", "マイクの権限が必要です", "Microphone permission is needed", "Autorisation du micro nécessaire", "Se necesita permiso del micrófono", "Mikrofonberechtigung nötig", "需要麦克风权限"),
+        "new_talk" to m("✨ 새 대화", "✨ 新しい会話", "✨ New conversation", "✨ Nouvelle conversation", "✨ Nueva conversación", "✨ Neues Gespräch", "✨ 新对话"),
+        "to_vocab" to m("단어장에 저장", "単語帳に保存", "Save to vocabulary", "Enregistrer", "Guardar", "Speichern", "存入单词本"),
         "q1" to m("네, 좋아요", "はい、お願いします", "Yes, please", "Oui, s'il vous plaît", "Sí, por favor", "Ja, bitte", "好的，麻烦了"),
         "q2" to m("아니요, 괜찮아요", "いいえ、大丈夫です", "No, thank you", "Non, merci", "No, gracias", "Nein, danke", "不用了，谢谢"),
         "q3" to m("다시 한번 말씀해 주세요", "もう一度言ってください", "Could you say that again?", "Pouvez-vous répéter ?", "¿Puede repetirlo?", "Können Sie das wiederholen?", "请再说一遍"),
