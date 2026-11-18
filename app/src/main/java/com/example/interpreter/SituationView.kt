@@ -381,6 +381,7 @@ class SituationView(
                 source = if (force) FORCED else AUTO
                 if (force) clearDialogues(l.code, placeIdx)
                 writeCache(source + key, raw)
+                if (!force) net.execute { ContentBuilder.adoptQuestions(activity, l.code, placeIdx, home.code, raw) }
                 renderQuestions(qs)
             }
         }
@@ -509,6 +510,8 @@ class SituationView(
     }
 
     private fun generateDialogue(p: Place, q: Question, l: LangInfo, key: String, token: Int, attempt: Int = 1) {
+        val qi = questionIndex
+        val src = source
         val e = WordExplainer.llmEngine(prefs)
         if (e == null) {
             dialogueBox.addView(note(TalkText.t("s_need_llm"), Color.rgb(207, 34, 46)))
@@ -545,6 +548,11 @@ class SituationView(
                     return@post
                 }
                 writeCache(key, raw)
+                // Made for the DB's own list: it joins the DB (progress, export). Hand-remade lists stay local.
+                if (src != FORCED) {
+                    val placeIdx = places.indexOf(p)
+                    net.execute { ContentBuilder.adoptDialogue(activity, l.code, placeIdx, qi, home.code, raw) }
+                }
                 updatePhrase(p, l, raw)
                 renderDialogue(p, question ?: q, checked, parsed.second)
             }

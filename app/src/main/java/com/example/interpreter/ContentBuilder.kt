@@ -121,20 +121,39 @@ object ContentBuilder {
     private fun dialogueHas(d: JSONObject, home: String) =
         has(d.optJSONArray("lines")?.optJSONObject(0)?.optJSONObject("m"), home)
 
-    fun done(ctx: Context, foreign: String, home: String, count: Int): Int {
-        var n = 0
-        for (pi in 0 until count) {
-            val o = current(ctx, foreign, pi)
-            val qs = o.optJSONArray("questions") ?: continue
-            if (has(qs.optJSONObject(0)?.optJSONObject("title"), home)) n++
-            val ds = o.optJSONArray("dialogues") ?: continue
+    // Cell states for the progress grid.
+    const val MISSING = 0
+    const val DONE = 1
+    const val NEEDS_MEANING = 2
+    const val BROKEN = 3
+
+    // Per place: [question list, dialogue 1..10] states for one foreign + meaning language, read from
+    // the same file the phrasebook shows (shipped DB or the one built or imported on this phone).
+    fun status(ctx: Context, foreign: String, home: String, count: Int): List<IntArray> =
+        (0 until count).map { pi ->
+            val row = IntArray(11)
+            val o = BasePack.source(ctx, foreign, pi, home) ?: current(ctx, foreign, pi)
+            val qs = o.optJSONArray("questions")
+            if (qs == null || qs.length() == 0) return@map row
+            row[0] = when {
+                LangCheck.brokenQuestions(o, foreign) > 2 -> BROKEN
+                has(qs.optJSONObject(0)?.optJSONObject("title"), home) -> DONE
+                else -> NEEDS_MEANING
+            }
+            val ds = o.optJSONArray("dialogues") ?: return@map row
             for (i in 0 until minOf(qs.length(), 10)) {
                 val d = ds.optJSONObject(i) ?: continue
-                if (dialogueHas(d, home)) n++
+                row[i + 1] = when {
+                    !dialogueHas(d, home) -> NEEDS_MEANING
+                    LangCheck.fixDialogue(JSONObject(d.toString()), foreign, home) -> DONE
+                    else -> BROKEN
+                }
             }
+            row
         }
-        return n
-    }
+
+    fun done(ctx: Context, foreign: String, home: String, count: Int): Int =
+        status(ctx, foreign, home, count).sumOf { row -> row.count { it == DONE } }
 
     fun stop() {
         stopRequested = true
@@ -354,6 +373,101 @@ object ContentBuilder {
         while (left > 0 && !stopRequested) {
             Thread.sleep(minOf(left, 1000L))
             left -= 1000L
+        }
+    }
+
+    /* ---------- Content made in the phrasebook screen ---------- */
+
+    // A dialogue made or remade in the phrasebook screen for a question of the DB list joins the DB,
+    // so it counts in progress and goes out with "export". Runs on a background thread.
+    // raw: {"lines":[{"who","text","ko"}],"tips"} as the phrasebook screen stores it.
+    @Synchronized
+    fun adoptDialogue(ctx: Context, lang: String, place: Int, index: Int, home: String, raw: String): Boolean {
+        val src = Tutor.json(raw) ?: return false
+        val lines = src.optJSONArray("lines") ?: return false
+        val o = current(ctx, lang, place)
+        val qs = o.optJSONArray("questions") ?: return false
+        if (index !in 0 until qs.length()) return false
+        val built = JSONArray()
+        for (i in 0 until lines.length()) {
+            val l = lines.optJSONObject(i) ?: continue
+            if (l.optString("text").isBlank()) continue
+            built.put(
+                JSONObject().put("who", l.optString("who", "A")).put("text", l.optString("text"))
+                    .put("m", JSONObject().put(home, l.optString("ko")))
+            )
+        }
+        val d = JSONObject().put("lines", built).put("tips", JSONObject().put(home, src.optString("tips")))
+        if (!LangCheck.fixDialogue(d, lang, home)) return false
+        val ds = o.optJSONArray("dialogues") ?: JSONArray().also { o.put("dialogues", it) }
+        val old = ds.optJSONObject(index)
+        if (old != null && lineTexts(old) == lineTexts(d)) {
+            val ol = old.optJSONArray("lines") ?: return false
+            for (k in 0 until ol.length()) {
+                val x = ol.optJSONObject(k) ?: continue
+                x.put("m", mergeMap(x.optJSONObject("m"), built.optJSONObject(k)?.optJSONObject("m")))
+            }
+            old.put("tips", mergeMap(old.optJSONObject("tips"), d.optJSONObject("tips")))
+        } else {
+            ds.put(index, d)
+        }
+        save(file(ctx, lang, place), o)
+        return true
+    }
+
+    // A question list the phrasebook screen made because the DB had none for my language joins the DB.
+    // raw: {"questions":[{"ko" (title),"phrase","phrase_ko" (meaning)}]}.
+    @Synchronized
+    fun adoptQuestions(ctx: Context, lang: String, place: Int, home: String, raw: String): Boolean {
+        val arr = Tutor.json(raw)?.optJSONArray("questions") ?: return false
+        val o = current(ctx, lang, place)
+        val qs = o.optJSONArray("questions")
+        if (qs != null && qs.length() > 0 && LangCheck.brokenQuestions(o, lang) <= 2) return false
+        val built = JSONArray()
+        for (i in 0 until arr.length()) {
+            val q = arr.optJSONObject(i) ?: continue
+            if (q.optString("phrase").isBlank()) continue
+            val entry = JSONObject().put("phrase", q.optString("phrase"))
+                .put("title", JSONObject().put(home, q.optString("ko")))
+                .put("meaning", JSONObject().put(home, q.optString("phrase_ko")))
+            built.put(LangCheck.fixQuestion(entry, lang, home) ?: continue)
+        }
+        if (built.length() < 5) return false
+        o.put("questions", built)
+        o.put("dialogues", JSONArray())
+        save(file(ctx, lang, place), o)
+        return true
+    }
+
+    // Brings content made in the phrasebook screen before this version into the DB, once.
+    fun adoptPhoneCache(ctx: Context) {
+        val dir = File(ctx.filesDir, "situations")
+        val files = dir.listFiles() ?: return
+        val autoQ = Regex("^(?:([a-z]{2})_)?q_([a-z]{2})_(\\d+)\\.json$")
+        val dlg = Regex("^(?:([a-z]{2})_)?(b_)?d_([a-z]{2})_(\\d+)_(\\d+)\\.json$")
+        // Lists first, so dialogues made for them have a place to go.
+        for (f in files) {
+            val m = autoQ.find(f.name) ?: continue
+            val home = m.groupValues[1].ifEmpty { "ko" }
+            try { adoptQuestions(ctx, m.groupValues[2], m.groupValues[3].toInt(), home, f.readText()) } catch (_: Exception) {}
+        }
+        for (f in files) {
+            val m = dlg.find(f.name) ?: continue
+            val home = m.groupValues[1].ifEmpty { "ko" }
+            val lang = m.groupValues[3]
+            val place = m.groupValues[4].toInt()
+            try {
+                // A dialogue made for an automatic list belongs to the DB only if that list is now the DB's.
+                if (m.groupValues[2].isEmpty()) {
+                    val prefix = if (home == "ko") "" else "${home}_"
+                    val list = File(dir, "${prefix}q_${lang}_$place.json").takeIf { it.exists() }?.readText()
+                        ?.let { Tutor.json(it)?.optJSONArray("questions") } ?: continue
+                    val db = current(ctx, lang, place).optJSONArray("questions") ?: continue
+                    val mine = (0 until list.length()).map { list.optJSONObject(it)?.optString("phrase").orEmpty() }
+                    if (mine.filter { it.isNotBlank() } != phrases(db)) continue
+                }
+                adoptDialogue(ctx, lang, place, m.groupValues[5].toInt(), home, f.readText())
+            } catch (_: Exception) {}
         }
     }
 
@@ -590,14 +704,39 @@ object ContentBuilder {
             setPadding(0, px(6), 0, px(6))
             if (running) text = lastMessage
         }
+        val grid = ProgressGrid(activity)
+        val legend = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, px(6), 0, px(4))
+            listOf(DONE to "완료", NEEDS_MEANING to "뜻 없음", BROKEN to "언어 섞임", MISSING to "없음").forEach { (st, name) ->
+                addView(TextView(activity).apply {
+                    text = "■ $name"
+                    textSize = 12f
+                    setTextColor(ProgressGrid.color(st))
+                    setPadding(0, 0, px(12), 0)
+                })
+            }
+        }
+        val gridNote = TextView(activity).apply {
+            text = "줄마다 장소 · ● 질문 목록, ■ 대화 1~10"
+            textSize = 12f
+            setTextColor(Color.GRAY)
+        }
         fun refresh(msg: String?) {
             val f = foreign()
             val m = meaning()
             Thread {
-                val count = done(activity, f, m, list.size)
+                if (!prefs.getBoolean("adopted_phone_v1", false)) {
+                    try { adoptPhoneCache(activity) } catch (_: Exception) {}
+                    prefs.edit().putBoolean("adopted_phone_v1", true).apply()
+                }
+                val rows = status(activity, f, m, list.size)
+                val count = rows.sumOf { row -> row.count { it == DONE } }
+                val names = Places.all.take(list.size).map { Places.name(it, home) }
                 activity.runOnUiThread {
                     progress.text = "${native(f)} + ${native(m)} 뜻 · 완료 $count / $total (${count * 100 / total}%)" +
                         if (running) "\n만드는 중: $runningCombo" else ""
+                    grid.set(names, rows)
                     if (msg != null) status.text = msg
                 }
             }.start()
@@ -625,6 +764,9 @@ object ContentBuilder {
             addView(label("뜻을 달 언어"))
             addView(meaningSpinner)
             addView(progress)
+            addView(legend)
+            addView(gridNote)
+            addView(grid)
             addView(status)
             addView(button("▶ 시작 / 이어서 (백그라운드)") {
                 showEngine()

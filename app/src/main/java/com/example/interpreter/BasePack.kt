@@ -62,7 +62,7 @@ object BasePack {
     // One file per foreign language and place, never a mix: the questions and their dialogues must come
     // from the same file, or a dialogue can belong to a different question. The more complete of the
     // shipped file and the one built or imported on this phone wins (this phone's on a tie).
-    private fun source(ctx: Context, lang: String, place: Int, home: String): JSONObject? {
+    fun source(ctx: Context, lang: String, place: Int, home: String): JSONObject? {
         prepare(ctx)
         val shipped = parse(File(dir(ctx), "$lang/$place.json"))
         val mine = parse(File(ContentBuilder.dir(ctx), "$lang/$place.json"))
