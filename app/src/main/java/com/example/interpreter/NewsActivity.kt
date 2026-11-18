@@ -429,7 +429,7 @@ class NewsActivity : Activity() {
                 gravity = Gravity.TOP
                 addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 addView(TextView(context).apply {
-                    text = "🔊"
+                    this.text = "🔊"
                     textSize = 17f
                     setTextColor(Ui.PRIMARY)
                     setPadding(dp(8), dp(10), dp(4), dp(4))
