@@ -156,6 +156,7 @@ class MicTestActivity : Activity() {
             setOnClickListener { finish() }
         })
         setContentView(ScrollView(this).apply { addView(box) })
+        Ui.watch(box)
 
         deviceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {

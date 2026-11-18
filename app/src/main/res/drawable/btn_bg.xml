@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Soft tonal button: rounded, light brand fill, ripple on touch, faded when disabled. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="3dp" android:insetRight="3dp" android:insetTop="4dp" android:insetBottom="4dp">
+    <ripple android:color="#332F5BEA">
+        <item>
+            <selector>
+                <item android:state_enabled="false">
+                    <shape android:shape="rectangle">
+                        <corners android:radius="14dp" />
+                        <solid android:color="#F0F1F5" />
+                    </shape>
+                </item>
+                <item>
+                    <shape android:shape="rectangle">
+                        <corners android:radius="14dp" />
+                        <solid android:color="@color/primary_soft" />
+                    </shape>
+                </item>
+            </selector>
+        </item>
+    </ripple>
+</inset>

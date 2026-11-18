@@ -140,10 +140,10 @@ class QuizView(
             b.setOnClickListener {
                 buttons.forEach { it.isEnabled = false }
                 val ok = option == answer
-                b.setBackgroundColor(if (ok) GREEN else RED)
+                b.background = Ui.rounded(if (ok) GREEN else RED, 14, context)
                 b.setTextColor(Color.WHITE)
                 if (!ok) buttons.firstOrNull { it.text.toString() == answer }?.let {
-                    it.setBackgroundColor(GREEN)
+                    it.background = Ui.rounded(GREEN, 14, context)
                     it.setTextColor(Color.WHITE)
                 }
                 detail.text = VocabText.t(if (ok) "q_correct" else "q_wrong") + "\n" + explain(card)

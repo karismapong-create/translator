@@ -284,8 +284,8 @@ class ConversationView(
 
     private fun bubble(bg: Int) = LinearLayout(activity).apply {
         orientation = VERTICAL
-        setPadding(dp(12), dp(10), dp(12), dp(10))
-        setBackgroundColor(bg)
+        setPadding(dp(14), dp(10), dp(14), dp(10))
+        background = Ui.rounded(bg, 18, activity, if (bg == Ui.SURFACE) Ui.LINE else 0)
     }
 
     /* ---------- Modes ---------- */
@@ -458,7 +458,7 @@ class ConversationView(
     }
 
     private fun showError(e: Exception) {
-        val box = bubble(Color.argb(25, 207, 34, 46))
+        val box = bubble(Color.rgb(253, 236, 236))
         box.addView(text(TalkText.f("no_reply", e.message ?: e.toString()), 14f, Color.DKGRAY))
         box.addView(action(TalkText.t("retry"), blue) {
             messages.removeView(box)
@@ -471,7 +471,7 @@ class ConversationView(
     }
 
     private fun addUser(text: String): LinearLayout {
-        val box = bubble(Color.argb(18, 0, 0, 0))
+        val box = bubble(Ui.SURFACE)
         box.addView(text("🙋 $text", 17f))
         messages.addView(box, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
             setMargins(dp(40), dp(10), 0, 0)
@@ -498,7 +498,7 @@ class ConversationView(
     }
 
     private fun addAi(reply: String, meaning: String) {
-        val box = bubble(Color.argb(20, 47, 91, 234))
+        val box = bubble(Ui.PRIMARY_SOFT)
         val replyView = text(reply, 20f, Color.BLACK, true)
         box.addView(replyView)
         if (meaning.isNotEmpty()) box.addView(text(meaning, 15f, blue))
@@ -543,7 +543,7 @@ class ConversationView(
     }
 
     private fun addHint(say: String, meaning: String) {
-        val box = bubble(Color.argb(30, 255, 200, 0))
+        val box = bubble(Color.rgb(255, 247, 228))
         box.addView(TextView(activity).apply {
             text = TalkText.t("hint_title")
             textSize = 13f

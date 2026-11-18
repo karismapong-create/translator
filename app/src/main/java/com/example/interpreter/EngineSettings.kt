@@ -65,7 +65,7 @@ class EngineSettings(
                 }
             }
             .setNegativeButton(I18n.t("close"), null)
-            .show()
+            .show().also { Ui.watch(it) }
     }
 
     fun describe(e: Exception): String = when (e) {
@@ -164,7 +164,7 @@ class EngineSettings(
             .setPositiveButton(I18n.t("e_save")) { _, _ -> store(); onUse(id) }
             .setNeutralButton(I18n.t("e_test"), null)
             .setNegativeButton(I18n.t("cancel"), null)
-            .show()
+            .show().also { Ui.watch(it) }
 
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
             store()
@@ -196,7 +196,7 @@ class EngineSettings(
                                 modelEd?.setText(names[w])
                                 dialog.setMessage(I18n.f("e_selected", names[w]))
                             }
-                            .show()
+                            .show().also { Ui.watch(it) }
                     }
                 }
             }

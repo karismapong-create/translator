@@ -79,7 +79,7 @@ class GlossaryView(
         val box = LinearLayout(context).apply {
             orientation = VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundColor(Color.argb(18, 47, 91, 234))
+            background = Ui.pressable(context)
             setOnClickListener { edit(t) }
         }
         box.addView(TextView(context).apply {
@@ -152,7 +152,7 @@ class GlossaryView(
                 change { lines -> if (t.line < lines.size) lines.removeAt(t.line) }
             }
         }
-        val dialog = builder.show()
+        val dialog = builder.show().also { Ui.watch(it) }
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val word = wordEd.text.toString().trim()
             if (word.isEmpty()) {
@@ -197,7 +197,7 @@ class GlossaryView(
                 }
             }
             .setNegativeButton(I18n.t("cancel"), null)
-            .show()
+            .show().also { Ui.watch(it) }
     }
 }
 

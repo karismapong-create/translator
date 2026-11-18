@@ -91,8 +91,8 @@ class SituationView(
     }
 
     private val home: Lang = Languages.home(prefs)
-    private val blue = Color.rgb(47, 91, 234)
-    private val highlightColor = Color.argb(80, 255, 200, 0)
+    private val blue = Ui.PRIMARY
+    private val highlightColor = Color.rgb(255, 241, 204)
     private val wordColor = Color.argb(230, 255, 160, 0)
     private val density = resources.displayMetrics.density
     private val net = Executors.newSingleThreadExecutor()
@@ -140,8 +140,9 @@ class SituationView(
         orientation = VERTICAL
 
         titleView = TextView(activity).apply {
-            textSize = 16f
-            setTypeface(null, Typeface.BOLD)
+            textSize = 18f
+            setTextColor(Ui.INK)
+            Ui.bold(this)
             setPadding(dp(6), 0, dp(6), 0)
             setOnLongClickListener {
                 if (screen == 0) {
@@ -173,7 +174,7 @@ class SituationView(
             val rowLayout = LinearLayout(activity).apply { orientation = HORIZONTAL }
             row.forEach { p ->
                 rowLayout.addView(placeButton(p), LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-                    setMargins(dp(3), dp(3), dp(3), dp(3))
+                    setMargins(dp(4), dp(4), dp(4), dp(4))
                 })
             }
             repeat(3 - row.size) { rowLayout.addView(View(activity), LayoutParams(0, 0, 1f)) }
@@ -246,12 +247,20 @@ class SituationView(
         setOnClickListener { onClick(this) }
     }
 
+    // A place tile: icon in a soft circle above the name, on a white card.
     private fun placeButton(p: Place) = TextView(activity).apply {
-        text = "${p.emoji}\n${placeName(p)}"
-        textSize = 14f
+        val res = Ui.iconRes(p.emoji)
+        text = if (res != null) placeName(p) else "${p.emoji}\n${placeName(p)}"
+        textSize = 13.5f
+        setTextColor(Ui.INK)
         gravity = Gravity.CENTER
-        setPadding(dp(4), dp(14), dp(4), dp(14))
-        setBackgroundColor(Color.argb(18, 47, 91, 234))
+        maxLines = 2
+        setPadding(dp(6), dp(14), dp(6), dp(12))
+        if (res != null) {
+            setCompoundDrawables(null, Ui.circleIcon(activity, res, 48), null, null)
+            compoundDrawablePadding = dp(8)
+        }
+        background = Ui.pressable(activity)
         setOnClickListener { openPlace(p) }
     }
 
@@ -397,18 +406,20 @@ class SituationView(
         qs.forEachIndexed { i, q ->
             val row = LinearLayout(activity).apply {
                 orientation = VERTICAL
-                setPadding(dp(12), dp(10), dp(12), dp(10))
-                setBackgroundColor(Color.argb(14, 0, 0, 0))
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                background = Ui.pressable(activity)
                 setOnClickListener { openDialogue(i) }
                 addView(TextView(activity).apply {
                     text = "${i + 1}. ${q.title}"
-                    textSize = 17f
-                    setTypeface(null, Typeface.BOLD)
+                    textSize = 16f
+                    setTextColor(Ui.INK)
+                    Ui.bold(this)
                 })
                 addView(TextView(activity).apply {
                     text = q.phrase
                     textSize = 15f
-                    setTextColor(Color.DKGRAY)
+                    setTextColor(Ui.INK_SOFT)
+                    setPadding(0, dp(2), 0, 0)
                 })
                 if (q.meaning.isNotEmpty()) addView(TextView(activity).apply {
                     text = q.meaning
@@ -513,7 +524,11 @@ class SituationView(
         }
     }
 
-    private fun baseColor(line: Line) = if (line.me) Color.argb(25, 47, 91, 234) else Color.argb(14, 0, 0, 0)
+    private fun baseColor(line: Line) = if (line.me) Ui.PRIMARY_SOFT else Ui.SURFACE
+
+    // Chat-style bubble: my lines soft blue, the other side white with a hairline border.
+    private fun bubble(fill: Int, line: Line) =
+        Ui.rounded(fill, 18, activity, if (line.me || fill != Ui.SURFACE) 0 else Ui.LINE)
 
     private fun renderDialogue(p: Place, q: Question, ls: List<Line>, tips: String) {
         lines = ls
@@ -526,6 +541,7 @@ class SituationView(
             }
         }
         playButton = play
+        Ui.primary(play)
         val practice = button(TalkText.t("s_practice")) {
             stopPlay()
             onRolePlay(lang, "${p.en} — ${q.title} (${q.phrase})", p.role, "${p.emoji} ${placeName(p)} · ${q.title}")
@@ -549,9 +565,10 @@ class SituationView(
             dialogueBox.addView(TextView(activity).apply {
                 text = "💡 $tips"
                 textSize = 14f
-                setTextColor(Color.DKGRAY)
-                setPadding(dp(4), dp(16), dp(4), dp(8))
-            })
+                setTextColor(Color.rgb(122, 82, 0))
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = Ui.rounded(Color.rgb(255, 247, 228), 16, activity)
+            }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
         }
         dialogueBox.addView(button(TalkText.t("s_regen_d")) { loadDialogue(true) })
         dialogueScroll.post { dialogueScroll.scrollTo(0, 0) }
@@ -560,8 +577,8 @@ class SituationView(
     private fun lineCard(i: Int, line: Line, p: Place): View {
         val card = LinearLayout(activity).apply {
             orientation = VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            setBackgroundColor(baseColor(line))
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = bubble(baseColor(line), line)
             setOnClickListener { lineTapped(i) }
             setOnLongClickListener {
                 openWordPicker(line)
@@ -612,7 +629,7 @@ class SituationView(
     }
 
     private fun highlight(i: Int) {
-        cards.forEachIndexed { k, c -> c.setBackgroundColor(if (k == i) highlightColor else baseColor(lines[k])) }
+        cards.forEachIndexed { k, c -> c.background = bubble(if (k == i) highlightColor else baseColor(lines[k]), lines[k]) }
         if (i in cards.indices) {
             val top = cards[i].top
             dialogueScroll.post { dialogueScroll.smoothScrollTo(0, (top - dp(60)).coerceAtLeast(0)) }
@@ -785,9 +802,9 @@ class SituationView(
                     chips.addView(TextView(activity).apply {
                         text = w
                         textSize = 16f
-                        setTextColor(Color.BLACK)
-                        setPadding(dp(12), dp(8), dp(12), dp(8))
-                        setBackgroundColor(Color.argb(30, 47, 91, 234))
+                        setTextColor(Ui.INK)
+                        setPadding(dp(14), dp(8), dp(14), dp(8))
+                        background = Ui.pressable(activity, Ui.PRIMARY_SOFT, 20, 0)
                         setOnClickListener {
                             saveWord(w, line, l)
                             text = "✔ $w"
@@ -803,7 +820,7 @@ class SituationView(
             .setTitle(TalkText.t("w_title"))
             .setView(ScrollView(activity).apply { addView(box) })
             .setPositiveButton(I18n.t("close"), null)
-            .show()
+            .show().also { Ui.watch(it) }
     }
 
     // Saves a word with its meaning in my language, using the line as the example.

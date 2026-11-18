@@ -611,6 +611,6 @@ object ContentBuilder {
             .setView(ScrollView(activity).apply { addView(box) })
             .setPositiveButton(I18n.t("close"), null)
             .setOnDismissListener { listener = null }
-            .show()
+            .show().also { Ui.watch(it) }
     }
 }

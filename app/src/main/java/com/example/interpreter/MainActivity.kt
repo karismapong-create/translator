@@ -192,8 +192,10 @@ class MainActivity : Activity() {
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            background = Ui.card(context)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
             addView(fromSpinner, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            addView(swap, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+            addView(swap, LinearLayout.LayoutParams(dp(56), dp(56)))
             addView(toSpinner, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         }
 
@@ -240,21 +242,22 @@ class MainActivity : Activity() {
         }
         micButton = Button(this).apply {
             text = I18n.t("start")
-            textSize = 18f
+            textSize = 17f
             setOnClickListener { if (listening) stop() else start() }
         }
+        Ui.primary(micButton)
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(speakBox, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            addView(settingsButton, LinearLayout.LayoutParams(WRAP_CONTENT, dp(64)))
-            addView(micButton, LinearLayout.LayoutParams(dp(120), dp(64)))
+            addView(settingsButton, LinearLayout.LayoutParams(WRAP_CONTENT, dp(60)))
+            addView(micButton, LinearLayout.LayoutParams(dp(132), dp(64)))
         }
 
         val interpPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(top, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-            addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+            addView(top, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(12) })
+            addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply { topMargin = dp(4) })
             addView(interimView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(statusView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(chatRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -280,32 +283,43 @@ class MainActivity : Activity() {
         tabViews = listOf("tab_interp", "tab_talk", "tab_vocab", "tab_gloss").mapIndexed { i, key ->
             TextView(this).apply {
                 text = I18n.t(key)
-                textSize = 16f
+                textSize = 15f
                 gravity = Gravity.CENTER
-                setPadding(0, dp(10), 0, dp(10))
+                maxLines = 1
+                setPadding(dp(4), dp(10), dp(4), dp(10))
                 setOnClickListener { showTab(i) }
             }
         }
         val cameraButton = Button(this).apply {
             text = "📷"
             textSize = 18f
+            setPadding(0, 0, 0, 0)
             setOnClickListener { openCamera() }
+        }
+        // Segmented tabs: a rounded track with the current tab as a soft blue pill.
+        val tabTrack = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = Ui.card(context)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            tabViews.forEach { addView(it, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)) }
         }
         val tabBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            tabViews.forEach { addView(it, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)) }
-            addView(cameraButton, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+            addView(tabTrack, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(cameraButton, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginStart = dp(6) })
         }
 
         val pad = dp(16)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad)
+            setPadding(pad, pad, pad, pad)
             addView(tabBar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(container, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         }
         setContentView(root)
+        Ui.watch(root)
         showTab(0)
         setupBack()
 
@@ -337,7 +351,7 @@ class MainActivity : Activity() {
                 recreate()
             }
         if (firstRun) builder.setCancelable(false) else builder.setNegativeButton("✕", null)
-        builder.show()
+        builder.show().also { Ui.watch(it) }
     }
 
     /* ---------- Phone back button ---------- */
@@ -377,8 +391,9 @@ class MainActivity : Activity() {
         currentTab = i
         pages.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
         tabViews.forEachIndexed { k, t ->
-            t.setTextColor(if (k == i) Color.rgb(47, 91, 234) else Color.GRAY)
-            t.setTypeface(null, if (k == i) Typeface.BOLD else Typeface.NORMAL)
+            t.setTextColor(if (k == i) Ui.PRIMARY_DARK else Ui.INK_SOFT)
+            t.typeface = Typeface.create(if (k == i) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
+            t.background = if (k == i) Ui.rounded(Ui.PRIMARY_SOFT, 14, this) else null
         }
         if (i != 1) convPage.stopListening()
         if (i == 1) {
@@ -597,7 +612,7 @@ class MainActivity : Activity() {
                     else -> toggleSilent()
                 }
             }
-            .show()
+            .show().also { Ui.watch(it) }
     }
 
     private fun toggleSilent() {
@@ -1047,7 +1062,7 @@ class MainActivity : Activity() {
         val saveView = TextView(this).apply {
             text = "☆"
             textSize = 20f
-            setTextColor(Color.rgb(47, 91, 234))
+            setTextColor(Ui.PRIMARY)
             setPadding(dp(8), dp(4), dp(4), dp(4))
             setOnClickListener {
                 if (seg.tr.isNotEmpty()) {
@@ -1063,8 +1078,15 @@ class MainActivity : Activity() {
             addView(playView, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
             addView(saveView, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         }
-        segments.addView(trView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(14) })
-        segments.addView(srcRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        // Each translation sits on its own card: the translation big, the original quiet below it.
+        val segCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.card(context)
+            setPadding(dp(16), dp(12), dp(10), dp(6))
+            addView(trView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            addView(srcRow, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(4) })
+        }
+        segments.addView(segCard, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(10) })
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
 
         val context = recent.joinToString("\n")

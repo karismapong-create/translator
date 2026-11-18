@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Main action button: solid brand blue. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="3dp" android:insetRight="3dp" android:insetTop="4dp" android:insetBottom="4dp">
+    <ripple android:color="#55FFFFFF">
+        <item>
+            <shape android:shape="rectangle">
+                <corners android:radius="16dp" />
+                <solid android:color="@color/primary" />
+            </shape>
+        </item>
+    </ripple>
+</inset>
