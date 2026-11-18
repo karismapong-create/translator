@@ -195,7 +195,7 @@ class SituationView(
 
         tts = TextToSpeech(activity) { status -> ttsReady = status == TextToSpeech.SUCCESS }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
+            override fun onStart(utteranceId: String?) { post { lineStarted(utteranceId) } }
             override fun onDone(utteranceId: String?) { post { lineFinished(utteranceId) } }
             override fun onError(utteranceId: String?) { post { lineFinished(utteranceId) } }
             override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
@@ -606,11 +606,9 @@ class SituationView(
             toast(TalkText.t("tts_wait"))
             return
         }
-        t.setPitch(if (line.me) 1.15f else 0.85f)
-        t.setSpeechRate(0.95f)
         val start = from.coerceIn(0, line.text.length)
         offsets[id] = start
-        SpeechOut.speak(t, line.text.substring(start), lang.voice, true, id)
+        SpeechOut.speak(t, line.text.substring(start), lang.voice, true, id, alt = !line.me)
     }
 
     private fun highlight(i: Int) {
@@ -653,7 +651,7 @@ class SituationView(
         playing = false
         pausedLine = playIndex
         pausedAt = wordAt
-        tts?.stop()
+        SpeechOut.stop(tts)
         highlight(pausedLine)
         playButton?.text = TalkText.t("s_resume")
     }
@@ -673,7 +671,8 @@ class SituationView(
             stopPlay()
             return
         }
-        highlight(playIndex)
+        // The line lights up when its sound actually starts (lineStarted), not now: the start may
+        // wait for the audio output to wake, and the picture must not run ahead of the voice.
         wordAt = from
         speak(lines[playIndex], "line_$playIndex", from)
     }
@@ -704,6 +703,11 @@ class SituationView(
         lineViews.forEachIndexed { k, v -> lines.getOrNull(k)?.let { v.text = it.text } }
     }
 
+    // Called when the voice really begins a line, so highlight, scroll and sound stay together.
+    private fun lineStarted(id: String?) {
+        if (playing && id == "line_$playIndex") highlight(playIndex)
+    }
+
     private fun lineFinished(id: String?) {
         val done = lineOf(id)
         lines.getOrNull(done)?.let { lineViews.getOrNull(done)?.text = it.text }
@@ -718,7 +722,7 @@ class SituationView(
         playing = false
         pausedLine = -1
         pausedAt = 0
-        if (wasPlaying) tts?.stop()
+        if (wasPlaying) SpeechOut.stop(tts)
         if (cards.isNotEmpty()) highlight(-1)
         clearWords()
         playButton?.text = TalkText.t("s_play")
@@ -726,7 +730,7 @@ class SituationView(
 
     fun stopPlayback() {
         stopPlay()
-        tts?.stop()
+        SpeechOut.stop(tts)
     }
 
     /* ---------- Saving words from a line ---------- */
