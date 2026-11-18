@@ -1,22 +1,30 @@
 package com.example.interpreter
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.view.ActionMode
 import android.view.Gravity
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -72,6 +80,13 @@ class SituationView(
     )
     private val nameOrder = listOf("ko", "ja", "en", "fr", "es", "de", "zh")
 
+    private companion object {
+        const val AUTO = ""
+        const val FORCED = "f_"
+        const val BUILT_IN = "b_"
+        const val SAVE_WORD = 1001
+    }
+
     private val home: Lang = Languages.home(prefs)
     private val blue = Color.rgb(47, 91, 234)
     private val highlightColor = Color.argb(80, 255, 200, 0)
@@ -88,6 +103,8 @@ class SituationView(
     private var lines: List<Line> = emptyList()
     private var cards: List<View> = emptyList()
     private var screen = 0
+    // Where the current question list came from; also the cache prefix for its dialogues.
+    private var source = AUTO
     private var loadToken = 0
 
     private var tts: TextToSpeech? = null
@@ -260,8 +277,9 @@ class SituationView(
 
     private fun writeCache(key: String, text: String) = File(cacheDir, "$cachePrefix$key.json").writeText(text)
 
+    // Dialogues made for a remade question list no longer match it.
     private fun clearDialogues(code: String, placeIdx: Int) {
-        val start = "${cachePrefix}d_${code}_${placeIdx}_"
+        val start = "${cachePrefix}${FORCED}d_${code}_${placeIdx}_"
         cacheDir.listFiles()?.filter { it.name.startsWith(start) }?.forEach { it.delete() }
     }
 
@@ -281,6 +299,8 @@ class SituationView(
     }
 
     // Order: remade on this phone, then built-in content, then a fresh AI request.
+    // Order: remade with "recreate" on this phone, then the built-in DB, then made automatically on this phone
+    // before the DB had it, then a fresh AI request. Dialogues are cached with the same prefix as their list.
     private fun loadQuestions(force: Boolean) {
         val p = place ?: return
         val l = lang
@@ -293,17 +313,28 @@ class SituationView(
             generateQuestions(p, l, placeIdx, key, true, token)
             return
         }
-        val cached = readCache(key)?.let { parseQuestions(it) }
-        if (!cached.isNullOrEmpty()) {
-            renderQuestions(cached)
+        val remade = readCache(FORCED + key)?.let { parseQuestions(it) }
+        if (!remade.isNullOrEmpty()) {
+            source = FORCED
+            renderQuestions(remade)
             return
         }
         net.execute {
             val base = BasePack.questions(activity, l.code, placeIdx, home.code)?.let { parseQuestions(it) }
             post {
                 if (token != loadToken) return@post
-                if (!base.isNullOrEmpty()) renderQuestions(base)
-                else generateQuestions(p, l, placeIdx, key, false, token)
+                if (!base.isNullOrEmpty()) {
+                    source = BUILT_IN
+                    renderQuestions(base)
+                    return@post
+                }
+                val auto = readCache(key)?.let { parseQuestions(it) }
+                if (!auto.isNullOrEmpty()) {
+                    source = AUTO
+                    renderQuestions(auto)
+                } else {
+                    generateQuestions(p, l, placeIdx, key, false, token)
+                }
             }
         }
     }
@@ -335,8 +366,9 @@ class SituationView(
                     questionsBox.addView(button(TalkText.t("retry")) { loadQuestions(true) })
                     return@post
                 }
+                source = if (force) FORCED else AUTO
                 if (force) clearDialogues(l.code, placeIdx)
-                writeCache(key, raw)
+                writeCache(source + key, raw)
                 renderQuestions(qs)
             }
         }
@@ -405,18 +437,19 @@ class SituationView(
         dialogueBox.removeAllViews()
         cards = emptyList()
         val token = ++loadToken
+        val cacheKey = source + key
         if (force) {
-            generateDialogue(p, q, l, key, token)
+            generateDialogue(p, q, l, cacheKey, token)
             return
         }
-        val cached = readCache(key)?.let { parseDialogue(it) }
+        val cached = readCache(cacheKey)?.let { parseDialogue(it) }
         if (cached != null) {
             renderDialogue(p, q, cached.first, cached.second)
             return
         }
         // Built-in dialogues only match the built-in question list.
-        if (readCache("q_${l.code}_$placeIdx") != null) {
-            generateDialogue(p, q, l, key, token)
+        if (source != BUILT_IN) {
+            generateDialogue(p, q, l, cacheKey, token)
             return
         }
         net.execute {
@@ -424,7 +457,7 @@ class SituationView(
             post {
                 if (token != loadToken) return@post
                 if (base != null) renderDialogue(p, q, base.first, base.second)
-                else generateDialogue(p, q, l, key, token)
+                else generateDialogue(p, q, l, cacheKey, token)
             }
         }
     }
@@ -506,6 +539,10 @@ class SituationView(
             setPadding(dp(12), dp(8), dp(12), dp(8))
             setBackgroundColor(baseColor(line))
             setOnClickListener { lineTapped(i) }
+            setOnLongClickListener {
+                openWordPicker(line)
+                true
+            }
         }
         card.addView(TextView(activity).apply {
             text = when {
@@ -611,6 +648,122 @@ class SituationView(
     fun stopPlayback() {
         stopPlay()
         tts?.stop()
+    }
+
+    /* ---------- Saving words from a line ---------- */
+
+    // Long-press on a line: tap a word to save it, or select a phrase in the sentence.
+    private fun openWordPicker(line: Line) {
+        if (playing) stopPlay()
+        val l = lang
+        val box = LinearLayout(activity).apply {
+            orientation = VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        val sentence = TextView(activity).apply {
+            text = line.text
+            textSize = 20f
+            setTextColor(Color.BLACK)
+            setTypeface(null, Typeface.BOLD)
+            setTextIsSelectable(true)
+        }
+        sentence.customSelectionActionModeCallback = object : ActionMode.Callback {
+            override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+                menu.add(0, SAVE_WORD, 0, I18n.t("save_word"))
+                return true
+            }
+            override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = false
+            override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+                if (item.itemId != SAVE_WORD) return false
+                val a = minOf(sentence.selectionStart, sentence.selectionEnd).coerceAtLeast(0)
+                val b = maxOf(sentence.selectionStart, sentence.selectionEnd).coerceAtMost(sentence.text.length)
+                val w = if (b > a) sentence.text.substring(a, b).trim() else ""
+                if (w.isNotEmpty()) saveWord(w, line, l)
+                mode.finish()
+                return true
+            }
+            override fun onDestroyActionMode(mode: ActionMode) {}
+        }
+        box.addView(sentence)
+        if (line.meaning.isNotEmpty()) box.addView(text(line.meaning, 14f, blue))
+        val chipsLabel = note(TalkText.t("w_words"))
+        val chips = LinearLayout(activity).apply { orientation = HORIZONTAL }
+        box.addView(chipsLabel)
+        box.addView(HorizontalScrollView(activity).apply { addView(chips) })
+        box.addView(note(TalkText.t("w_phrase")))
+        net.execute {
+            val words = WordExplainer.candidates(line.text, l.code)
+            post {
+                if (words.isEmpty()) {
+                    chipsLabel.visibility = View.GONE
+                    return@post
+                }
+                words.forEach { w ->
+                    chips.addView(TextView(activity).apply {
+                        text = w
+                        textSize = 16f
+                        setTextColor(Color.BLACK)
+                        setPadding(dp(12), dp(8), dp(12), dp(8))
+                        setBackgroundColor(Color.argb(30, 47, 91, 234))
+                        setOnClickListener {
+                            saveWord(w, line, l)
+                            text = "✔ $w"
+                            isEnabled = false
+                        }
+                    }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                        setMargins(0, 0, dp(6), 0)
+                    })
+                }
+            }
+        }
+        AlertDialog.Builder(activity)
+            .setTitle(TalkText.t("w_title"))
+            .setView(ScrollView(activity).apply { addView(box) })
+            .setPositiveButton(I18n.t("close"), null)
+            .show()
+    }
+
+    // Saves a word with its meaning in my language, using the line as the example.
+    private fun saveWord(word: String, line: Line, l: LangInfo) {
+        if (l.code == home.code) {
+            storeWord(word, "", line, l)
+            return
+        }
+        val t = Translation.getClient(
+            TranslatorOptions.Builder()
+                .setSourceLanguage(l.code)
+                .setTargetLanguage(home.code)
+                .build()
+        )
+        fun done(meaning: String) {
+            storeWord(word, meaning, line, l)
+            t.close()
+        }
+        t.downloadModelIfNeeded(DownloadConditions.Builder().build())
+            .addOnSuccessListener {
+                t.translate(word)
+                    .addOnSuccessListener { done(it) }
+                    .addOnFailureListener { done("") }
+            }
+            .addOnFailureListener { done("") }
+    }
+
+    private fun storeWord(word: String, meaning: String, line: Line, l: LangInfo) {
+        val arr = try { JSONArray(prefs.getString("saved", "[]")) } catch (_: Exception) { JSONArray() }
+        arr.put(
+            JSONObject()
+                .put("t", word)
+                .put("m", meaning)
+                .put("e", line.text)
+                .put("em", line.meaning)
+                .put("v", l.voice)
+                .put("l", l.code)
+                .put("d", System.currentTimeMillis())
+                .put("c", 0)
+                .put("w", 0)
+        )
+        prefs.edit().putString("saved", arr.toString()).apply()
+        toast(I18n.f("saved_word", word + if (meaning.isNotEmpty()) " = $meaning" else ""))
     }
 
     /* ---------- Saving ---------- */
