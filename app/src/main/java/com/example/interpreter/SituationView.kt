@@ -117,6 +117,13 @@ class SituationView(
     private var ttsReady = false
     private var playing = false
     private var playIndex = 0
+    // Pause point: the line and the start of the word that was being spoken (-1 = not paused).
+    private var pausedLine = -1
+    private var pausedAt = 0
+    // Start of the word currently being spoken, counted in the full line text.
+    private var wordAt = 0
+    // Where in the line each utterance began, so word positions map back to the full text.
+    private val offsets = HashMap<String, Int>()
     private var playButton: Button? = null
 
     private val langSpinner: Spinner
@@ -511,7 +518,13 @@ class SituationView(
     private fun renderDialogue(p: Place, q: Question, ls: List<Line>, tips: String) {
         lines = ls
         dialogueBox.removeAllViews()
-        val play = button(TalkText.t("s_play")) { if (playing) stopPlay() else playAll() }
+        val play = button(TalkText.t("s_play")) {
+            when {
+                playing -> pausePlay()
+                pausedLine >= 0 -> resumePlay()
+                else -> playAll()
+            }
+        }
         playButton = play
         val practice = button(TalkText.t("s_practice")) {
             stopPlay()
@@ -587,7 +600,7 @@ class SituationView(
 
     /* ---------- Playback ---------- */
 
-    private fun speak(line: Line, id: String) {
+    private fun speak(line: Line, id: String, from: Int = 0) {
         val t = tts ?: return
         if (!ttsReady) {
             toast(TalkText.t("tts_wait"))
@@ -596,7 +609,9 @@ class SituationView(
         t.language = Locale.forLanguageTag(lang.voice)
         t.setPitch(if (line.me) 1.15f else 0.85f)
         t.setSpeechRate(0.95f)
-        t.speak(line.text, TextToSpeech.QUEUE_FLUSH, null, id)
+        val start = from.coerceIn(0, line.text.length)
+        offsets[id] = start
+        t.speak(line.text.substring(start), TextToSpeech.QUEUE_FLUSH, null, id)
     }
 
     private fun highlight(i: Int) {
@@ -609,45 +624,75 @@ class SituationView(
 
     private fun playAll() = playFrom(0)
 
-    private fun playFrom(i: Int) {
+    private fun playFrom(i: Int, from: Int = 0) {
         if (i !in lines.indices) return
         if (!ttsReady) {
             toast(TalkText.t("tts_wait"))
             return
         }
+        if (pausedLine >= 0 && pausedLine != i) lines.getOrNull(pausedLine)?.let { lineViews.getOrNull(pausedLine)?.text = it.text }
+        pausedLine = -1
         playing = true
         playIndex = i
         playButton?.text = TalkText.t("s_stop")
-        playCurrent()
+        playCurrent(from)
     }
 
-    // Tapping a line while playing pauses on it; tapping a line while stopped plays from there.
+    // Tapping a line while playing pauses on the word being spoken. Tapping the paused line resumes
+    // from that word; tapping another line plays from the start of that line.
     private fun lineTapped(i: Int) {
-        if (playing) {
-            val at = playIndex
-            stopPlay()
-            highlight(at)
-        } else {
-            playFrom(i)
+        when {
+            playing -> pausePlay()
+            i == pausedLine -> resumePlay()
+            else -> playFrom(i)
         }
     }
 
-    private fun playCurrent() {
+    // Stops the voice but keeps the line and the word highlighted, remembering where to continue.
+    private fun pausePlay() {
+        if (!playing) return
+        playing = false
+        pausedLine = playIndex
+        pausedAt = wordAt
+        tts?.stop()
+        highlight(pausedLine)
+        playButton?.text = TalkText.t("s_resume")
+    }
+
+    private fun resumePlay() {
+        val i = pausedLine
+        if (i !in lines.indices) {
+            playAll()
+            return
+        }
+        playFrom(i, pausedAt)
+    }
+
+    private fun playCurrent(from: Int = 0) {
         if (!playing) return
         if (playIndex >= lines.size) {
             stopPlay()
             return
         }
         highlight(playIndex)
-        speak(lines[playIndex], "line_$playIndex")
+        wordAt = from
+        speak(lines[playIndex], "line_$playIndex", from)
     }
 
     // Line index from an utterance id such as "line_3" or "one_3".
     private fun lineOf(id: String?): Int = id?.substringAfter('_', "")?.toIntOrNull() ?: -1
 
     // Moves a highlight over the word the voice is saying. Needs a voice engine that reports word positions.
-    private fun wordHighlight(id: String?, start: Int, end: Int) {
+    private fun wordHighlight(id: String?, s0: Int, e0: Int) {
         val i = lineOf(id)
+        val base = offsets[id] ?: 0
+        val start = s0 + base
+        val end = e0 + base
+        // A late position report after a pause must not move the paused word.
+        if (id == "line_$playIndex") {
+            if (!playing) return
+            wordAt = start
+        }
         val tv = lineViews.getOrNull(i) ?: return
         val text = lines.getOrNull(i)?.text ?: return
         if (start < 0 || end <= start || end > text.length) return
@@ -672,6 +717,8 @@ class SituationView(
     private fun stopPlay() {
         val wasPlaying = playing
         playing = false
+        pausedLine = -1
+        pausedAt = 0
         if (wasPlaying) tts?.stop()
         if (cards.isNotEmpty()) highlight(-1)
         clearWords()
