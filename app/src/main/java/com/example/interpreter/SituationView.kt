@@ -195,7 +195,7 @@ class SituationView(
 
         tts = TextToSpeech(activity) { status -> ttsReady = status == TextToSpeech.SUCCESS }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
+            override fun onStart(utteranceId: String?) { post { lineStarted(utteranceId) } }
             override fun onDone(utteranceId: String?) { post { lineFinished(utteranceId) } }
             override fun onError(utteranceId: String?) { post { lineFinished(utteranceId) } }
             override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
@@ -671,7 +671,8 @@ class SituationView(
             stopPlay()
             return
         }
-        highlight(playIndex)
+        // The line lights up when its sound actually starts (lineStarted), not now: the start may
+        // wait for the audio output to wake, and the picture must not run ahead of the voice.
         wordAt = from
         speak(lines[playIndex], "line_$playIndex", from)
     }
@@ -700,6 +701,11 @@ class SituationView(
 
     private fun clearWords() {
         lineViews.forEachIndexed { k, v -> lines.getOrNull(k)?.let { v.text = it.text } }
+    }
+
+    // Called when the voice really begins a line, so highlight, scroll and sound stay together.
+    private fun lineStarted(id: String?) {
+        if (playing && id == "line_$playIndex") highlight(playIndex)
     }
 
     private fun lineFinished(id: String?) {
