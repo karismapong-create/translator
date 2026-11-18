@@ -2,6 +2,8 @@ name: Build APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -48,6 +50,22 @@ jobs:
           export RELEASE_KEYSTORE_PATH="$RUNNER_TEMP/upload.jks"
           gradle bundleRelease -Pandroid.useAndroidX=true --no-daemon
           rm -f "$RUNNER_TEMP/upload.jks"
+      # Without the upload key secrets, main still builds an unsigned store bundle and keeps it on the
+      # store-builds branch, where it can be signed with the upload key outside GitHub.
+      - name: Unsigned Play Store bundle
+        if: github.ref == 'refs/heads/main' && env.HAS_KEY != 'true'
+        run: |
+          gradle bundleRelease -Pandroid.useAndroidX=true --no-daemon
+          AAB=app/build/outputs/bundle/release/app-release.aab
+          VC=$(( ${GITHUB_RUN_NUMBER} + 1000 ))
+          mkdir -p /tmp/out && cp "$AAB" "/tmp/out/owl-interpreter-${VC}-unsigned.aab"
+          cd /tmp/out
+          git init -q -b store-builds
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          echo "Unsigned store bundle from run ${GITHUB_RUN_NUMBER} (${GITHUB_SHA})" > README.txt
+          git add -A && git commit -q -m "Store bundle ${VC} (run ${GITHUB_RUN_NUMBER})"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" store-builds
       - name: Check 16 KB page alignment
         if: always()
         run: |
