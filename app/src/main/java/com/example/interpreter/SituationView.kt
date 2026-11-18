@@ -606,11 +606,9 @@ class SituationView(
             toast(TalkText.t("tts_wait"))
             return
         }
-        t.setPitch(if (line.me) 1.15f else 0.85f)
-        t.setSpeechRate(0.95f)
         val start = from.coerceIn(0, line.text.length)
         offsets[id] = start
-        SpeechOut.speak(t, line.text.substring(start), lang.voice, true, id)
+        SpeechOut.speak(t, line.text.substring(start), lang.voice, true, id, alt = !line.me)
     }
 
     private fun highlight(i: Int) {
