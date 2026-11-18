@@ -149,9 +149,11 @@ object NewsStore {
         var section = ""
         val stack = ArrayList<String>()
         for ((i, line) in lines.withIndex()) {
-            val heading = Regex("^'''(.+?)'''$").find(line)
+            // Headings are bold lines; older pages use definition lines (";Politics and elections").
+            val heading = Regex("^'''(.+?)'''$").find(line)?.groupValues?.get(1)
+                ?: line.takeIf { it.startsWith(";") }?.drop(1)
             if (heading != null) {
-                section = clean(heading.groupValues[1])
+                section = clean(heading)
                 stack.clear()
                 continue
             }
