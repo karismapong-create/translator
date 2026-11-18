@@ -61,6 +61,13 @@ class SituationView(
     private val wordColor = Color.argb(230, 255, 160, 0)
     private val density = resources.displayMetrics.density
     private val net = Executors.newSingleThreadExecutor()
+    // Words and idioms of each line (by line index), found by the app.
+    private val units = HashMap<Int, List<StudyUnits.Unit>>()
+    private var unitsGen = 0
+    private val unitsNet = Executors.newSingleThreadExecutor()
+    private val idiomColor = Color.argb(60, 46, 160, 90)
+    private val pickColor = Color.argb(170, 120, 160, 255)
+    private var popup: android.widget.PopupWindow? = null
 
     private var place: Place? = null
     private var questions: List<Question> = emptyList()
@@ -534,7 +541,9 @@ class SituationView(
         dialogueBox.addView(note(TalkText.t("s_tap_hint")))
         dialogueBox.addView(note(TalkText.t("s_disclaimer")))
         lineViews.clear()
+        units.clear()
         cards = ls.mapIndexed { i, line -> lineCard(i, line, p) }
+        loadUnits(ls, lang)
         cards.forEachIndexed { i, card ->
             val me = ls[i].me
             dialogueBox.addView(card, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
@@ -574,9 +583,11 @@ class SituationView(
             textSize = 12f
             setTextColor(Color.GRAY)
         })
-        // Not selectable, so a tap anywhere on the line reaches the card.
+        // Not selectable: a tap pauses or plays, a long press on a word or idiom shows its meaning,
+        // a long press on an empty spot opens the list of the line's words.
         val tv = text(line.text, 19f, Color.BLACK, true).apply { setTextIsSelectable(false) }
         card.addView(tv)
+        attachInspector(tv, i, line)
         lineViews.add(tv)
         if (line.meaning.isNotEmpty()) card.addView(text(line.meaning, 14f, blue).apply { setTextIsSelectable(false) })
         card.addView(LinearLayout(activity).apply {
@@ -624,7 +635,7 @@ class SituationView(
             toast(TalkText.t("tts_wait"))
             return
         }
-        if (pausedLine >= 0 && pausedLine != i) lines.getOrNull(pausedLine)?.let { lineViews.getOrNull(pausedLine)?.text = it.text }
+        if (pausedLine >= 0 && pausedLine != i) lineViews.getOrNull(pausedLine)?.text = lineText(pausedLine)
         pausedLine = -1
         playing = true
         playIndex = i
@@ -695,13 +706,13 @@ class SituationView(
         val tv = lineViews.getOrNull(i) ?: return
         val text = lines.getOrNull(i)?.text ?: return
         if (start < 0 || end <= start || end > text.length) return
-        val span = SpannableString(text)
+        val span = SpannableString(lineText(i))
         span.setSpan(BackgroundColorSpan(wordColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         tv.text = span
     }
 
     private fun clearWords() {
-        lineViews.forEachIndexed { k, v -> lines.getOrNull(k)?.let { v.text = it.text } }
+        lineViews.forEachIndexed { k, v -> v.text = lineText(k) }
     }
 
     // Called when the voice really begins a line, so highlight, scroll and sound stay together.
@@ -711,7 +722,7 @@ class SituationView(
 
     private fun lineFinished(id: String?) {
         val done = lineOf(id)
-        lines.getOrNull(done)?.let { lineViews.getOrNull(done)?.text = it.text }
+        if (done in lines.indices) lineViews.getOrNull(done)?.text = lineText(done)
         if (playing && id == "line_$playIndex") {
             playIndex++
             playCurrent()
@@ -735,72 +746,284 @@ class SituationView(
         SpeechOut.stop(tts)
     }
 
+    /* ---------- Words and idioms in a line ---------- */
+
+    // The line's sentence with its idioms tinted, so the groups the app found are visible.
+    private fun lineText(i: Int): CharSequence {
+        val text = lines.getOrNull(i)?.text ?: return ""
+        val us = units[i]?.filter { it.idiom } ?: return text
+        if (us.isEmpty()) return text
+        val span = SpannableString(text)
+        for (u in us) {
+            if (u.end <= text.length) span.setSpan(BackgroundColorSpan(idiomColor), u.start, u.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        return span
+    }
+
+    // Word units right away (offline), then idiom groups and meanings from the AI when one is set up.
+    private fun loadUnits(ls: List<Line>, l: LangInfo) {
+        val gen = ++unitsGen
+        val ctx = activity.applicationContext
+        unitsNet.execute {
+            val first = HashMap<Int, List<StudyUnits.Unit>>()
+            ls.forEachIndexed { i, line ->
+                first[i] = StudyUnits.cached(ctx, l.code, line.text) ?: StudyUnits.offline(line.text, l.code, l.voice)
+            }
+            post { if (gen == unitsGen) { units.putAll(first); refreshLineTexts() } }
+            val got = try { StudyUnits.fetch(ctx, prefs, l.code, ls.map { it.text }) } catch (_: Exception) { false }
+            if (!got) return@execute
+            val better = HashMap<Int, List<StudyUnits.Unit>>()
+            ls.forEachIndexed { i, line -> StudyUnits.cached(ctx, l.code, line.text)?.let { better[i] = it } }
+            post { if (gen == unitsGen) { units.putAll(better); refreshLineTexts() } }
+        }
+    }
+
+    // Redraws the lines that are not showing a playback or pause highlight.
+    private fun refreshLineTexts() {
+        lineViews.forEachIndexed { k, v ->
+            if (!(playing && k == playIndex) && k != pausedLine) v.text = lineText(k)
+        }
+    }
+
+    // The text offset under the finger, or null on an empty spot (beside or below the words).
+    private fun offsetAt(tv: TextView, x: Float, y: Float): Int? {
+        val layout = tv.layout ?: return null
+        val yy = y.toInt() - tv.totalPaddingTop + tv.scrollY
+        if (yy < 0 || yy > layout.height) return null
+        val row = layout.getLineForVertical(yy)
+        val xx = x - tv.totalPaddingLeft + tv.scrollX
+        if (xx < layout.getLineLeft(row) || xx > layout.getLineRight(row)) return null
+        return layout.getOffsetForHorizontal(row, xx)
+    }
+
+    private fun unitAt(i: Int, tv: TextView, x: Float, y: Float): StudyUnits.Unit? {
+        val o = offsetAt(tv, x, y) ?: return null
+        return units[i]?.let { StudyUnits.at(it, o) }
+    }
+
+    // Tap: pause / resume / play from here. Long press on a word or idiom: playback pauses and its
+    // meaning appears; keep the finger down and slide to move to the next one. Long press on an empty
+    // spot: the list of the line's words and idioms.
+    private fun attachInspector(tv: TextView, i: Int, line: Line) {
+        var inspecting = false
+        var last: StudyUnits.Unit? = null
+        var downX = 0f
+        var downY = 0f
+        val longPress = Runnable {
+            val u = unitAt(i, tv, downX, downY)
+            tv.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            if (u == null) {
+                inspecting = false
+                downX = -1f
+                openWordPicker(line)
+                return@Runnable
+            }
+            inspecting = true
+            tv.parent?.requestDisallowInterceptTouchEvent(true)
+            if (playing) pausePlay()
+            last = u
+            showUnit(i, tv, u, line, downX, downY)
+        }
+        tv.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = e.x; downY = e.y
+                    inspecting = false
+                    tv.postDelayed(longPress, android.view.ViewConfiguration.getLongPressTimeout().toLong())
+                    true
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (inspecting) {
+                        val u = unitAt(i, tv, e.x, e.y)
+                        if (u != null && u !== last) {
+                            last = u
+                            showUnit(i, tv, u, line, e.x, e.y)
+                        }
+                    } else if (downX >= 0 && (Math.abs(e.x - downX) > dp(10) || Math.abs(e.y - downY) > dp(10))) {
+                        tv.removeCallbacks(longPress)
+                        downX = -1f
+                    }
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    tv.removeCallbacks(longPress)
+                    if (inspecting) tv.parent?.requestDisallowInterceptTouchEvent(false)
+                    else if (downX >= 0) lineTapped(i)
+                    inspecting = false
+                    true
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    tv.removeCallbacks(longPress)
+                    inspecting = false
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    // A small dark card above the finger: the word or idiom, its reading and meaning, listen and save.
+    private fun showUnit(i: Int, tv: TextView, u: StudyUnits.Unit, line: Line, x: Float, y: Float) {
+        val l = lang
+        val span = SpannableString(lineText(i))
+        span.setSpan(BackgroundColorSpan(pickColor), u.start, u.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        tv.text = span
+        tts?.let { SpeechOut.speak(it, u.text, l.voice, true, "unit") }
+
+        val box = LinearLayout(activity).apply {
+            orientation = VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(10))
+            background = Ui.rounded(Color.rgb(26, 31, 54), 14, activity)
+        }
+        if (u.idiom) box.addView(TextView(activity).apply {
+            text = TalkText.t("u_idiom")
+            textSize = 12f
+            setTextColor(Color.rgb(140, 220, 160))
+        })
+        box.addView(TextView(activity).apply {
+            text = u.text
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            Ui.bold(this)
+        })
+        if (u.reading.isNotBlank() && u.reading != u.text) box.addView(TextView(activity).apply {
+            text = u.reading
+            textSize = 14f
+            setTextColor(Color.rgb(180, 190, 220))
+        })
+        val meaningView = TextView(activity).apply {
+            text = u.meaning.ifBlank { "…" }
+            textSize = 16f
+            setTextColor(Color.rgb(220, 228, 255))
+            setPadding(0, dp(2), 0, 0)
+        }
+        box.addView(meaningView)
+        var meaning = u.meaning
+        if (meaning.isBlank() && l.code != home.code) translateWord(u.text, l) { m ->
+            meaning = m
+            meaningView.text = m.ifBlank { "—" }
+        }
+        val actions = LinearLayout(activity).apply {
+            orientation = HORIZONTAL
+            setPadding(0, dp(8), 0, 0)
+        }
+        fun act(label: String, onClick: (TextView) -> Unit) = TextView(activity).apply {
+            text = label
+            textSize = 15f
+            setTextColor(Ui.ACCENT)
+            setPadding(0, dp(4), dp(18), dp(4))
+            setOnClickListener { onClick(this) }
+        }
+        actions.addView(act("🔊") { tts?.let { t -> SpeechOut.speak(t, u.text, l.voice, true, "unit") } })
+        actions.addView(act("☆ " + LiveText.t("to_vocab")) { v ->
+            storeWord(u.text, meaning, line, l)
+            v.text = "★ " + LiveText.t("to_vocab")
+            v.isEnabled = false
+        })
+        box.addView(actions)
+
+        popup?.dismiss()
+        val p = android.widget.PopupWindow(box, LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, false).apply {
+            isOutsideTouchable = true
+            elevation = dp(6).toFloat()
+            setOnDismissListener {
+                if (popup === this) popup = null
+                if (!(playing && i == playIndex)) tv.text = lineText(i)
+            }
+        }
+        popup = p
+        val loc = IntArray(2)
+        tv.getLocationOnScreen(loc)
+        box.measure(MeasureSpec.UNSPECIFIED, MeasureSpec.UNSPECIFIED)
+        val px = (loc[0] + x.toInt() - dp(60)).coerceIn(dp(8), (resources.displayMetrics.widthPixels - box.measuredWidth - dp(8)).coerceAtLeast(dp(8)))
+        val above = loc[1] + y.toInt() - box.measuredHeight - dp(36)
+        val py = if (above > dp(40)) above else loc[1] + y.toInt() + dp(36)
+        p.showAtLocation(this, Gravity.NO_GRAVITY, px, py)
+    }
+
+    private fun translateWord(word: String, l: LangInfo, done: (String) -> Unit) {
+        val t = Translation.getClient(
+            TranslatorOptions.Builder().setSourceLanguage(l.code).setTargetLanguage(home.code).build()
+        )
+        fun finish(m: String) { done(m); t.close() }
+        t.downloadModelIfNeeded(DownloadConditions.Builder().build())
+            .addOnSuccessListener {
+                t.translate(word).addOnSuccessListener { finish(it) }.addOnFailureListener { finish("") }
+            }
+            .addOnFailureListener { finish("") }
+    }
+
     /* ---------- Saving words from a line ---------- */
 
-    // Long-press on a line: tap a word to save it, or select a phrase in the sentence.
+    // Long press on an empty spot of a line: every idiom and word the app found, tap to save.
     private fun openWordPicker(line: Line) {
-        if (playing) stopPlay()
+        if (playing) pausePlay()
         val l = lang
+        val idx = lines.indexOf(line)
         val box = LinearLayout(activity).apply {
             orientation = VERTICAL
             setPadding(dp(20), dp(8), dp(20), dp(8))
         }
-        val sentence = TextView(activity).apply {
-            text = line.text
+        box.addView(TextView(activity).apply {
+            text = if (idx >= 0) lineText(idx) else line.text
             textSize = 20f
             setTextColor(Color.BLACK)
             setTypeface(null, Typeface.BOLD)
-            setTextIsSelectable(true)
-        }
-        sentence.customSelectionActionModeCallback = object : ActionMode.Callback {
-            override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
-                menu.add(0, SAVE_WORD, 0, I18n.t("save_word"))
-                return true
-            }
-            override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = false
-            override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
-                if (item.itemId != SAVE_WORD) return false
-                val a = minOf(sentence.selectionStart, sentence.selectionEnd).coerceAtLeast(0)
-                val b = maxOf(sentence.selectionStart, sentence.selectionEnd).coerceAtMost(sentence.text.length)
-                val w = if (b > a) sentence.text.substring(a, b).trim() else ""
-                if (w.isNotEmpty()) saveWord(w, line, l)
-                mode.finish()
-                return true
-            }
-            override fun onDestroyActionMode(mode: ActionMode) {}
-        }
-        box.addView(sentence)
+        })
         if (line.meaning.isNotEmpty()) box.addView(text(line.meaning, 14f, blue))
-        val chipsLabel = note(TalkText.t("w_words"))
-        val chips = LinearLayout(activity).apply { orientation = HORIZONTAL }
-        box.addView(chipsLabel)
-        box.addView(HorizontalScrollView(activity).apply { addView(chips) })
-        box.addView(note(TalkText.t("w_phrase")))
-        net.execute {
-            val words = WordExplainer.candidates(line.text, l.code)
-            post {
-                if (words.isEmpty()) {
-                    chipsLabel.visibility = View.GONE
-                    return@post
+        val list = (units[idx] ?: emptyList())
+        val idioms = list.filter { it.idiom }.distinctBy { it.text }
+        val words = list.filter { !it.idiom && it.text.any { c -> Character.isLetter(c) } }.distinctBy { it.text }
+        fun section(title: String, items: List<StudyUnits.Unit>) {
+            if (items.isEmpty()) return
+            box.addView(note(title))
+            for (u in items) {
+                val row = LinearLayout(activity).apply {
+                    orientation = HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    background = Ui.pressable(activity, if (u.idiom) Color.rgb(228, 245, 233) else Ui.PRIMARY_SOFT, 14, 0)
                 }
-                words.forEach { w ->
-                    chips.addView(TextView(activity).apply {
-                        text = w
-                        textSize = 16f
-                        setTextColor(Ui.INK)
-                        setPadding(dp(14), dp(8), dp(14), dp(8))
-                        background = Ui.pressable(activity, Ui.PRIMARY_SOFT, 20, 0)
-                        setOnClickListener {
-                            saveWord(w, line, l)
-                            text = "✔ $w"
-                            isEnabled = false
-                        }
-                    }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-                        setMargins(0, 0, dp(6), 0)
-                    })
+                val label = TextView(activity).apply {
+                    text = u.text + if (u.reading.isNotBlank() && u.reading != u.text) "  (${u.reading})" else ""
+                    textSize = 16f
+                    setTextColor(Ui.INK)
                 }
+                val mean = TextView(activity).apply {
+                    text = u.meaning
+                    textSize = 14f
+                    setTextColor(blue)
+                }
+                val col = LinearLayout(activity).apply { orientation = VERTICAL; addView(label); if (u.meaning.isNotBlank()) addView(mean) }
+                row.addView(col, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(activity).apply {
+                    text = "🔊"
+                    textSize = 18f
+                    setPadding(dp(10), 0, dp(10), 0)
+                    setOnClickListener { tts?.let { t -> SpeechOut.speak(t, u.text, l.voice, true, "unit") } }
+                })
+                val star = TextView(activity).apply {
+                    text = "☆"
+                    textSize = 20f
+                    setTextColor(blue)
+                    setPadding(dp(6), 0, 0, 0)
+                }
+                val saveIt = {
+                    if (star.isEnabled) {
+                        if (u.meaning.isNotBlank()) storeWord(u.text, u.meaning, line, l) else saveWord(u.text, line, l)
+                        star.text = "★"
+                        star.isEnabled = false
+                    }
+                }
+                star.setOnClickListener { saveIt() }
+                row.setOnClickListener { saveIt() }
+                row.addView(star)
+                box.addView(row, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
             }
         }
+        section(TalkText.t("u_idioms"), idioms)
+        section(TalkText.t("u_words"), words)
+        if (idioms.isEmpty() && Providers.llmEngine(prefs) == null) box.addView(note(TalkText.t("u_need_ai")))
         AlertDialog.Builder(activity)
             .setTitle(TalkText.t("w_title"))
             .setView(ScrollView(activity).apply { addView(box) })
@@ -872,6 +1095,7 @@ class SituationView(
     }
 
     override fun onDetachedFromWindow() {
+        popup?.dismiss()
         tts?.shutdown()
         tts = null
         super.onDetachedFromWindow()
