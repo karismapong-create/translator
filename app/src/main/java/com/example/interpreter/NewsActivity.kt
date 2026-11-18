@@ -169,6 +169,8 @@ class NewsActivity : Activity() {
         if (books) {
             row1.visibility = View.GONE
             showShelf()
+            val fromNote = intent.getIntExtra("book", -1)
+            BookStore.shelf(this).firstOrNull { it.id == fromNote }?.let { openBook(it) }
         } else {
             loadDates()
             update()
@@ -726,6 +728,12 @@ class NewsActivity : Activity() {
         override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
             if (!seeking) {
                 if (watch(ev)) return true
+                // A tap outside the sentences pauses where it is reading, or goes on from there.
+                if (ev.actionMasked == android.view.MotionEvent.ACTION_UP && !onSentence && !decided &&
+                    ev.eventTime - ev.downTime < android.view.ViewConfiguration.getLongPressTimeout() &&
+                    Math.abs(ev.x - downX) < slop && Math.abs(ev.y - downY) < slop) {
+                    togglePlay()
+                }
                 return super.onTouchEvent(ev)
             }
             when (ev.actionMasked) {
@@ -735,6 +743,34 @@ class NewsActivity : Activity() {
             }
             return true
         }
+    }
+
+    private fun togglePlay() {
+        if (sentTexts.isEmpty()) return
+        when {
+            playing -> { pausePlay(); flash("⏸") }
+            pausedSentence >= 0 -> { resumePlay(); flash("▶") }
+            else -> { playFrom(0); flash("▶") }
+        }
+    }
+
+    private var flashView: TextView? = null
+
+    // A big symbol in the middle of the screen for a moment.
+    private fun flash(symbol: String) {
+        val root = lessonPage.parent as? android.widget.FrameLayout ?: return
+        val v = flashView ?: TextView(this).apply {
+            textSize = 44f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = Ui.rounded(Color.argb(150, 20, 24, 40), 40, context)
+            root.addView(this, android.widget.FrameLayout.LayoutParams(dp(96), dp(96), Gravity.CENTER))
+        }.also { flashView = it }
+        v.text = symbol
+        v.animate().cancel()
+        v.alpha = 1f
+        v.visibility = View.VISIBLE
+        v.animate().alpha(0f).setStartDelay(450).setDuration(350).withEndAction { v.visibility = View.GONE }.start()
     }
 
     private var seekFrom = 0 to 0
@@ -1046,8 +1082,13 @@ class NewsActivity : Activity() {
                 addRow(bookRow(b, "${b.author} · ${StudyText.f("books_progress", done, total)}") { openBook(b) })
             }
         }
+        val waiting = BookStore.queue(this)
+        if (search == null && waiting.isNotEmpty()) {
+            list.addView(heading(StudyText.t("books_queue")))
+            for (b in waiting) addRow(bookRow(b, StudyText.t("books_downloading")) { openBook(b) })
+        }
         list.addView(heading(StudyText.t(if (search == null) "books_pick" else "books_found")))
-        val shown = HashSet<Int>(mine.map { it.id })
+        val shown = HashSet<Int>(mine.map { it.id } + waiting.map { it.id })
         if (search == null) {
             for (b in BookStore.starter) if (shown.add(b.id)) addRow(bookRow(b, b.author) { openBook(b) })
         }
@@ -1068,24 +1109,24 @@ class NewsActivity : Activity() {
         }
     }
 
+    // Not on the phone yet: downloaded in the background (keeps trying, even with the app closed),
+    // and opened by itself when it arrives while I'm still looking.
     private fun openBook(b: BookStore.Book) {
         currentBook = b
         registerBack()
         if (BookStore.has(this, b.id)) { showBook(b); return }
         list.removeAllViews()
+        status.text = ""
         list.addView(heading(b.title))
         list.addView(note(StudyText.t("books_downloading")))
-        net.execute {
-            val err = try { BookStore.download(this, b); null } catch (e: Exception) { e }
-            runOnUiThread {
-                if (currentBook !== b) return@runOnUiThread
-                if (err != null) {
-                    list.addView(note(StudyText.f("failed", err.message ?: "")))
-                    return@runOnUiThread
-                }
-                showBook(b)
+        val wait = note("")
+        list.addView(wait)
+        BookStore.listener = { id, ok ->
+            if (currentBook?.id == id && lessonPage.visibility != View.VISIBLE) {
+                if (ok) showBook(b) else wait.text = StudyText.t("books_retrying")
             }
         }
+        BookStore.enqueue(this, b)
     }
 
     // A book's sections by chapter, with what I've read; "continue" opens the next one.
@@ -1305,6 +1346,7 @@ class NewsActivity : Activity() {
     }
 
     override fun onDestroy() {
+        BookStore.listener = null
         tts?.shutdown()
         translators.values.forEach { it.close() }
         net.shutdown()
