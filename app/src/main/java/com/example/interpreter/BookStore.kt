@@ -191,6 +191,16 @@ object BookStore {
         shelfFile(ctx).writeText(JSONArray().apply { list.forEach { put(it.toJson()) } }.toString())
     }
 
+    /** Puts a book whose text is on the phone onto the shelf. True when it was not there yet. */
+    fun addToShelf(ctx: Context, book: Book): Boolean {
+        if (!textFile(ctx, book.id).exists()) return false
+        val list = shelf(ctx)
+        if (list.any { it.id == book.id }) return false
+        shelfFile(ctx).writeText(JSONArray().apply { (list + book).forEach { put(it.toJson()) } }.toString())
+        sectionCache.remove(book.id)
+        return true
+    }
+
     fun remove(ctx: Context, id: Int) {
         textFile(ctx, id).delete()
         val list = shelf(ctx).filter { it.id != id }

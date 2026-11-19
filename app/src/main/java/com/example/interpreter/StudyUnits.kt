@@ -28,6 +28,10 @@ object StudyUnits {
     private val memory = HashMap<String, JSONArray>()
     private val tokenizer by lazy { com.atilika.kuromoji.ipadic.Tokenizer() }
 
+    /** Drops what is kept in memory, after the files changed (import). */
+    @Synchronized
+    fun forget() = memory.clear()
+
     private fun file(ctx: Context, code: String) = File(ctx.filesDir, "units/$code.json")
 
     private fun load(ctx: Context, code: String): JSONObject = try {
