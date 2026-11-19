@@ -11,6 +11,52 @@ import java.util.concurrent.Executors
 object Pronunciation {
     private val worker = Executors.newSingleThreadExecutor()
 
+    // Pronunciation lines on screen with their text, so the global switch updates them at once.
+    private val shown = java.util.WeakHashMap<TextView, String>()
+
+    fun enabled(ctx: android.content.Context) =
+        ctx.getSharedPreferences("interpreter", android.content.Context.MODE_PRIVATE).getBoolean("show_pron", true)
+
+    /** Global switch (settings). Lines already on screen follow it; each line can still be tapped. */
+    fun setEnabled(ctx: android.content.Context, on: Boolean) {
+        ctx.getSharedPreferences("interpreter", android.content.Context.MODE_PRIVATE).edit().putBoolean("show_pron", on).apply()
+        for ((v, t) in shown.entries.toList()) render(v, t, on)
+    }
+
+    private fun label(): String = when (I18n.lang) {
+        "ko" -> "▸ 발음 보기"
+        "ja" -> "▸ 発音を表示"
+        "zh" -> "▸ 显示发音"
+        "fr" -> "▸ Prononciation"
+        "es" -> "▸ Pronunciación"
+        "de" -> "▸ Aussprache"
+        else -> "▸ Show pronunciation"
+    }
+
+    private fun render(v: TextView, text: String, open: Boolean) {
+        v.tag = open
+        if (open) {
+            v.text = "[$text]"
+            v.textSize = 18f
+            v.setTextColor(Color.rgb(47, 91, 234))
+        } else {
+            v.text = label()
+            v.textSize = 13f
+            v.setTextColor(Color.rgb(140, 150, 175))
+        }
+    }
+
+    /**
+     * Shows a finished pronunciation line: open or folded by the global setting, and a tap on it
+     * opens or folds just this line.
+     */
+    fun show(v: TextView, text: String) {
+        shown[v] = text
+        render(v, text, enabled(v.context))
+        v.isClickable = true
+        v.setOnClickListener { render(v, text, (v.tag as? Boolean) != true) }
+    }
+
     fun attach(activity: Activity, parent: LinearLayout, anchor: TextView, text: String, lang: String, home: String) {
         if (lang == home) return
         if (home == "ko" && lang != "de") {
@@ -19,7 +65,7 @@ object Pronunciation {
         }
         if (home != "ko" && lang !in setOf("ko", "ja", "zh")) return
         val view = TextView(activity).apply {
-            this.text = "…"
+            this.text = if (enabled(activity)) "…" else ""
             textSize = 18f
             setTextColor(Color.rgb(47, 91, 234))
         }
@@ -31,7 +77,7 @@ object Pronunciation {
                 ""
             }
             activity.runOnUiThread {
-                if (result.isBlank()) parent.removeView(view) else view.text = "[$result]"
+                if (result.isBlank()) parent.removeView(view) else show(view, result)
             }
         }
     }

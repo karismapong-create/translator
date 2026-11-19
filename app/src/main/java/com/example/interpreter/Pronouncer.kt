@@ -17,7 +17,7 @@ object Pronouncer {
     fun attach(activity: Activity, parent: LinearLayout, anchor: TextView, text: String, lang: String) {
         if (lang == TranslateLanguage.KOREAN) return
         val view = TextView(activity).apply {
-            this.text = "…"
+            this.text = if (Pronunciation.enabled(activity)) "…" else ""
             textSize = 18f
             setTextColor(Color.rgb(47, 91, 234))
         }
@@ -25,7 +25,7 @@ object Pronouncer {
         worker.execute {
             val result = try { toHangul(activity, text, lang) } catch (e: Throwable) { null }
             activity.runOnUiThread {
-                if (result.isNullOrBlank()) parent.removeView(view) else view.text = "[$result]"
+                if (result.isNullOrBlank()) parent.removeView(view) else Pronunciation.show(view, result)
             }
         }
     }
