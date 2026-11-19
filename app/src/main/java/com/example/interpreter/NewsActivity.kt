@@ -1273,23 +1273,55 @@ class NewsActivity : Activity() {
         val shown = HashSet<Int>(mine.map { it.id } + waiting.map { it.id })
         if (search == null) {
             for (b in BookStore.starter) if (shown.add(b.id)) addRow(bookRow(b, b.author) { openBook(b) })
+        } else {
+            // Close matches first: titles in my language, typos, authors (books on the shelf included).
+            val local = BookStore.findLocal(this, search)
+            val localShown = HashSet<Int>()
+            for (b in local) if (localShown.add(b.id)) addRow(bookRow(b, b.author) { openBook(b) })
+            shown.addAll(localShown)
         }
         val more = note(StudyText.t("books_loading"))
         list.addView(more)
-        net.execute {
-            val r: Any = try { BookStore.catalog(search) } catch (e: Exception) { e }
-            runOnUiThread {
-                if (currentBook != null || lessonPage.visibility == View.VISIBLE) return@runOnUiThread
-                val found = (r as? List<*>)?.filterIsInstance<BookStore.Book>()
-                if (found == null) { more.text = StudyText.t("books_offline"); return@runOnUiThread }
-                list.removeView(more)
-                var n = 0
-                for (b in found) if (shown.add(b.id)) { addRow(bookRow(b, b.author) { openBook(b) }); n++ }
-                if (n == 0 && search != null) list.addView(note(StudyText.t("books_none")))
-                list.addView(note(StudyText.t("books_source")))
+        val token = ++shelfToken
+        fun searchCatalog(queries: List<String>) {
+            net.execute {
+                var failed = false
+                val found = LinkedHashMap<Int, BookStore.Book>()
+                for (q in queries.distinct()) {
+                    try { BookStore.catalog(q).forEach { found.putIfAbsent(it.id, it) } } catch (_: Exception) { failed = true }
+                    // Loosen a search with no result: its longest word alone.
+                    if (q.isNotEmpty() && found.isEmpty() && q.contains(' ')) {
+                        val word = q.split(' ').maxByOrNull { it.length }.orEmpty()
+                        if (word.length >= 4) try { BookStore.catalog(word).forEach { found.putIfAbsent(it.id, it) } } catch (_: Exception) {}
+                    }
+                }
+                runOnUiThread {
+                    if (token != shelfToken || currentBook != null || lessonPage.visibility == View.VISIBLE) return@runOnUiThread
+                    if (found.isEmpty() && failed) { more.text = StudyText.t("books_offline"); return@runOnUiThread }
+                    list.removeView(more)
+                    var n = 0
+                    for (b in found.values) if (shown.add(b.id)) { addRow(bookRow(b, b.author) { openBook(b) }); n++ }
+                    if (n == 0 && search != null && shown.isEmpty()) list.addView(note(StudyText.t("books_none")))
+                    list.addView(note(StudyText.t("books_source")))
+                }
             }
         }
+        if (search == null) { searchCatalog(listOf("")); return }
+        // A search in another script is also put into English (on the phone) for the catalog.
+        val latin = search.none { Character.UnicodeScript.of(it.code).let { sc -> sc != Character.UnicodeScript.LATIN && sc != Character.UnicodeScript.COMMON } }
+        val author = BookStore.englishAuthor(search)
+        if (latin) { searchCatalog(listOfNotNull(search, author)); return }
+        val from = when {
+            search.any { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HANGUL } -> "ko"
+            search.any { Character.UnicodeScript.of(it.code).let { sc -> sc == Character.UnicodeScript.HIRAGANA || sc == Character.UnicodeScript.KATAKANA } } -> "ja"
+            search.any { Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN } -> "zh"
+            else -> null
+        }
+        if (from == null) { searchCatalog(listOfNotNull(author)); return }
+        translate(search, from, "en") { en -> searchCatalog(listOfNotNull(en.trim().takeIf { it.isNotEmpty() && it != search }, author)) }
     }
+
+    private var shelfToken = 0
 
     // Not on the phone yet: downloaded in the background (keeps trying, even with the app closed),
     // and opened by itself when it arrives while I'm still looking.
