@@ -1272,6 +1272,13 @@ class NewsActivity : Activity() {
 
     private fun bookFooter(b: BookStore.Book, s: BookStore.Section) {
         val secs = BookStore.sections(this, b.id)
+        // Shown with the phone's translation: the AI lesson can be tried again.
+        if (BookStore.lesson(this, b.id, s.index, lang.code, level) == null && RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) {
+            lessonBox.addView(Button(this).apply {
+                text = StudyText.t("books_retry")
+                setOnClickListener { openSection(b, s.index) }
+            })
+        }
         lessonBox.addView(note(StudyText.t("books_source")))
         lessonBox.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1316,11 +1323,21 @@ class NewsActivity : Activity() {
         val engine = RemoteTranslate.engine(prefs) ?: return IllegalStateException("engine")
         val s = BookStore.sections(this, b.id).getOrNull(index) ?: return IllegalStateException("section")
         val passage = BookStore.sectionText(this, b.id, s)
-        return try {
-            val o = Tutor.json(RemoteTranslate.ask(prefs, engine, bookSystem(b, l, lv), passage, 4000))
-            if (o == null || (o.optJSONArray("sentences")?.length() ?: 0) == 0) IllegalStateException("format")
-            else { BookStore.saveLesson(this, b.id, index, l.code, lv, o); o }
-        } catch (e: Exception) { e }
+        // A busy or rate-limited engine (for example right after drawing pictures with the same key)
+        // gets two more tries with waits before falling back to the phone's translation.
+        var last: Exception = IllegalStateException("format")
+        for (wait in listOf(0L, 4000L, 10000L)) {
+            if (wait > 0) Thread.sleep(wait)
+            try {
+                val o = Tutor.json(RemoteTranslate.ask(prefs, engine, bookSystem(b, l, lv), passage, 4000))
+                if (o != null && (o.optJSONArray("sentences")?.length() ?: 0) > 0) {
+                    BookStore.saveLesson(this, b.id, index, l.code, lv, o)
+                    return o
+                }
+                last = IllegalStateException("format")
+            } catch (e: Exception) { last = e }
+        }
+        return last
     }
 
     // Gets the next part ready in the background, so "Next" opens at once.
@@ -1387,6 +1404,10 @@ class NewsActivity : Activity() {
     private fun offlineBookLesson(b: BookStore.Book, s: BookStore.Section, passage: String, l: Lang) {
         val token = lessonToken
         lessonBox.addView(note(StudyText.t("need_ai")))
+        if (RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) lessonBox.addView(Button(this).apply {
+            text = StudyText.t("books_retry")
+            setOnClickListener { openSection(b, s.index) }
+        })
         val it = java.text.BreakIterator.getSentenceInstance(java.util.Locale.ENGLISH)
         it.setText(passage)
         val sents = ArrayList<String>()
@@ -1505,7 +1526,9 @@ class NewsActivity : Activity() {
                 if (bmp != null) putPicture(i, holder, bmp)
                 else {
                     holder.removeAllViews()
-                    holder.addView(note(StudyText.f("art_failed", (result as? Exception)?.message ?: "")))
+                    holder.addView(note(StudyText.f("art_failed", (result as? Exception)?.message ?: "")).apply {
+                        setOnClickListener { holder.removeAllViews() }
+                    })
                 }
             }
         }
