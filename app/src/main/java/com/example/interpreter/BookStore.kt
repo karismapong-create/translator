@@ -68,6 +68,87 @@ object BookStore {
         Book(768, "Wuthering Heights", "Emily Brontë", txt(768))
     )
 
+    // Other names people search for (Korean, Japanese, shorthand), by book id.
+    private val aliases: Map<Int, List<String>> = mapOf(
+        11 to listOf("이상한 나라의 앨리스", "앨리스", "不思議の国のアリス", "アリス", "爱丽丝梦游仙境", "Alice in Wonderland"),
+        55 to listOf("오즈의 마법사", "오즈", "オズの魔法使い", "绿野仙踪", "Wizard of Oz"),
+        16 to listOf("피터 팬", "피터팬", "ピーター・パン", "彼得潘"),
+        46 to listOf("크리스마스 캐럴", "크리스마스 캐롤", "스크루지", "クリスマス・キャロル", "圣诞颂歌"),
+        1661 to listOf("셜록 홈즈의 모험", "셜록 홈즈", "셜록 홈스", "셜록홈즈", "シャーロック・ホームズの冒険", "福尔摩斯探案集", "Sherlock Holmes"),
+        113 to listOf("비밀의 화원", "秘密の花園", "秘密花园"),
+        45 to listOf("빨강 머리 앤", "빨간 머리 앤", "빨간머리앤", "赤毛のアン", "绿山墙的安妮"),
+        236 to listOf("정글북", "정글 북", "ジャングル・ブック", "丛林之书"),
+        120 to listOf("보물섬", "宝島", "金银岛"),
+        215 to listOf("야성의 부름", "야성의 외침", "野性の呼び声", "野性的呼唤"),
+        35 to listOf("타임머신", "타임 머신", "タイム・マシン", "时间机器"),
+        1342 to listOf("오만과 편견", "高慢と偏見", "傲慢与偏见"),
+        84 to listOf("프랑켄슈타인", "フランケンシュタイン", "弗兰肯斯坦"),
+        2591 to listOf("그림 동화", "그림형제 동화", "グリム童話", "格林童话", "Grimm"),
+        1597 to listOf("안데르센 동화", "アンデルセン童話", "安徒生童话"),
+        74 to listOf("톰 소여의 모험", "톰 소여", "トム・ソーヤーの冒険", "汤姆·索亚历险记"),
+        76 to listOf("허클베리 핀의 모험", "허클베리 핀", "ハックルベリー・フィンの冒険", "哈克贝利·费恩历险记"),
+        514 to listOf("작은 아씨들", "若草物語", "小妇人"),
+        271 to listOf("블랙 뷰티", "黒馬物語", "黑骏马"),
+        174 to listOf("도리언 그레이의 초상", "도리안 그레이", "ドリアン・グレイの肖像", "道林·格雷的画像"),
+        345 to listOf("드라큘라", "ドラキュラ", "德古拉"),
+        1260 to listOf("제인 에어", "ジェーン・エア", "简·爱"),
+        768 to listOf("폭풍의 언덕", "嵐が丘", "呼啸山庄")
+    )
+
+    // Author names as people write them in other languages.
+    private val authorAliases: Map<String, List<String>> = mapOf(
+        "Lewis Carroll" to listOf("루이스 캐럴", "ルイス・キャロル"),
+        "Arthur Conan Doyle" to listOf("코난 도일", "아서 코난 도일", "コナン・ドイル"),
+        "Charles Dickens" to listOf("찰스 디킨스", "디킨스", "ディケンズ"),
+        "Mark Twain" to listOf("마크 트웨인", "マーク・トウェイン"),
+        "Jane Austen" to listOf("제인 오스틴", "ジェーン・オースティン"),
+        "Oscar Wilde" to listOf("오스카 와일드", "オスカー・ワイルド"),
+        "H. G. Wells" to listOf("허버트 조지 웰스", "웰스", "ウェルズ"),
+        "Rudyard Kipling" to listOf("러디어드 키플링", "키플링", "キプリング"),
+        "Robert Louis Stevenson" to listOf("스티븐슨", "スティーヴンソン")
+    )
+
+    private fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+
+    // Edit distance, for typos ("sherlok" -> "sherlock").
+    private fun distance(a: String, b: String): Int {
+        val d = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = d[0]; d[0] = i
+            for (j in 1..b.length) {
+                val t = d[j]
+                d[j] = minOf(d[j] + 1, d[j - 1] + 1, prev + if (a[i - 1] == b[j - 1]) 0 else 1)
+                prev = t
+            }
+        }
+        return d[b.length]
+    }
+
+    private fun close(query: String, name: String): Boolean {
+        val q = norm(query); val n = norm(name)
+        if (q.isEmpty() || n.isEmpty()) return false
+        if (n.contains(q) || (q.length >= 4 && q.contains(n) && n.length >= 3)) return true
+        if (q.length < 4) return false
+        val allowed = if (q.length >= 8) 2 else 1
+        // Compare with the whole name and with its words.
+        if (distance(q, n) <= allowed) return true
+        return name.split(Regex("[\\s,.:;'·・-]+")).any { w -> norm(w).length >= 4 && distance(q, norm(w)) <= allowed }
+    }
+
+    /** Books on the phone's lists that match a search by any name (Korean/Japanese/Chinese titles, typos, authors). */
+    fun findLocal(ctx: Context, query: String): List<Book> {
+        val pool = (shelf(ctx) + starter).distinctBy { it.id }
+        return pool.filter { b ->
+            close(query, b.title) || close(query, b.author) ||
+                aliases[b.id].orEmpty().any { close(query, it) } ||
+                authorAliases.entries.any { (en, others) -> b.author.contains(en) && others.any { close(query, it) } }
+        }
+    }
+
+    /** An English author name for a name written in another language, if known. */
+    fun englishAuthor(query: String): String? =
+        authorAliases.entries.firstOrNull { (_, others) -> others.any { close(query, it) } }?.key
+
     private fun dir(ctx: Context) = File(ctx.filesDir, "books").apply { mkdirs() }
     private fun textFile(ctx: Context, id: Int) = File(dir(ctx), "$id.json")
     private fun shelfFile(ctx: Context) = File(dir(ctx), "shelf.json")
