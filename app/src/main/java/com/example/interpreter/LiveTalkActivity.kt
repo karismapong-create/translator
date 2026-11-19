@@ -481,7 +481,7 @@ class LiveTalkActivity : Activity() {
             record(quick)
             if (engine == null) {
                 speakFor(listener, quick, tl)
-                afterTurn(side)
+                afterTurn(side, text, if (tl.code == home.code) quick else "")
                 return@fast
             }
             val context = turns.dropLast(1).takeLast(3).joinToString("\n") { it.said }
@@ -495,7 +495,7 @@ class LiveTalkActivity : Activity() {
                     bubble.set(best, if (refined.isNotBlank()) "" else LiveText.t("fast"))
                     record(best)
                     speakFor(listener, best, tl)
-                    afterTurn(side)
+                    afterTurn(side, text, if (tl.code == home.code) best else "")
                 }
             }
         }
@@ -551,28 +551,43 @@ class LiveTalkActivity : Activity() {
 
     /* ---------- Reply suggestions ---------- */
 
-    private fun afterTurn(side: Side) {
-        if (side == Side.THEM) suggestReplies()
+    private fun afterTurn(side: Side, said: String = "", inMine: String = "") {
+        if (side == Side.THEM) suggestReplies(said, inMine)
     }
 
-    private fun suggestReplies() {
+    // Up to 10 ready answers that work offline (dialogues DB, kind of question, always-useful ones);
+    // with an AI engine, its 3 answers for this very conversation come first.
+    private var offline: List<Reply> = emptyList()
+
+    private fun suggestReplies(said: String = "", inMine: String = "") {
         val engine = RemoteTranslate.engine(prefs)
-        if (!RemoteTranslate.canWrite(engine)) {
-            showChips(LiveText.quickReplies().map { Reply(it, null) })
-            return
+        val sceneIndex = scene?.let { Places.all.indexOf(it) }
+        val partnerCode = partner.code
+        val homeCode = home.code
+        showChips(LiveText.quickReplies().map { Reply(it, null) })
+        net.execute {
+            val found = try {
+                OfflineReplies.suggest(this, said, partnerCode, inMine, homeCode, sceneIndex).map { Reply(it.mine, it.theirs) }
+            } catch (_: Exception) { emptyList() }
+            runOnUiThread {
+                offline = found
+                if (found.isNotEmpty()) showChips(found)
+            }
         }
+        if (!RemoteTranslate.canWrite(engine)) return
         val talk = turns.takeLast(6).joinToString("\n") { (if (it.mine) "Me: " else "Them: ") + it.said }
         val where = scene?.en?.let { " The conversation takes place at $it." }.orEmpty()
         val system = "You help a traveler answer in a live conversation.$where Suggest 3 short, natural replies " +
             "the traveler could say next, each under 12 words, polite and different from each other. " +
             "Return only a JSON array of objects with keys \"mine\" (in ${home.english}) and \"theirs\" " +
             "(the same reply in ${partner.english})."
-        showChips(LiveText.quickReplies().take(2).map { Reply(it, null) })
         net.execute {
             val replies = try {
                 parseReplies(RemoteTranslate.ask(prefs, engine!!, system, talk, 400))
             } catch (e: Exception) { emptyList() }
-            runOnUiThread { if (replies.isNotEmpty()) showChips(replies + LiveText.quickReplies().take(1).map { Reply(it, null) }) }
+            runOnUiThread {
+                if (replies.isNotEmpty()) showChips((replies + offline.filter { o -> replies.none { it.mine == o.mine } }).take(10))
+            }
         }
     }
 
