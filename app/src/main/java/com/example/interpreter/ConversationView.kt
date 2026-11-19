@@ -231,7 +231,7 @@ class ConversationView(
                 textSize = 15f
                 gravity = Gravity.CENTER
                 setPadding(0, dp(8), 0, dp(8))
-                setOnClickListener { showMode(i) }
+                setOnClickListener { chooseMode(i) }
             }
         }
         val modeBar = LinearLayout(activity).apply {
@@ -296,7 +296,17 @@ class ConversationView(
 
     /* ---------- Modes ---------- */
 
+    private var mode = 0
+    private val modeHistory = ArrayList<Int>()
+
+    // A mode chosen by the user: remembered so back returns to the one before.
+    private fun chooseMode(i: Int) {
+        if (i != mode) { modeHistory.remove(mode); modeHistory.add(mode) }
+        showMode(i)
+    }
+
     private fun showMode(i: Int) {
+        mode = i
         situationView.visibility = if (i == 0) View.VISIBLE else View.GONE
         aiPanel.visibility = if (i == 1) View.VISIBLE else View.GONE
         modeTabs.forEachIndexed { k, t ->
@@ -388,10 +398,15 @@ class ConversationView(
 
     // Phone back button: leaves a chat, or steps back inside the phrasebook. Returns false when nothing is left.
     fun back(): Boolean {
-        if (situationView.visibility == View.VISIBLE) return situationView.back()
+        if (situationView.visibility == View.VISIBLE && situationView.back()) return true
         if (chatPanel.visibility == View.VISIBLE) {
             endSession()
             return true
+        }
+        // Then the mode used before (situations <-> AI talk).
+        while (modeHistory.isNotEmpty()) {
+            val prev = modeHistory.removeAt(modeHistory.size - 1)
+            if (prev != mode) { showMode(prev); return true }
         }
         return false
     }

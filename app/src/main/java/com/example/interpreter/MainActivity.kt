@@ -305,7 +305,7 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER
                 maxLines = 1
                 setPadding(dp(4), dp(10), dp(4), dp(10))
-                setOnClickListener { showTab(i) }
+                setOnClickListener { openTab(i) }
             }
         }
         val cameraButton = Button(this).apply {
@@ -375,7 +375,20 @@ class MainActivity : Activity() {
 
     /* ---------- Phone back button ---------- */
 
-    // Steps back inside the current tab, then to the interpret tab, then leaves the app.
+    // Tabs opened, in order, so back returns to the one before.
+    private val tabHistory = ArrayList<Int>()
+
+    // A tab chosen by the user: remembered for back.
+    private fun openTab(i: Int) {
+        if (i == currentTab) return
+        tabHistory.remove(currentTab)
+        tabHistory.add(currentTab)
+        showTab(i)
+    }
+
+    // Back: first inside the current screen (dialogue -> questions -> places, chat -> setup, quiz ->
+    // list), then the tab before, then the main (interpret) tab; on the main tab the app goes to the
+    // phone's home screen.
     private fun handleBack(): Boolean {
         val handled = when (currentTab) {
             1 -> convPage.back()
@@ -383,6 +396,10 @@ class MainActivity : Activity() {
             else -> false
         }
         if (handled) return true
+        while (tabHistory.isNotEmpty()) {
+            val prev = tabHistory.removeAt(tabHistory.size - 1)
+            if (prev != currentTab) { showTab(prev); return true }
+        }
         if (currentTab != 0) {
             showTab(0)
             return true
@@ -390,20 +407,21 @@ class MainActivity : Activity() {
         return false
     }
 
+    private fun toHomeScreen() {
+        if (!moveTaskToBack(true)) finish()
+    }
+
     private fun setupBack() {
         if (Build.VERSION.SDK_INT >= 33) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) {
-                if (!handleBack()) finish()
+                if (!handleBack()) toHomeScreen()
             }
         }
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (!handleBack()) {
-            @Suppress("DEPRECATION")
-            super.onBackPressed()
-        }
+        if (!handleBack()) toHomeScreen()
     }
 
     private fun showTab(i: Int) {

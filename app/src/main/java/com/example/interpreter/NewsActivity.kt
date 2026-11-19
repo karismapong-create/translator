@@ -171,6 +171,7 @@ class NewsActivity : Activity() {
         Ui.edgeToEdge(this, root)
         Ui.watch(root)
 
+        registerBack()
         if (books) {
             row1.visibility = View.GONE
             showShelf()
@@ -1883,23 +1884,27 @@ class NewsActivity : Activity() {
 
     private fun goBack(): Boolean = closeLesson() || closeBook()
 
+    // Nothing left to step back in: back to the app's main screen (also when opened from a notification).
+    private fun leave() {
+        if (isTaskRoot) startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        finish()
+    }
+
     // Android 13+ delivers the back gesture through a callback; older phones call onBackPressed.
     private fun registerBack() {
         if (Build.VERSION.SDK_INT < 33 || backCallback != null) return
-        val cb = android.window.OnBackInvokedCallback { goBack() }
+        val cb = android.window.OnBackInvokedCallback { if (!goBack()) leave() }
         onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, cb)
         backCallback = cb
     }
 
-    private fun unregisterBack() {
-        if (Build.VERSION.SDK_INT < 33) return
-        (backCallback as? android.window.OnBackInvokedCallback)?.let { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it) }
-        backCallback = null
-    }
+    // The back callback stays: with nothing to close it leads to the main screen (leave()).
+    private fun unregisterBack() {}
+
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (!goBack()) @Suppress("DEPRECATION") super.onBackPressed()
+        if (!goBack()) leave()
     }
 
     override fun onDestroy() {
