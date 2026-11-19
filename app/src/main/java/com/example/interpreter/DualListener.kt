@@ -57,13 +57,14 @@ class DualListener(private val ctx: Context) {
      * [onSpeech] when speech starts, [done] with the samples, or null when cancelled or nothing heard.
      */
     @SuppressLint("MissingPermission")
-    fun capture(thresholdDb: Float, onSpeech: () -> Unit, done: (ShortArray?) -> Unit) {
+    fun capture(thresholdDb: Float, liveTag: String?, onSpeech: () -> Unit, done: (ShortArray?) -> Unit) {
         if (capturing) return
         capturing = true
         cancelled = false
         Thread {
             var result: ShortArray? = null
             var rec: AudioRecord? = null
+            var run: LiveRun? = null
             try {
                 val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
                 rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, AudioFormat.CHANNEL_IN_MONO,
@@ -92,10 +93,12 @@ class DualListener(private val ctx: Context) {
                         if (loud >= 3) {
                             started = true
                             speech.addAll(pre)
+                            if (liveTag != null && Build.VERSION.SDK_INT >= 33) run = startLive(liveTag).also { r -> pre.forEach { f -> r.frames.put(f) } }
                             main.post(onSpeech)
                         } else if (++idle > idleFrames) break
                     } else {
                         speech.add(copy)
+                        run?.frames?.put(copy)
                         quiet = if (db > thresholdDb - 6) 0 else quiet + 1
                         // A sentence ends after 0.8 s of quiet.
                         if (quiet >= 40 || speech.size >= maxFrames) break
@@ -110,6 +113,7 @@ class DualListener(private val ctx: Context) {
                 }
             } catch (_: Exception) {
             } finally {
+                run?.frames?.put(endMark)
                 try { rec?.stop() } catch (_: Exception) {}
                 rec?.release()
                 capturing = false
@@ -121,15 +125,48 @@ class DualListener(private val ctx: Context) {
 
     fun cancel() { cancelled = true }
 
+    /* ---------- The expected language heard live, while the person is still talking ---------- */
+
+    // The two languages are set, so the likely one is heard as the sentence goes; when it ends, the
+    // answer is (almost) there, and the other language is only tried if it doesn't fit.
+    private class LiveRun(val tag: String) {
+        val frames = java.util.concurrent.LinkedBlockingQueue<ShortArray>()
+        var result: Pass? = null
+        var waiter: ((Pass) -> Unit)? = null
+        fun deliver(p: Pass) { result = p; waiter?.let { waiter = null; it(p) } }
+        fun await(cb: (Pass) -> Unit) { val r = result; if (r != null) cb(r) else waiter = cb }
+    }
+    private val endMark = ShortArray(0)
+    @Volatile private var live: LiveRun? = null
+
+    private fun startLive(tag: String): LiveRun {
+        val run = LiveRun(tag)
+        live = run
+        main.post {
+            enqueue {
+                val gen = generation
+                listen(tag, 30000, { p -> run.deliver(p); if (gen == generation) next() }) { out ->
+                    while (true) {
+                        val f = run.frames.take()
+                        if (f === endMark) break
+                        val buf = ByteBuffer.allocate(f.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+                        for (v in f) buf.putShort(v)
+                        out.write(buf.array())
+                    }
+                }
+            }
+        }
+        return run
+    }
+
     val isCapturing get() = capturing
 
     /* ---------------- 2. The same sentence heard in a language ---------------- */
 
     private class Pass(val text: String, val confidence: Float, val ok: Boolean, val error: Int)
 
-    // One recogniser per language, kept open: creating one and loading its model each sentence was
-    // most of the wait. Requests run one at a time (the on-device service takes one at a time).
-    private val recognizers = HashMap<String, SpeechRecognizer>()
+    // A fresh recogniser for every pass: a reused one does not take a second recording. Requests run
+    // one at a time (the on-device service takes one at a time).
     private val queue = ArrayDeque<() -> Unit>()
     private var running = false
     private var generation = 0
@@ -145,26 +182,16 @@ class DualListener(private val ctx: Context) {
         job?.invoke()
     }
 
-    /**
-     * Gets everything ready before the first sentence: opens both recognisers, loads their models with
-     * a moment of silence, and loads language identification. Call when automatic listening starts.
-     */
-    fun warmUp(a: Lang, b: Lang) {
-        if (Build.VERSION.SDK_INT < 33) return
+    /** Loads language identification before the first sentence. Call when automatic listening starts. */
+    fun warmUp() {
         identify("hello") { }
-        val silence = ShortArray(RATE / 2)
-        for (tag in listOf(a.speechTag, b.speechTag).distinct()) {
-            if (recognizers.containsKey(tag)) continue
-            recognize(silence, tag) { }
-        }
     }
 
-    /** Closes the recognisers (when automatic listening stops or the screen closes). */
+    /** Drops pending passes (when automatic listening stops or the screen closes). */
     fun release() {
         cancel()
         queue.clear()
-        for (r in recognizers.values) try { r.destroy() } catch (_: Exception) {}
-        recognizers.clear()
+        live = null
         running = false
         generation++
     }
@@ -177,26 +204,28 @@ class DualListener(private val ctx: Context) {
         }
     }
 
-    private fun recognizeNow(samples: ShortArray, tag: String, done: (Pass) -> Unit) {
-        val r = recognizers[tag] ?: try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx).also { recognizers[tag] = it } } catch (_: Exception) { null }
+    private fun recognizeNow(samples: ShortArray, tag: String, done: (Pass) -> Unit) =
+        listen(tag, 12000, done) { out ->
+            val buf = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+            for (s in samples) buf.putShort(s)
+            out.write(buf.array())
+        }
+
+    // Runs one recogniser over audio that [feed] writes (on its own thread) and then closes.
+    private fun listen(tag: String, timeoutMs: Long, done: (Pass) -> Unit, feed: (java.io.OutputStream) -> Unit) {
+        val r = try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) } catch (_: Exception) { null }
         if (r == null) { done(Pass("", -1f, false, -1)); return }
         val pipe = ParcelFileDescriptor.createPipe()
         var finished = false
         fun finish(p: Pass) {
             if (finished) return
             finished = true
-            // A broken or busy recogniser is opened fresh next time.
-            if (p.error == SpeechRecognizer.ERROR_CLIENT || p.error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
-                p.error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED || p.error < 0) {
-                try { r.cancel(); r.destroy() } catch (_: Exception) {}
-                recognizers.remove(tag)
-            }
+            try { r.destroy() } catch (_: Exception) {}
             try { pipe[0].close() } catch (_: Exception) {}
             done(p)
         }
-        // No answer at all (-2): the recogniser is opened fresh next time.
         val timeout = Runnable { finish(Pass("", -1f, false, -2)) }
-        main.postDelayed(timeout, 12000)
+        main.postDelayed(timeout, timeoutMs)
         r.setRecognitionListener(object : RecognitionListener {
             override fun onResults(b: Bundle?) {
                 main.removeCallbacks(timeout)
@@ -227,15 +256,8 @@ class DualListener(private val ctx: Context) {
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, RATE)
         }
         try { r.startListening(intent) } catch (_: Exception) { main.removeCallbacks(timeout); finish(Pass("", -1f, false, -1)); return }
-        // A missing language pack: ask the phone to download it for next time.
         Thread {
-            try {
-                ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { out ->
-                    val buf = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-                    for (s in samples) buf.putShort(s)
-                    out.write(buf.array())
-                }
-            } catch (_: Exception) {}
+            try { ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { feed(it) } } catch (_: Exception) {}
         }.start()
     }
 
@@ -282,7 +304,11 @@ class DualListener(private val ctx: Context) {
      * clear). [first] is tried first; a clear, confident match there skips the second pass.
      */
     fun decide(samples: ShortArray, first: Lang, second: Lang, done: (Heard?) -> Unit) {
-        recognize(samples, first.speechTag) { a ->
+        val run = live?.takeIf { it.tag == first.speechTag }
+        live = null
+        val firstPass: ((Pass) -> Unit) -> Unit =
+            if (run != null) { cb -> run.await(cb) } else { cb -> recognize(samples, first.speechTag, cb) }
+        firstPass { a ->
             if (a.error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE || a.error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) downloadPack(first.speechTag)
             identify(a.text) { idsA ->
                 val clear = a.ok && a.confidence >= 0.8f && scriptScore(a.text, first.code, second.code) >= 0f &&

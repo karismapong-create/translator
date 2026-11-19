@@ -729,7 +729,9 @@ class LiveTalkActivity : Activity() {
                 .setPositiveButton(LiveText.t("close"), null)
                 .show().also { Ui.watch(it) }
         }
-        if (DualListener.supported(this)) dual.warmUp(home, partner)
+        // Each start tries the two-language way again (three failed sentences turn it off until then).
+        DualListener.disabled = false
+        if (DualListener.supported(this)) dual.warmUp()
         startAuto()
     }
 
@@ -785,13 +787,14 @@ class LiveTalkActivity : Activity() {
         me.live.text = autoStatus()
         // Sensitivity 0..10 -> loudness that counts as speech, -28 dBFS (near only) to -50 (far too).
         val db = -28f - level * 2.2f
-        dual.capture(db, onSpeech = { if (auto) me.live.text = LiveText.t("auto_hearing") }) { samples ->
+        // The last speaker's language is heard live while they talk: people often say several
+        // sentences in a row. The other language is tried only when that doesn't fit.
+        val first = if (expect == Side.ME) home else partner
+        val second = if (first == home) partner else home
+        dual.capture(db, first.speechTag, onSpeech = { if (auto) me.live.text = LiveText.t("auto_hearing") }) { samples ->
             if (!auto) return@capture
             if (samples == null) { scheduleAuto(100); return@capture }
             me.live.text = LiveText.t("auto_deciding")
-            // The last speaker is tried first: people often say several sentences in a row.
-            val first = if (expect == Side.ME) home else partner
-            val second = if (first == home) partner else home
             dual.decide(samples, first, second) { h ->
                 if (!auto) return@decide
                 me.live.text = autoStatus()
