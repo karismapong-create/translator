@@ -447,6 +447,13 @@ class NewsActivity : Activity() {
             background = Ui.card(context)
         }
         lessonBox.addView(note(StudyText.t("press_hint")))
+        if (art != null) lessonBox.addView(TextView(this).apply {
+            textSize = 14f
+            setTextColor(Ui.PRIMARY)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            background = Ui.pressable(context)
+            setOnClickListener { toggleAllArt() }
+        }.also { artToggle = it; updateArtToggle() })
         for (i in 0 until sentences.length()) {
             val s = sentences.optJSONObject(i) ?: continue
             val text = s.optString("text")
@@ -888,19 +895,43 @@ class NewsActivity : Activity() {
 
     // Scrolls just enough to keep the sentence being read in view. Its position is added up through
     // its rows and cards (a view's top is only relative to its own parent).
-    private fun followSentence(v: View) {
+    // Position of a view inside the lesson (sum of tops up to the lesson box).
+    private fun yInLesson(v: View): Int? {
         var y = 0
         var cur: View = v
         while (cur !== lessonBox) {
             y += cur.top
-            cur = (cur.parent as? View) ?: return
+            cur = (cur.parent as? View) ?: return null
         }
+        return y
+    }
+
+    // Keeps the sentence being read in view, and its picture with it when there is one: the
+    // sentence and its picture are placed together on the screen when they fit.
+    private fun followSentence(v: View) {
+        val y = yInLesson(v) ?: return
         val top = lessonPage.scrollY
-        val bottom = top + lessonPage.height
-        val margin = dp(80)
-        if (y - margin < top || y + v.height + margin > bottom) {
-            lessonPage.smoothScrollTo(0, (y - margin).coerceAtLeast(0))
+        val height = lessonPage.height
+        val margin = dp(16)
+        val i = sentViews.indexOf(v)
+        val holder = artHolders.getOrNull(i)?.takeIf { it.childCount > 0 && it.getChildAt(0) is android.widget.ImageView }
+        val blockEnd = holder?.let { h -> yInLesson(h)?.let { it + h.height } } ?: (y + v.height)
+        val block = blockEnd - y
+        val target = when {
+            // Sentence and picture together: if the whole block isn't on screen, show it from the sentence,
+            // or centred when there is room to spare.
+            holder != null && block + margin * 2 <= height -> {
+                if (y >= top + margin && blockEnd <= top + height - margin) return
+                (y - ((height - block) / 2).coerceAtMost(dp(80))).coerceAtLeast(0)
+            }
+            // Taller than the screen: sentence at the top, picture below it as far as it goes.
+            holder != null -> (y - margin).coerceAtLeast(0)
+            else -> {
+                if (y - dp(80) >= top && y + v.height + dp(80) <= top + height) return
+                (y - dp(80)).coerceAtLeast(0)
+            }
         }
+        lessonPage.smoothScrollTo(0, target)
     }
 
     // Words and idioms of each sentence (by index), found by the app; idioms are tinted green.
@@ -1455,6 +1486,33 @@ class NewsActivity : Activity() {
         prefs.edit().putStringSet("art_hidden", set).apply()
     }
 
+    private var artToggle: TextView? = null
+
+    private fun visiblePictures() = artHolders.withIndex().filter { (_, h) ->
+        h != null && h.childCount > 0 && h.getChildAt(0) is android.widget.ImageView
+    }
+
+    // "Hide all pictures" while any is showing, otherwise "show all pictures" (drawn ones of this part).
+    private fun updateArtToggle() {
+        val t = artToggle ?: return
+        t.text = StudyText.t(if (visiblePictures().isNotEmpty()) "art_hide_all" else "art_show_all")
+    }
+
+    private fun toggleAllArt() {
+        val a = art ?: return
+        val shown = visiblePictures()
+        if (shown.isNotEmpty()) {
+            for ((i, h) in shown) throwAway(i, h!!, h.getChildAt(0), 0f, -1f)
+        } else {
+            for ((i, h) in artHolders.withIndex()) {
+                if (h == null) continue
+                val f = artFile(a, i)
+                if (f.exists()) { setHidden(f.name, false); showSavedArt(i, h) }
+            }
+        }
+        artToggle?.postDelayed({ updateArtToggle() }, 450)
+    }
+
     // The picture button: draws the scene, hides the picture on screen, or brings a hidden one back.
     private fun artButton(i: Int) {
         val a = art ?: return
@@ -1482,6 +1540,7 @@ class NewsActivity : Activity() {
             .withEndAction {
                 holder.removeAllViews()
                 setHidden(artFile(a, i).name, true)
+                updateArtToggle()
             }
             .start()
     }
@@ -1498,6 +1557,7 @@ class NewsActivity : Activity() {
 
     private fun putPicture(i: Int, holder: LinearLayout, bmp: android.graphics.Bitmap) {
         holder.removeAllViews()
+        holder.post { updateArtToggle() }
         holder.addView(android.widget.ImageView(this).apply {
             setImageBitmap(bmp)
             adjustViewBounds = true
