@@ -512,6 +512,7 @@ class NewsActivity : Activity() {
             topMargin = dp(4)
         })
         loadSentUnits(l, o)
+        if (art != null) loadArtFallback()
 
         val words = o.optJSONArray("words") ?: JSONArray()
         if (words.length() > 0) {
@@ -1531,7 +1532,7 @@ class NewsActivity : Activity() {
         val f = artFile(a, i)
         when {
             holder.childCount > 0 && holder.getChildAt(0) is android.widget.ImageView -> throwAway(i, holder, holder.getChildAt(0), 0f, -1f)
-            f.exists() -> { setHidden(f.name, false); showSavedArt(i, holder) }
+            artSource(a, i) != null -> { setHidden(f.name, false); showSavedArt(i, holder) }
             else -> paint(i, holder, false)
         }
     }
@@ -1556,12 +1557,54 @@ class NewsActivity : Activity() {
             .start()
     }
 
+    // Pictures of this part drawn for another language or level (for example a shipped English
+    // lesson): the scenes run in the same order, so they are placed at the matching point.
+    private var artFallback: Map<Int, java.io.File> = emptyMap()
+
+    private fun findFallback(a: Art, count: Int): Map<Int, java.io.File> {
+        val dir = java.io.File(java.io.File(filesDir, "books"), "art")
+        val prefix = "${a.book.id}_${a.section.index}_"
+        val own = "$prefix${a.lang}_${a.level}_"
+        val groups = dir.listFiles()?.filter { it.name.startsWith(prefix) && !it.name.startsWith(own) }
+            ?.groupBy { it.name.removePrefix(prefix).substringBeforeLast('_') } ?: return emptyMap()
+        val best = groups.maxByOrNull { it.value.size } ?: return emptyMap()
+        val (lang, level) = best.key.split('_').let { (it.getOrNull(0) ?: "") to (it.getOrNull(1)?.toIntOrNull() ?: -1) }
+        val other = BookStore.lesson(this, a.book.id, a.section.index, lang, level)
+        val m = other?.optJSONArray("sentences")?.length()?.takeIf { it > 0 } ?: return emptyMap()
+        val out = HashMap<Int, java.io.File>()
+        for (f in best.value.sortedBy { it.name.substringAfterLast('_').removeSuffix(".jpg").toIntOrNull() ?: 0 }) {
+            val k = f.name.substringAfterLast('_').removeSuffix(".jpg").toIntOrNull() ?: continue
+            val target = Math.round(k.toFloat() * count / m).coerceIn(0, count - 1)
+            if (target !in out) out[target] = f
+        }
+        return out
+    }
+
+    // After a part opens: finds pictures from another language or level for sentences without their own.
+    private fun loadArtFallback() {
+        val a = art ?: return
+        val count = sentTexts.size
+        artFallback = emptyMap()
+        if (count == 0) return
+        artNet.execute {
+            val found = try { findFallback(a, count) } catch (_: Exception) { emptyMap() }
+            runOnUiThread {
+                if (art !== a) return@runOnUiThread
+                artFallback = found
+                for (i in found.keys) artHolders.getOrNull(i)?.let { h -> if (h.childCount == 0) showSavedArt(i, h) }
+            }
+        }
+    }
+
+    private fun artSource(a: Art, i: Int): java.io.File? = artFile(a, i).takeIf { it.exists() } ?: artFallback[i]?.takeIf { it.exists() }
+
     private fun showSavedArt(i: Int, holder: LinearLayout) {
         val a = art ?: return
         val f = artFile(a, i)
         if (f.name in hiddenArt()) return
-        if (f.exists()) artNet.execute {
-            val bmp = android.graphics.BitmapFactory.decodeFile(f.path)
+        val src = artSource(a, i) ?: return
+        artNet.execute {
+            val bmp = android.graphics.BitmapFactory.decodeFile(src.path)
             runOnUiThread { if (bmp != null && art === a) putPicture(i, holder, bmp) }
         }
     }
