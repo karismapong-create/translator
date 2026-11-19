@@ -612,6 +612,7 @@ class MainActivity : Activity() {
             I18n.f("m_engine", engineLabel(activeEngine)),
             I18n.f("m_silent", I18n.t(if (silent) "on" else "off")),
             pronLabel() + ": " + I18n.t(if (Pronunciation.enabled(this)) "on" else "off"),
+            artGestureLabel(),
             I18n.t("m_privacy"),
             I18n.t("m_licenses"),
             ProText.t("menu")
@@ -631,8 +632,12 @@ class MainActivity : Activity() {
                         Pronunciation.setEnabled(this, !Pronunciation.enabled(this))
                         toast(pronLabel() + ": " + I18n.t(if (Pronunciation.enabled(this)) "on" else "off"))
                     }
-                    8 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
-                    9 -> showLicenses()
+                    8 -> {
+                        prefs.edit().putBoolean("art_throw", !prefs.getBoolean("art_throw", false)).apply()
+                        toast(artGestureLabel())
+                    }
+                    9 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
+                    10 -> showLicenses()
                     else -> Pro.showPaywall(this)
                 }
             }
@@ -648,6 +653,20 @@ class MainActivity : Activity() {
         "es" -> "🗣 Pronunciación"
         "de" -> "🗣 Aussprache"
         else -> "🗣 Pronunciation"
+    }
+
+    // What a swipe on a book picture does: skip forward/back (default) or throw the picture away.
+    private fun artGestureLabel(): String {
+        val t = prefs.getBoolean("art_throw", false)
+        return when (I18n.lang) {
+            "ko" -> "🎨 그림 위에서 밀기: " + if (t) "그림 던져서 숨기기" else "앞뒤 감기"
+            "ja" -> "🎨 絵の上のスワイプ: " + if (t) "投げて隠す" else "早送り・巻き戻し"
+            "zh" -> "🎨 在图片上滑动：" + if (t) "甩出隐藏" else "快进/快退"
+            "fr" -> "🎨 Glisser sur une image : " + if (t) "la lancer pour masquer" else "avancer/reculer"
+            "es" -> "🎨 Deslizar sobre una imagen: " + if (t) "lanzarla para ocultar" else "avanzar/retroceder"
+            "de" -> "🎨 Wischen auf Bild: " + if (t) "wegwerfen zum Ausblenden" else "vor/zurück spulen"
+            else -> "🎨 Swipe on a picture: " + if (t) "throw it away to hide" else "skip forward/back"
+        }
     }
 
     // Version and build number, so it is clear which build is installed.

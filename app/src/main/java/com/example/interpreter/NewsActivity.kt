@@ -1522,7 +1522,13 @@ class NewsActivity : Activity() {
                     .setNegativeButton(I18n.t("close"), null)
                     .show().also { Ui.watch(it) }
             }
+            // Option (settings): swiping on a picture skips forward/back like elsewhere (default), or
+            // throws the picture away. In skip mode the picture lets the swipe through.
+            setOnLongClickListener { redraw.run(); true }
+            // A tap on a picture pauses or goes on, like a tap on any empty spot.
+            setOnClickListener { togglePlay() }
             setOnTouchListener { v, e ->
+                if (!prefs.getBoolean("art_throw", false)) return@setOnTouchListener false
                 when (e.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
                         downX = e.rawX; downY = e.rawY
@@ -1558,6 +1564,10 @@ class NewsActivity : Activity() {
                         val vy = t?.yVelocity ?: 0f
                         t?.recycle()
                         tracker = null
+                        if (!dragging && e.actionMasked == android.view.MotionEvent.ACTION_UP &&
+                            e.eventTime - e.downTime < android.view.ViewConfiguration.getLongPressTimeout()) {
+                            togglePlay()
+                        }
                         if (dragging) {
                             val dx = e.rawX - downX
                             val dy = e.rawY - downY
