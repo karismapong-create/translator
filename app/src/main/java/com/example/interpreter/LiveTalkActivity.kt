@@ -717,15 +717,31 @@ class LiveTalkActivity : Activity() {
         if (auto) me.live.postDelayed(restartAuto, delay)
     }
 
+    // Whose turn the app expects next. The recogniser listens mainly in that person's language, which
+    // recognises it far better than one fixed language; turns usually alternate, and a tap on the
+    // status line switches it when they don't.
+    private var expect = Side.ME
+
+    private fun autoStatus() = LiveText.t("auto_listening") + "\n" +
+        LiveText.f(if (expect == Side.ME) "auto_next_me" else "auto_next_them", (if (expect == Side.ME) home else partner).native)
+
     private fun startAuto() {
         if (!auto || speaking || listening != null) return
+        me.live.setOnClickListener {
+            if (!auto) return@setOnClickListener
+            expect = if (expect == Side.ME) Side.THEM else Side.ME
+            recognizer?.destroy()
+            recognizer = null
+            me.live.text = autoStatus()
+            scheduleAuto(150)
+        }
         recognizer?.destroy()
         maxRms = -100f
         val r = SpeechRecognizer.createSpeechRecognizer(this)
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(p: Bundle?) {
-                if (auto) me.live.text = LiveText.t("auto_listening")
+                if (auto) me.live.text = autoStatus()
             }
             override fun onRmsChanged(v: Float) { if (v > maxRms) maxRms = v }
             override fun onPartialResults(b: Bundle?) {
@@ -738,13 +754,16 @@ class LiveTalkActivity : Activity() {
                 recognizer?.destroy()
                 recognizer = null
                 if (!auto) return
-                me.live.text = LiveText.t("auto_listening")
+                me.live.text = autoStatus()
                 // Too quiet: someone farther away, not the person in front of me.
                 if (text.isEmpty() || maxRms < threshold) {
                     scheduleAuto(150)
                     return
                 }
-                heard(sideOf(text, detected), text)
+                val side = sideOf(text, detected)
+                // The other person usually answers next.
+                expect = if (side == Side.ME) Side.THEM else Side.ME
+                heard(side, text)
                 me.live.removeCallbacks(speechFallback)
                 me.live.postDelayed(speechFallback, 8000)
             }
@@ -762,11 +781,13 @@ class LiveTalkActivity : Activity() {
             override fun onEndOfSpeech() {}
             override fun onEvent(type: Int, p: Bundle?) {}
         })
-        val both = arrayListOf(partner.speechTag, home.speechTag)
+        val main = if (expect == Side.ME) home else partner
+        val other = if (expect == Side.ME) partner else home
+        val both = arrayListOf(main.speechTag, other.speechTag)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, partner.speechTag)
-            putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf(home.speechTag))
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, main.speechTag)
+            putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf(other.speechTag))
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             if (Build.VERSION.SDK_INT >= 34) {
@@ -779,15 +800,18 @@ class LiveTalkActivity : Activity() {
         try { r.startListening(intent) } catch (_: Exception) { scheduleAuto(800) }
     }
 
-    // Who spoke: the recogniser's detected language when it has one, otherwise the script of the
-    // words (Hangul, kana, Latin…). Unclear short words count as the other person's.
+    // Who spoke: the script of the words when it tells (Hangul vs kana vs Latin…), then the
+    // recogniser's detected language, then whose turn it was. Words in my script are never sent
+    // to the other person as theirs, so my own speech is not answered back in my language.
     private fun sideOf(text: String, detected: String?): Side {
+        val mine = LangCheck.looks(text, home.code)
+        val theirs = LangCheck.looks(text, partner.code)
+        if (mine && !theirs) return Side.ME
+        if (theirs && !mine) return Side.THEM
         val d = detected?.lowercase().orEmpty()
         if (d.startsWith(home.code)) return Side.ME
         if (d.startsWith(partner.code)) return Side.THEM
-        val mine = LangCheck.looks(text, home.code)
-        val theirs = LangCheck.looks(text, partner.code)
-        return if (mine && !theirs) Side.ME else Side.THEM
+        return expect
     }
 
     private fun speechStarted() {
