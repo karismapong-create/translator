@@ -25,16 +25,20 @@ import java.util.zip.ZipOutputStream
  *   books/lessons/<id>_<part>_<lang>_<level>.json
  *   books/art/<id>_<part>_<lang>_<level>_<sentence>.jpg
  *   units/<lang>.json                   idioms found per sentence
- *   situations/<lang>/<place>.json      the situation dialogues DB
  *
- * Import adds what is missing and never deletes; situation files are merged like the old import.
+ * The situation dialogues DB is a separate DB with its own export/import (situations.zip) and ships
+ * as assets/situations.zip; a book package never touches it.
+ *
+ * Import adds what is missing and never deletes.
  */
 object ContentPack {
     const val FORMAT = "owl-content-pack"
     const val VERSION = 1
 
-    class Summary(var books: Int = 0, var lessons: Int = 0, var pictures: Int = 0, var situations: Int = 0, var idioms: Int = 0) {
-        fun isEmpty() = books + lessons + pictures + situations + idioms == 0
+    class Summary(var books: Int = 0, var lessons: Int = 0, var pictures: Int = 0, var idioms: Int = 0, var dialogueFiles: Int = 0) {
+        fun isEmpty() = books + lessons + pictures + idioms == 0
+        /** The file was a situation dialogues DB, not a book package. */
+        fun wrongKind() = isEmpty() && dialogueFiles > 0
     }
 
     private fun booksDir(ctx: Context) = File(ctx.filesDir, "books")
@@ -46,9 +50,9 @@ object ContentPack {
      * Writes the package to Download and returns its name. Background thread.
      * [bookIds]: books to include (with all their lessons and pictures). [situations]: the dialogue DB.
      */
-    fun export(ctx: Context, bookIds: Set<Int>, situations: Boolean, progress: (String) -> Unit = {}): String {
+    fun export(ctx: Context, bookIds: Set<Int>, progress: (String) -> Unit = {}): String {
         if (Build.VERSION.SDK_INT < 29) throw IllegalStateException("Android 10 or newer is needed")
-        val name = "owl-pack-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".zip"
+        val name = "owl-books-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".zip"
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, name)
             put(MediaStore.Downloads.MIME_TYPE, "application/zip")
@@ -83,17 +87,11 @@ object ContentPack {
                 unitsDir(ctx).listFiles()?.filter { it.extension == "json" }?.forEach {
                     put("units/${it.name}", it.readBytes()); s.idioms++
                 }
-                if (situations) {
-                    progress("💬 …")
-                    for ((path, bytes) in ContentBuilder.exportEntries(ctx)) {
-                        put("situations/$path", bytes); s.situations++
-                    }
-                }
                 val manifest = JSONObject()
-                    .put("format", FORMAT).put("version", VERSION)
+                    .put("format", FORMAT).put("kind", "books").put("version", VERSION)
                     .put("created", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(Date()))
                     .put("books", JSONArray().apply { books.forEach { put(it.id) } })
-                    .put("lessons", s.lessons).put("pictures", s.pictures).put("situations", s.situations)
+                    .put("lessons", s.lessons).put("pictures", s.pictures)
                 put("manifest.json", manifest.toString(2).toByteArray())
             }
         } ?: throw IllegalStateException("can't write the file")
@@ -139,14 +137,8 @@ object ContentPack {
                         }
                         parts.size == 2 && parts[0] == "units" && safe.matches(last) ->
                             if (mergeUnits(ctx, last, zip.readBytes())) s.idioms++
-                        // situations/<lang>/<place>.json, and the old situations.zip layout (<lang>/<place>.json)
-                        parts.size >= 2 && parts[parts.size - 2] in codes && placeFile.matches(last) -> {
-                            val incoming = try { JSONObject(zip.readBytes().toString(Charsets.UTF_8)) } catch (_: Exception) { null }
-                            if (incoming != null) {
-                                ContentBuilder.mergeIncoming(ctx, parts[parts.size - 2], placeFile.find(last)!!.groupValues[1].toInt(), incoming)
-                                s.situations++
-                            }
-                        }
+                        // A dialogue DB file (<lang>/<place>.json): not for this DB, only counted for the hint.
+                        parts.size >= 2 && parts[parts.size - 2] in codes && placeFile.matches(last) -> s.dialogueFiles++
                     }
                 }
                 e = zip.nextEntry

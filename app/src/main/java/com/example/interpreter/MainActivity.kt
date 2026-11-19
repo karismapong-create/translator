@@ -616,6 +616,7 @@ class MainActivity : Activity() {
             pronLabel() + ": " + I18n.t(if (Pronunciation.enabled(this)) "on" else "off"),
             artGestureLabel(),
             StudyText.t("pack_title"),
+            StudyText.t("sit_title"),
             I18n.t("m_privacy"),
             I18n.t("m_licenses"),
             ProText.t("menu")
@@ -640,8 +641,9 @@ class MainActivity : Activity() {
                         toast(artGestureLabel())
                     }
                     9 -> PackUi.menu(this)
-                    10 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
-                    11 -> showLicenses()
+                    10 -> PackUi.situationsMenu(this)
+                    11 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
+                    12 -> showLicenses()
                     else -> Pro.showPaywall(this)
                 }
             }
