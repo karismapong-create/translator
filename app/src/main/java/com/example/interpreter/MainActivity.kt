@@ -150,6 +150,8 @@ class MainActivity : Activity() {
         Providers.migrate(prefs)
         OnDevice.refresh()
         Pro.init(this)
+        // Content packages shipped with this version (books with pictures, dialogues).
+        Thread { try { ContentPack.installBundled(applicationContext) } catch (_: Exception) {} }.start()
         // Daily world news for the vocabulary tab is fetched in the background once a day.
         try { NewsStore.schedule(this) } catch (_: Exception) {}
         home = Languages.home(prefs)
@@ -613,6 +615,7 @@ class MainActivity : Activity() {
             I18n.f("m_silent", I18n.t(if (silent) "on" else "off")),
             pronLabel() + ": " + I18n.t(if (Pronunciation.enabled(this)) "on" else "off"),
             artGestureLabel(),
+            StudyText.t("pack_title"),
             I18n.t("m_privacy"),
             I18n.t("m_licenses"),
             ProText.t("menu")
@@ -636,8 +639,9 @@ class MainActivity : Activity() {
                         prefs.edit().putBoolean("art_throw", !prefs.getBoolean("art_throw", false)).apply()
                         toast(artGestureLabel())
                     }
-                    9 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
-                    10 -> showLicenses()
+                    9 -> PackUi.menu(this)
+                    10 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
+                    11 -> showLicenses()
                     else -> Pro.showPaywall(this)
                 }
             }
