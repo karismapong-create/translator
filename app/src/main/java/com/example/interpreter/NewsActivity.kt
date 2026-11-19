@@ -558,6 +558,8 @@ class NewsActivity : Activity() {
                     textSize = 14f
                     setTextColor(Ui.PRIMARY)
                     setPadding(dp(6), 0, dp(6), dp(4))
+                    // A tap pauses or goes on, as on the white space; a long press corrects the meaning.
+                    setOnClickListener { togglePlay() }
                     setOnLongClickListener { editMeaning(index, this); true }
                 })
             }
@@ -775,7 +777,8 @@ class NewsActivity : Activity() {
 
     /* ---------- Seeking by dragging sideways ---------- */
 
-    // Drag right or left anywhere except on the article's sentences: reading jumps forward or back
+    // Drag right or left anywhere except on the words of the article's sentences (translations, pictures
+    // and white space included): reading jumps forward or back
     // word by word, and starts again from there when the finger lifts.
     private inner class SeekScroll : ScrollView(this@NewsActivity) {
         private var downX = 0f
@@ -785,11 +788,14 @@ class NewsActivity : Activity() {
         private var decided = false
         private val slop = android.view.ViewConfiguration.get(this@NewsActivity).scaledTouchSlop
 
+        // Only the sentence's own words count; the white space around and beside them seeks and pauses.
         private fun hitsSentence(ev: android.view.MotionEvent): Boolean {
-            val r = android.graphics.Rect()
-            val x = ev.rawX.toInt()
-            val y = ev.rawY.toInt()
-            return sentViews.any { it.getGlobalVisibleRect(r) && r.contains(x, y) }
+            val at = IntArray(2)
+            return sentViews.any {
+                if (!it.isShown) return@any false
+                it.getLocationOnScreen(at)
+                onText(it, ev.rawX - at[0], ev.rawY - at[1])
+            }
         }
 
         // Returns true once the gesture is a sideways seek.
@@ -1062,6 +1068,16 @@ class NewsActivity : Activity() {
         return if (w.isBlank() || w.all { c -> !Character.isLetterOrDigit(c) }) null else start to end
     }
 
+    // Whether a point (in the view's own coordinates) is on the text's glyphs, not the empty part of a line.
+    private fun onText(tv: TextView, x: Float, y: Float): Boolean {
+        val layout = tv.layout ?: return false
+        val ly = y - tv.totalPaddingTop
+        if (ly < -dp(4) || ly > layout.height + dp(4)) return false
+        val line = layout.getLineForVertical(ly.toInt().coerceIn(0, layout.height))
+        val lx = x - tv.totalPaddingLeft
+        return lx >= layout.getLineLeft(line) - dp(8) && lx <= layout.getLineRight(line) + dp(8)
+    }
+
     // Long-press a word: its meaning appears. Keep the finger down and slide: each word under the finger
     // lights up and is spoken, and the meaning follows. A short tap reads the sentence from there.
     private fun attachInspector(tv: TextView, index: Int, l: Lang) {
@@ -1079,6 +1095,8 @@ class NewsActivity : Activity() {
         tv.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
+                    // Beside the words: the reader's seek and pause gestures handle it.
+                    if (!onText(tv, e.x, e.y)) return@setOnTouchListener false
                     downX = e.x; downY = e.y
                     inspecting = false
                     tv.postDelayed(longPress, android.view.ViewConfiguration.getLongPressTimeout().toLong())
