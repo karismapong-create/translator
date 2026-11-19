@@ -604,7 +604,7 @@ class SituationView(
                 save(line.text, line.meaning)
                 v.text = "★"
                 v.isEnabled = false
-            })
+            }.apply { if (VocabStore.has(prefs, line.text)) { text = "★"; isEnabled = false } })
         })
         Pronunciation.attach(activity, card, tv, line.text, lang.code, home.code)
         return card
@@ -1105,7 +1105,7 @@ class SituationView(
             storeWord(u.text, meaning, line, l)
             v.text = "★ " + LiveText.t("to_vocab")
             v.isEnabled = false
-        })
+        }.apply { if (VocabStore.has(prefs, u.text)) { text = "★ " + LiveText.t("to_vocab"); isEnabled = false } })
         box.addView(actions)
 
         popup?.dismiss()
@@ -1189,7 +1189,9 @@ class SituationView(
                     setOnClickListener { tts?.let { t -> SpeechOut.speak(t, u.text, l.voice, true, "unit") } }
                 })
                 val star = TextView(activity).apply {
-                    text = "☆"
+                    val have = VocabStore.has(prefs, u.text)
+                    text = if (have) "★" else "☆"
+                    isEnabled = !have
                     textSize = 20f
                     setTextColor(blue)
                     setPadding(dp(6), 0, 0, 0)

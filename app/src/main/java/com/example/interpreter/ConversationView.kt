@@ -512,8 +512,14 @@ class ConversationView(
         if (explain.isNotEmpty()) box.addView(text(explain, 13f, Color.DKGRAY))
         box.addView(row(
             action(TalkText.t("listen")) { speak(correction, lang.voice) },
-            action(TalkText.t("save"), blue) { v -> save(correction, meaning); v.text = TalkText.t("saved_mark"); v.isEnabled = false }
+            saved(action(TalkText.t("save"), blue) { v -> save(correction, meaning); v.text = TalkText.t("saved_mark"); v.isEnabled = false }, correction, TalkText.t("saved_mark"))
         ))
+    }
+
+    // A save button for a text already in the vocabulary starts filled and stays so.
+    private fun saved(v: TextView, text: String, mark: String): TextView {
+        if (VocabStore.has(prefs, text)) { v.text = mark; v.isEnabled = false }
+        return v
     }
 
     private fun addAi(reply: String, meaning: String) {
@@ -523,7 +529,7 @@ class ConversationView(
         if (meaning.isNotEmpty()) box.addView(text(meaning, 15f, blue))
         box.addView(row(
             action(TalkText.t("replay")) { speak(reply, lang.voice) },
-            action(TalkText.t("save"), blue) { v -> save(reply, meaning); v.text = TalkText.t("saved_mark"); v.isEnabled = false }
+            saved(action(TalkText.t("save"), blue) { v -> save(reply, meaning); v.text = TalkText.t("saved_mark"); v.isEnabled = false }, reply, TalkText.t("saved_mark"))
         ))
         messages.addView(box, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
             setMargins(0, dp(10), dp(40), 0)
@@ -575,7 +581,7 @@ class ConversationView(
         box.addView(row(
             action(TalkText.t("listen")) { speak(say, lang.voice) },
             action(TalkText.t("use_this"), blue) { input.setText(say) },
-            action("☆", blue) { v -> save(say, meaning); v.text = "★"; v.isEnabled = false }
+            saved(action("☆", blue) { v -> save(say, meaning); v.text = "★"; v.isEnabled = false }, say, "★")
         ))
         messages.addView(box, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
             setMargins(dp(20), dp(10), dp(20), 0)

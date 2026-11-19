@@ -649,7 +649,7 @@ class NewsActivity : Activity() {
             setOnClickListener { say(word, l) }
         })
         row.addView(TextView(this).apply {
-            text = "☆"
+            text = if (VocabStore.has(prefs, word)) "★" else "☆"
             textSize = 20f
             setTextColor(Ui.PRIMARY)
             setPadding(dp(8), dp(4), dp(4), dp(4))
@@ -1176,7 +1176,7 @@ class NewsActivity : Activity() {
             meanings[word] = m
             if (popupWord?.text?.endsWith(word) == true) popupMeaning?.text = m
         }
-        popupSave?.text = "☆ " + LiveText.t("to_vocab")
+        popupSave?.text = (if (VocabStore.has(prefs, word)) "★ " else "☆ ") + LiveText.t("to_vocab")
         popupSave?.setOnClickListener {
             val m = meanings[word] ?: popupMeaning?.text?.toString().orEmpty()
             if (VocabStore.save(prefs, word, m, l.code)) toast(StudyText.f("saved_n", 1))
