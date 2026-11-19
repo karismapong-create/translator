@@ -86,10 +86,31 @@ class LiveTalkActivity : Activity() {
             addView(mic, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(60)))
         }
 
+        // Follows the newest line to its very end, also when a line grows afterwards (the refined
+        // translation, the original under it, the pronunciation) or the panel shrinks (reply chips).
+        // Scrolling up to read stops following until the bottom is reached again or a new line comes.
+        private var stick = true
+        private var userTouch = false
+
+        private fun toBottom() {
+            if (!stick) return
+            scroll.post { scroll.scrollTo(0, (lines.height - scroll.height + scroll.paddingBottom).coerceAtLeast(0)) }
+        }
+
         init {
             Ui.primary(mic)
             mic.text = LiveText.t("speak")
             lines.addView(hintView())
+            lines.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom -> if (bottom - top != oldBottom - oldTop) toBottom() }
+            scroll.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom -> if (bottom - top != oldBottom - oldTop) toBottom() }
+            scroll.setOnTouchListener { _, e ->
+                userTouch = e.actionMasked == android.view.MotionEvent.ACTION_DOWN || e.actionMasked == android.view.MotionEvent.ACTION_MOVE
+                false
+            }
+            scroll.setOnScrollChangeListener { _, _, y, _, _ ->
+                val atBottom = y + scroll.height >= lines.height - dp(24)
+                if (atBottom) stick = true else if (userTouch) stick = false
+            }
         }
 
         private fun hintView() = TextView(this@LiveTalkActivity).apply {
@@ -114,7 +135,8 @@ class LiveTalkActivity : Activity() {
             lines.addView(b.root, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { setMargins(if (own) dp(40) else 0, dp(4), if (own) 0 else dp(40), dp(4)) })
-            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+            stick = true
+            toBottom()
             return b
         }
     }
