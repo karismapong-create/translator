@@ -47,6 +47,11 @@ class NewsActivity : Activity() {
     // Opened as "study with books" instead of news.
     private var books = false
     private var currentBook: BookStore.Book? = null
+
+    // Set while a book part is on screen: sentences get a 🎨 button that draws the scene.
+    private class Art(val book: BookStore.Book, val section: BookStore.Section, val lang: String, val level: Int)
+    private var art: Art? = null
+    private val artNet = Executors.newFixedThreadPool(2)
     private val translators = HashMap<String, Translator>()
     private val glosses = HashMap<String, String>()
     private var tts: TextToSpeech? = null
@@ -311,6 +316,7 @@ class NewsActivity : Activity() {
         NewsStore.markRead(this, d, index)
         item.read = true
         lessonToken++
+        art = null
         val cached = NewsStore.lesson(this, d, index, l.code, lv)
         if (cached != null) {
             renderLesson(cached, l, newsHeader(item)) { newsFooter() }
@@ -413,6 +419,7 @@ class NewsActivity : Activity() {
         }
         val sentences = o.optJSONArray("sentences") ?: JSONArray()
         sentViews.clear()
+        artHolders.clear()
         sentTexts.clear()
         wordStarts.clear()
         lessonWords.clear()
@@ -468,6 +475,13 @@ class NewsActivity : Activity() {
                         playFrom(index, 0, index + 1)
                     }
                 })
+                if (art != null) addView(TextView(context).apply {
+                    this.text = "🎨"
+                    textSize = 17f
+                    setTextColor(Ui.PRIMARY)
+                    setPadding(dp(6), dp(10), dp(4), dp(4))
+                    setOnClickListener { paint(index, artHolders.getOrNull(index), false) }
+                })
             })
             Pronunciation.attach(this, body, tv, text, l.code, home.code)
             s.optString("meaning").takeIf { it.isNotBlank() }?.let {
@@ -477,6 +491,14 @@ class NewsActivity : Activity() {
                     setTextColor(Ui.PRIMARY)
                     setPadding(dp(6), 0, dp(6), dp(4))
                 })
+            }
+            // Room for the scene's picture; one drawn before shows again at once.
+            if (art != null) {
+                val holder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                body.addView(holder)
+                while (artHolders.size < index) artHolders.add(null)
+                artHolders.add(holder)
+                showSavedArt(index, holder)
             }
         }
         lessonBox.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
@@ -1329,6 +1351,7 @@ class NewsActivity : Activity() {
         val token = ++lessonToken
         val l = lang
         val lv = level
+        art = Art(b, s, l.code, lv)
         val cached = BookStore.lesson(this, b.id, index, l.code, lv)
         if (cached != null) {
             renderLesson(cached, l, bookHeader(b, s)) { bookFooter(b, s) }
@@ -1390,6 +1413,99 @@ class NewsActivity : Activity() {
                         lessonBox.removeAllViews()
                         renderLesson(o, l, bookHeader(b, s)) { bookFooter(b, s) }
                     }
+                }
+            }
+        }
+    }
+
+    /* ---------- Pictures for book scenes ---------- */
+
+    private val artHolders = ArrayList<LinearLayout?>()
+    private val artBusy = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    private fun artFile(a: Art, i: Int) = BookStore.artFile(this, a.book.id, a.section.index, a.lang, a.level, i)
+
+    private fun showSavedArt(i: Int, holder: LinearLayout) {
+        val a = art ?: return
+        val f = artFile(a, i)
+        if (f.exists()) artNet.execute {
+            val bmp = android.graphics.BitmapFactory.decodeFile(f.path)
+            runOnUiThread { if (bmp != null && art === a) putPicture(i, holder, bmp) }
+        }
+    }
+
+    private fun putPicture(i: Int, holder: LinearLayout, bmp: android.graphics.Bitmap) {
+        holder.removeAllViews()
+        holder.addView(android.widget.ImageView(this).apply {
+            setImageBitmap(bmp)
+            adjustViewBounds = true
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, dp(14).toFloat())
+                }
+            }
+            // Long-press draws the scene again.
+            setOnLongClickListener {
+                android.app.AlertDialog.Builder(this@NewsActivity)
+                    .setMessage(StudyText.t("art_redraw"))
+                    .setPositiveButton(StudyText.t("art_redraw_yes")) { _, _ -> paint(i, holder, true) }
+                    .setNegativeButton(I18n.t("close"), null)
+                    .show().also { Ui.watch(it) }
+                true
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(dp(6), dp(6), dp(6), dp(10))
+        })
+    }
+
+    // Draws the scene of one sentence (with the sentences around it for context) and keeps it.
+    private fun paint(i: Int, holder: LinearLayout?, again: Boolean) {
+        val a = art ?: return
+        holder ?: return
+        if (!ImageGen.available(prefs)) {
+            android.app.AlertDialog.Builder(this).setMessage(StudyText.t("art_need_key")).setPositiveButton(I18n.t("close"), null)
+                .show().also { Ui.watch(it) }
+            return
+        }
+        if (!prefs.getBoolean("art_info_seen", false)) {
+            android.app.AlertDialog.Builder(this)
+                .setMessage(StudyText.t("art_info"))
+                .setPositiveButton(StudyText.t("art_go")) { _, _ ->
+                    prefs.edit().putBoolean("art_info_seen", true).apply()
+                    paint(i, holder, again)
+                }
+                .setNegativeButton(I18n.t("close"), null)
+                .show().also { Ui.watch(it) }
+            return
+        }
+        val f = artFile(a, i)
+        if (f.exists() && !again) { showSavedArt(i, holder); return }
+        val key = f.name
+        if (!artBusy.add(key)) return
+        holder.removeAllViews()
+        holder.addView(note(StudyText.t("art_drawing")))
+        val scene = sentTexts.getOrNull(i).orEmpty()
+        val before = sentTexts.getOrNull(i - 1).orEmpty()
+        val after = sentTexts.getOrNull(i + 1).orEmpty()
+        val prompt = "A single illustration for a scene in the classic public-domain book \"${a.book.title}\" by ${a.book.author}" +
+            (a.section.chapter.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") + ". " +
+            "Scene to draw: $scene\nContext before: $before\nContext after: $after\n" +
+            "Style: gentle hand-painted watercolor storybook illustration, warm soft colors, period-appropriate costumes and " +
+            "settings, consistent with the book's era. Absolutely no text, letters, captions, signatures or speech bubbles."
+        artNet.execute {
+            val result: Any = try { ImageGen.draw(prefs, prompt) } catch (e: Exception) { e }
+            val bytes = result as? ByteArray
+            if (bytes != null) try { f.writeBytes(bytes) } catch (_: Exception) {}
+            val bmp = bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+            artBusy.remove(key)
+            runOnUiThread {
+                if (art !== a) return@runOnUiThread
+                if (bmp != null) putPicture(i, holder, bmp)
+                else {
+                    holder.removeAllViews()
+                    holder.addView(note(StudyText.f("art_failed", (result as? Exception)?.message ?: "")))
                 }
             }
         }
