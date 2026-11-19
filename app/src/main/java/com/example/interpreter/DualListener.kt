@@ -127,9 +127,8 @@ class DualListener(private val ctx: Context) {
 
     private class Pass(val text: String, val confidence: Float, val ok: Boolean, val error: Int)
 
-    // One recogniser per language, kept open: creating one and loading its model each sentence was
-    // most of the wait. Requests run one at a time (the on-device service takes one at a time).
-    private val recognizers = HashMap<String, SpeechRecognizer>()
+    // A fresh recogniser for every pass: a reused one does not take a second recording. Requests run
+    // one at a time (the on-device service takes one at a time).
     private val queue = ArrayDeque<() -> Unit>()
     private var running = false
     private var generation = 0
@@ -145,26 +144,15 @@ class DualListener(private val ctx: Context) {
         job?.invoke()
     }
 
-    /**
-     * Gets everything ready before the first sentence: opens both recognisers, loads their models with
-     * a moment of silence, and loads language identification. Call when automatic listening starts.
-     */
-    fun warmUp(a: Lang, b: Lang) {
-        if (Build.VERSION.SDK_INT < 33) return
+    /** Loads language identification before the first sentence. Call when automatic listening starts. */
+    fun warmUp() {
         identify("hello") { }
-        val silence = ShortArray(RATE / 2)
-        for (tag in listOf(a.speechTag, b.speechTag).distinct()) {
-            if (recognizers.containsKey(tag)) continue
-            recognize(silence, tag) { }
-        }
     }
 
-    /** Closes the recognisers (when automatic listening stops or the screen closes). */
+    /** Drops pending passes (when automatic listening stops or the screen closes). */
     fun release() {
         cancel()
         queue.clear()
-        for (r in recognizers.values) try { r.destroy() } catch (_: Exception) {}
-        recognizers.clear()
         running = false
         generation++
     }
@@ -178,23 +166,17 @@ class DualListener(private val ctx: Context) {
     }
 
     private fun recognizeNow(samples: ShortArray, tag: String, done: (Pass) -> Unit) {
-        val r = recognizers[tag] ?: try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx).also { recognizers[tag] = it } } catch (_: Exception) { null }
+        val r = try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) } catch (_: Exception) { null }
         if (r == null) { done(Pass("", -1f, false, -1)); return }
         val pipe = ParcelFileDescriptor.createPipe()
         var finished = false
         fun finish(p: Pass) {
             if (finished) return
             finished = true
-            // A broken or busy recogniser is opened fresh next time.
-            if (p.error == SpeechRecognizer.ERROR_CLIENT || p.error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
-                p.error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED || p.error < 0) {
-                try { r.cancel(); r.destroy() } catch (_: Exception) {}
-                recognizers.remove(tag)
-            }
+            try { r.destroy() } catch (_: Exception) {}
             try { pipe[0].close() } catch (_: Exception) {}
             done(p)
         }
-        // No answer at all (-2): the recogniser is opened fresh next time.
         val timeout = Runnable { finish(Pass("", -1f, false, -2)) }
         main.postDelayed(timeout, 12000)
         r.setRecognitionListener(object : RecognitionListener {

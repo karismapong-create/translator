@@ -729,7 +729,9 @@ class LiveTalkActivity : Activity() {
                 .setPositiveButton(LiveText.t("close"), null)
                 .show().also { Ui.watch(it) }
         }
-        if (DualListener.supported(this)) dual.warmUp(home, partner)
+        // Each start tries the two-language way again (three failed sentences turn it off until then).
+        DualListener.disabled = false
+        if (DualListener.supported(this)) dual.warmUp()
         startAuto()
     }
 
