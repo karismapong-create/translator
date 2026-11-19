@@ -342,6 +342,7 @@ class NewsActivity : Activity() {
             "pinyin, otherwise leave reading empty. Reply with JSON only, no code fences: " +
 "Every \"meaning\" is a faithful, natural translation in standard adult ${home.english}, whatever the level " +
             "(never simplified for the level); translate idioms and phrasal verbs by their sense, not word by word. " +
+            politeRule() +
             "{\"title\":\"${l.english} headline\",\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
             "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from the article\"}],"+
             "\"idioms\":[{\"text\":\"idiom, set phrase or phrasal verb exactly as written in one of your sentences\",\"meaning\":\"${home.english} meaning\",\"reading\":\"...\"}]}"
@@ -1458,6 +1459,15 @@ class NewsActivity : Activity() {
     private var lessonToken = 0
     private val making = java.util.Collections.synchronizedSet(HashSet<String>())
 
+    // Sentence meanings in the polite register (Korean 존댓말, Japanese です・ます), narration and dialogue alike;
+    // without this the engines fall back to the plain written style (한다체, 반말).
+    private fun politeRule(): String = when (home.code) {
+        "ko" -> "Write every Korean sentence meaning in polite 존댓말 (해요체 or 합니다체, e.g. \"그는 집으로 돌아갔습니다\", " +
+            "\"고마워요\"), for narration and dialogue alike; never use 반말 or the plain written 한다체 (\"돌아갔다\", \"고마워\"). "
+        "ja" -> "Write every Japanese sentence meaning in polite です・ます form, for narration and dialogue alike; never plain form. "
+        else -> "Use a polite, neutral register in the ${home.english} meanings. "
+    }
+
     private fun bookSystem(b: BookStore.Book, l: Lang, lv: Int): String {
         val spec = when {
             lv == 0 -> "beginner graded reader: retell the passage in 6 to 8 short, simple sentences with very common words"
@@ -1472,6 +1482,7 @@ class NewsActivity : Activity() {
             "For Japanese or Chinese words give the reading in kana or pinyin, otherwise leave reading empty. " +
 "Every \"meaning\" is a faithful, natural translation in standard adult ${home.english}, whatever the level " +
             "(never simplified for the level); translate idioms and phrasal verbs by their sense, not word by word. " +
+            politeRule() +
             "Reply with JSON only, no code fences: {\"title\":\"short ${l.english} title for this part\"," +
             "\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
             "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from your text\"}],"+
