@@ -1522,7 +1522,11 @@ class NewsActivity : Activity() {
                     .setNegativeButton(I18n.t("close"), null)
                     .show().also { Ui.watch(it) }
             }
+            // Option (settings): swiping on a picture skips forward/back like elsewhere (default), or
+            // throws the picture away. In skip mode the picture lets the swipe through.
+            setOnLongClickListener { redraw.run(); true }
             setOnTouchListener { v, e ->
+                if (!prefs.getBoolean("art_throw", false)) return@setOnTouchListener false
                 when (e.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
                         downX = e.rawX; downY = e.rawY
