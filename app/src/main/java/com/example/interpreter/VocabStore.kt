@@ -40,6 +40,7 @@ object VocabStore {
                 .put("d", System.currentTimeMillis()).put("c", 0).put("w", 0)
         )
         write(prefs, arr)
+        StudyLog.app?.let { StudyLog.saved(it, text) }
         return true
     }
 

@@ -314,6 +314,7 @@ class NewsActivity : Activity() {
         val l = lang
         val lv = level
         NewsStore.markRead(this, d, index)
+        StudyLog.read(this, (item.topic.ifBlank { StudyText.category(item.category) }).take(60))
         item.read = true
         markNewsRead(d, index, l.code, lv)
         lessonToken++
@@ -752,6 +753,7 @@ class NewsActivity : Activity() {
     }
 
     private fun sentenceStarted(i: Int, id: String?) {
+        StudyLog.listened(this)
         current = i
         wordStart = offsets[id] ?: 0
         markSentence(i)
@@ -1491,6 +1493,7 @@ class NewsActivity : Activity() {
         registerBack()
         lessonBox.removeAllViews()
         BookStore.markRead(this, b.id, index, lang.code, level)
+        StudyLog.read(this, b.title + " · " + StudyText.f("books_part", index + 1))
         val token = ++lessonToken
         val l = lang
         val lv = level
@@ -1805,8 +1808,17 @@ class NewsActivity : Activity() {
 
     private fun pickPack() = startActivity(Intent(this, PackImportActivity::class.java))
 
+    private var studySince = 0L
+
+    override fun onPause() {
+        if (studySince > 0) StudyLog.studied(this, (System.currentTimeMillis() - studySince) / 1000)
+        studySince = 0L
+        super.onPause()
+    }
+
     override fun onResume() {
         super.onResume()
+        studySince = System.currentTimeMillis()
         // Back from importing a package: show what arrived.
         if (books && currentBook == null && lessonPage.visibility != View.VISIBLE && PackUi.changed) {
             PackUi.changed = false

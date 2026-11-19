@@ -426,6 +426,7 @@ class ConversationView(
         }
         lastUserBox = addUser(text)
         turns.add("user" to text)
+        StudyLog.talked(activity)
         // A sent hint (or any line in the language I practise) is read out, so I hear how it sounds.
         spokeMine = autoSpeak.isChecked && (text == lastHint || (typed && LangCheck.looks(text, lang.code)))
         if (spokeMine) speak(text, lang.voice)

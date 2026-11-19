@@ -252,9 +252,23 @@ class StudyActivity : Activity() {
 
     private fun answer(c: Card, knew: Int) {
         VocabStore.answer(prefs, c.index, knew)
+        StudyLog.reviewed(this, c.text, knew > 0)
         // Forgotten words are asked again at the end of this session.
         if (knew == 0) queue.addLast(c)
         next()
+    }
+
+    private var studySince = 0L
+
+    override fun onResume() {
+        super.onResume()
+        studySince = System.currentTimeMillis()
+    }
+
+    override fun onPause() {
+        if (studySince > 0) StudyLog.studied(this, (System.currentTimeMillis() - studySince) / 1000)
+        studySince = 0L
+        super.onPause()
     }
 
     override fun onDestroy() {
