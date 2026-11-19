@@ -150,6 +150,7 @@ class MainActivity : Activity() {
         Providers.migrate(prefs)
         OnDevice.refresh()
         Pro.init(this)
+        SpeechOut.loadRate(this)
         // Content packages shipped with this version (books with pictures, dialogues).
         Thread { try { ContentPack.installBundled(applicationContext) } catch (_: Exception) {} }.start()
         // Daily world news for the vocabulary tab is fetched in the background once a day.
@@ -617,6 +618,8 @@ class MainActivity : Activity() {
             artGestureLabel(),
             StudyText.t("pack_title"),
             StudyText.t("sit_title"),
+            "⏩ " + speedLabel(),
+            "✏ " + fixesLabel(),
             I18n.t("m_privacy"),
             I18n.t("m_licenses"),
             ProText.t("menu")
@@ -642,8 +645,15 @@ class MainActivity : Activity() {
                     }
                     9 -> PackUi.menu(this)
                     10 -> PackUi.situationsMenu(this)
-                    11 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
-                    12 -> showLicenses()
+                    11 -> {
+                        val r = SpeechOut.RATES
+                        val i = r.indexOfFirst { Math.abs(it - SpeechOut.rate) < 0.01f }
+                        SpeechOut.setRate(this, r[(i + 1) % r.size])
+                        toast(Ui.plain(speedLabel()))
+                    }
+                    12 -> showFixes()
+                    13 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
+                    14 -> showLicenses()
                     else -> Pro.showPaywall(this)
                 }
             }
@@ -673,6 +683,50 @@ class MainActivity : Activity() {
             "de" -> "🖼 Wischen auf Bild: " + if (t) "wegwerfen zum Ausblenden" else "vor/zurück spulen"
             else -> "🖼 Swipe on a picture: " + if (t) "throw it away to hide" else "skip forward/back"
         }
+    }
+
+    private fun speedLabel() = when (I18n.lang) {
+        "ko" -> "재생 속도"; "ja" -> "再生速度"; "zh" -> "播放速度"; "fr" -> "Vitesse"; "es" -> "Velocidad"; "de" -> "Tempo"
+        else -> "Playback speed"
+    } + ": " + String.format(java.util.Locale.US, "%.1f×", SpeechOut.rate)
+
+    private fun fixesLabel() = when (I18n.lang) {
+        "ko" -> "번역 고치기 목록"; "ja" -> "訳の修正リスト"; "zh" -> "翻译修正列表"; "fr" -> "Corrections de traduction"
+        "es" -> "Correcciones de traducción"; "de" -> "Übersetzungskorrekturen"; else -> "Translation fixes"
+    }
+
+    // The corrections list: tap one to remove it; add a new one.
+    private fun showFixes() {
+        val list = Corrections.list(this, home.code)
+        val items = list.map { "${it.first}  →  ${it.second}" }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("✏ " + fixesLabel())
+            .setItems(items) { _, which ->
+                Corrections.remove(this, home.code, list[which].first)
+                showFixes()
+            }
+            .setMessage(if (items.isEmpty()) StudyText.t("fix_empty") else null)
+            .setPositiveButton(StudyText.t("fix_add")) { _, _ -> addFixDialog() }
+            .setNegativeButton(I18n.t("close"), null)
+            .show().also { Ui.watch(it) }
+    }
+
+    private fun addFixDialog() {
+        val wrong = EditText(this).apply { hint = StudyText.t("fix_wrong") }
+        val right = EditText(this).apply { hint = StudyText.t("fix_right") }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Ui.dp(this@MainActivity, 20), 0, Ui.dp(this@MainActivity, 20), 0)
+            addView(wrong); addView(right)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("✏ " + fixesLabel())
+            .setView(box)
+            .setPositiveButton(StudyText.t("fix_save")) { _, _ ->
+                Corrections.add(this, home.code, wrong.text.toString(), right.text.toString())
+            }
+            .setNegativeButton(I18n.t("close"), null)
+            .show().also { Ui.watch(it) }
     }
 
     // Version and build number, so it is clear which build is installed.
@@ -1164,7 +1218,8 @@ class MainActivity : Activity() {
             }
     }
 
-    private fun showResult(id: Int, seg: Seg, tr: String, target: String) {
+    private fun showResult(id: Int, seg: Seg, raw: String, target: String) {
+        val tr = if (target == home.code) Corrections.apply(this, home.code, raw) else raw
         seg.tr = tr
         seg.view.text = tr
         Pronunciation.attach(this, segments, seg.view, tr, target, home.code)

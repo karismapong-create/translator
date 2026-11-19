@@ -88,10 +88,27 @@ object SpeechOut {
         }
     }
 
+    /** Playback speed for every voice in the app (setting kept across launches). */
+    val RATES = floatArrayOf(0.6f, 0.8f, 1.0f, 1.2f, 1.5f)
+    @Volatile var rate = 1.0f
+    private var rateLoaded = false
+
+    fun loadRate(ctx: android.content.Context) {
+        if (rateLoaded) return
+        rate = ctx.getSharedPreferences("interpreter", android.content.Context.MODE_PRIVATE).getFloat("speech_rate", 1.0f)
+        rateLoaded = true
+    }
+
+    fun setRate(ctx: android.content.Context, r: Float) {
+        rate = r
+        rateLoaded = true
+        ctx.getSharedPreferences("interpreter", android.content.Context.MODE_PRIVATE).edit().putFloat("speech_rate", r).apply()
+    }
+
     private fun say(engine: TextToSpeech, text: String, voice: String, mode: Int, id: String, alt: Boolean) {
         KeepAlive.touch()
         val distinct = useVoice(engine, voice, alt)
-        engine.setSpeechRate(1.0f)
+        engine.setSpeechRate(rate)
         // Only when the phone has a single voice: a light pitch change to tell speakers apart.
         engine.setPitch(if (distinct) 1.0f else 0.9f)
         // A fresh start opens the voice engine's own audio, which fades in; a moment of silence in
