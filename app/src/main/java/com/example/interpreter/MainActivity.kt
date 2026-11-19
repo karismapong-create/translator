@@ -611,6 +611,7 @@ class MainActivity : Activity() {
             I18n.t("m_export"),
             I18n.f("m_engine", engineLabel(activeEngine)),
             I18n.f("m_silent", I18n.t(if (silent) "on" else "off")),
+            pronLabel() + ": " + I18n.t(if (Pronunciation.enabled(this)) "on" else "off"),
             I18n.t("m_privacy"),
             I18n.t("m_licenses"),
             ProText.t("menu")
@@ -626,12 +627,27 @@ class MainActivity : Activity() {
                     4 -> exportScreen()
                     5 -> settings.open()
                     6 -> toggleSilent()
-                    7 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
-                    8 -> showLicenses()
+                    7 -> {
+                        Pronunciation.setEnabled(this, !Pronunciation.enabled(this))
+                        toast(pronLabel() + ": " + I18n.t(if (Pronunciation.enabled(this)) "on" else "off"))
+                    }
+                    8 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
+                    9 -> showLicenses()
                     else -> Pro.showPaywall(this)
                 }
             }
             .show().also { Ui.watch(it) }
+    }
+
+    // "Korean pronunciation" for Korean speakers (Hangul), "pronunciation" (romanization) for others.
+    private fun pronLabel(): String = when (I18n.lang) {
+        "ko" -> "🗣 한글 발음 표시"
+        "ja" -> "🗣 発音表記"
+        "zh" -> "🗣 发音标注"
+        "fr" -> "🗣 Prononciation"
+        "es" -> "🗣 Pronunciación"
+        "de" -> "🗣 Aussprache"
+        else -> "🗣 Pronunciation"
     }
 
     // Version and build number, so it is clear which build is installed.
