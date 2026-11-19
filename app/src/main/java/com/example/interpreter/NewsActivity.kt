@@ -988,9 +988,11 @@ class NewsActivity : Activity() {
             }
             // Taller than the screen: sentence at the top, picture below it as far as it goes.
             holder != null -> (y - margin).coerceAtLeast(0)
+            // No picture: the sentence being read stays in the middle of the screen.
             else -> {
-                if (y - dp(80) >= top && y + v.height + dp(80) <= top + height) return
-                (y - dp(80)).coerceAtLeast(0)
+                val t = (y + v.height / 2 - height / 2).coerceAtLeast(0)
+                if (Math.abs(t - top) < dp(12)) return
+                t
             }
         }
         lessonPage.smoothScrollTo(0, target)
