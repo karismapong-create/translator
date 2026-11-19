@@ -205,8 +205,10 @@ class LiveTalkActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        home = Languages.home(prefs)
-        I18n.use(home.code)
+        // My spoken language here (the app's language unless set otherwise on this screen).
+        val appHome = Languages.home(prefs)
+        home = Languages.all.firstOrNull { it.code == prefs.getString("live_mine", null) } ?: appHome
+        I18n.use(appHome.code)
         val others = Languages.all.filter { it.code != home.code }
         partner = others.firstOrNull { it.code == prefs.getString("live_partner", null) } ?: others.first()
         scene = Places.all.getOrNull(prefs.getInt("live_scene", -1))
@@ -231,6 +233,29 @@ class LiveTalkActivity : Activity() {
                 }
                 override fun onNothingSelected(p: AdapterView<*>?) {}
             }
+        }
+        val mineSpinner = Spinner(this).apply {
+            val all = Languages.all
+            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, all.map { it.native })
+            setSelection(all.indexOf(home))
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                    val pick = all[pos]
+                    if (pick == home) return
+                    val e = prefs.edit().putString("live_mine", pick.code)
+                    // The other person can't speak the same language as me: swap.
+                    if (pick == partner) e.putString("live_partner", home.code)
+                    e.apply()
+                    recreate()
+                }
+                override fun onNothingSelected(p: AdapterView<*>?) {}
+            }
+        }
+        fun tag(text: String) = TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setTextColor(Ui.INK_SOFT)
+            setPadding(dp(8), 0, 0, 0)
         }
         val sceneSpinner = Spinner(this).apply {
             val names = listOf(LiveText.t("scene_none")) + Places.all.map { Places.name(it, home.code) }
@@ -264,9 +289,13 @@ class LiveTalkActivity : Activity() {
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(partnerSpinner, LinearLayout.LayoutParams(dp(140), LinearLayout.LayoutParams.WRAP_CONTENT))
-            addView(sceneSpinner, LinearLayout.LayoutParams(dp(170), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6) })
+            // Auto mode first, then the two languages it listens for.
             addView(autoButton)
+            addView(tag(LiveText.t("mine_lang")))
+            addView(mineSpinner, LinearLayout.LayoutParams(dp(130), LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(tag(LiveText.t("partner_lang")))
+            addView(partnerSpinner, LinearLayout.LayoutParams(dp(130), LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(sceneSpinner, LinearLayout.LayoutParams(dp(170), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6) })
             addView(splitButton)
             addView(linkButton)
             addView(newButton)
@@ -717,24 +746,16 @@ class LiveTalkActivity : Activity() {
         if (auto) me.live.postDelayed(restartAuto, delay)
     }
 
-    // Whose turn the app expects next. The recogniser listens mainly in that person's language, which
-    // recognises it far better than one fixed language; turns usually alternate, and a tap on the
-    // status line switches it when they don't.
+    // Auto mode listens only for my language and theirs (set on this screen). Who spoke is decided by
+    // the words' script and the recogniser's language detection; the language it listens in first
+    // follows the last speaker only as a hint, never as the decision.
     private var expect = Side.ME
 
-    private fun autoStatus() = LiveText.t("auto_listening") + "\n" +
-        LiveText.f(if (expect == Side.ME) "auto_next_me" else "auto_next_them", (if (expect == Side.ME) home else partner).native)
+    private fun autoStatus() = LiveText.t("auto_listening") + "\n" + LiveText.f("auto_langs", home.native, partner.native)
 
     private fun startAuto() {
         if (!auto || speaking || listening != null) return
-        me.live.setOnClickListener {
-            if (!auto) return@setOnClickListener
-            expect = if (expect == Side.ME) Side.THEM else Side.ME
-            recognizer?.destroy()
-            recognizer = null
-            me.live.text = autoStatus()
-            scheduleAuto(150)
-        }
+
         recognizer?.destroy()
         maxRms = -100f
         val r = SpeechRecognizer.createSpeechRecognizer(this)
