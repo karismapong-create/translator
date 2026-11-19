@@ -47,6 +47,7 @@ class NewsActivity : Activity() {
     // Opened as "study with books" instead of news.
     private var books = false
     private var currentBook: BookStore.Book? = null
+    private val PICK_PACK = 41
 
     // Set while a book part is on screen: sentences get a 🎨 button that draws the scene.
     private class Art(val book: BookStore.Book, val section: BookStore.Section, val lang: String, val level: Int)
@@ -1180,6 +1181,17 @@ class NewsActivity : Activity() {
             addView(box, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(go)
         })
+        if (search == null) list.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(Button(context).apply {
+                text = StudyText.t("pack_export")
+                setOnClickListener { exportPack() }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(Button(context).apply {
+                text = StudyText.t("pack_import")
+                setOnClickListener { pickPack() }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        })
         val mine = BookStore.shelf(this)
         if (search == null && mine.isNotEmpty()) {
             list.addView(heading(StudyText.t("books_mine")))
@@ -1701,6 +1713,66 @@ class NewsActivity : Activity() {
                 }
             }
         }
+    }
+
+    /* ---------- Content packages (books with lessons and pictures, situation DB) ---------- */
+
+    private fun exportPack() {
+        val books = BookStore.shelf(this)
+        val labels = (books.map { "📚 " + it.title } + StudyText.t("pack_situations")).toTypedArray()
+        val checked = BooleanArray(labels.size) { true }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(StudyText.t("pack_export_title"))
+            .setMultiChoiceItems(labels, checked) { _, which, on -> checked[which] = on }
+            .setPositiveButton(StudyText.t("pack_export_go")) { _, _ ->
+                val ids = books.filterIndexed { i, _ -> checked[i] }.map { it.id }.toSet()
+                val situations = checked.last()
+                if (ids.isEmpty() && !situations) return@setPositiveButton
+                status.text = StudyText.t("pack_working")
+                val app = applicationContext
+                Thread {
+                    val msg = try {
+                        val name = ContentPack.export(app, ids, situations) { p -> runOnUiThread { status.text = StudyText.t("pack_working") + " " + p } }
+                        StudyText.f("pack_exported", name)
+                    } catch (e: Exception) { StudyText.f("failed", e.message ?: "") }
+                    runOnUiThread {
+                        status.text = msg
+                        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }.start()
+            }
+            .setNegativeButton(I18n.t("close"), null)
+            .show().also { Ui.watch(it) }
+    }
+
+    private fun pickPack() {
+        val pick = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+        try { @Suppress("DEPRECATION") startActivityForResult(pick, PICK_PACK) } catch (_: Exception) {}
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION") super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (requestCode != PICK_PACK || resultCode != RESULT_OK || uri == null) return
+        status.text = StudyText.t("pack_working")
+        val app = applicationContext
+        Thread {
+            val msg = try {
+                val s = app.contentResolver.openInputStream(uri)?.use { ContentPack.import(app, it) { p -> runOnUiThread { status.text = p } } }
+                    ?: throw IllegalStateException("can't open")
+                if (s.isEmpty()) StudyText.t("pack_nothing")
+                else StudyText.f("pack_imported", s.books, s.lessons, s.pictures, s.situations)
+            } catch (e: Exception) { StudyText.f("failed", e.message ?: "") }
+            runOnUiThread {
+                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+                if (books && currentBook == null && lessonPage.visibility != View.VISIBLE) showShelf()
+                status.text = msg
+            }
+        }.start()
     }
 
     /* ---------- Back ---------- */

@@ -680,8 +680,7 @@ object ContentBuilder {
                                 null
                             }
                             if (incoming != null) {
-                                save(file(ctx, lang, place), merge(current(ctx, lang, place), incoming, lang))
-                                clearPhoneCache(ctx, lang, place)
+                                mergeIncoming(ctx, lang, place, incoming)
                                 count++
                             }
                         }
@@ -693,7 +692,38 @@ object ContentBuilder {
         return count
     }
 
+    /** Merges one place's content from a package into this phone's content. */
+    fun mergeIncoming(ctx: Context, lang: String, place: Int, incoming: JSONObject) {
+        save(file(ctx, lang, place), merge(current(ctx, lang, place), incoming, lang))
+        clearPhoneCache(ctx, lang, place)
+    }
+
     /* ---------- Export ---------- */
+
+    /** Every place's content as the app shows it ("<lang>/<place>.json" -> bytes). Background thread. */
+    fun exportEntries(ctx: Context): LinkedHashMap<String, ByteArray> {
+        BasePack.prepare(ctx)
+        val paths = LinkedHashSet<String>()
+        for (root in listOf(shipped(ctx), dir(ctx))) {
+            if (!root.exists()) continue
+            root.walkTopDown()
+                .filter { it.isFile && it.extension == "json" }
+                .forEach { paths.add(it.relativeTo(root).path.replace('\\', '/')) }
+        }
+        val entries = LinkedHashMap<String, ByteArray>()
+        for (path in paths) {
+            val lang = path.substringBefore('/')
+            val a = load(File(shipped(ctx), path))
+            val b = load(File(dir(ctx), path))
+            val o = when {
+                a.length() == 0 -> b.also { LangCheck.repair(it, lang) }
+                b.length() == 0 -> a.also { LangCheck.repair(it, lang) }
+                else -> merge(b, a, lang, keepBase = true)
+            }
+            entries[path] = o.toString().toByteArray(Charsets.UTF_8)
+        }
+        return entries
+    }
 
     // Zips the shipped content plus everything built or imported on this phone into Download/situations.zip.
     // Files from this phone replace shipped files with the same name. Runs on a background thread.
