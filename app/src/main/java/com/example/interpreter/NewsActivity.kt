@@ -480,7 +480,7 @@ class NewsActivity : Activity() {
                     textSize = 17f
                     setTextColor(Ui.PRIMARY)
                     setPadding(dp(6), dp(10), dp(4), dp(4))
-                    setOnClickListener { paint(index, artHolders.getOrNull(index), false) }
+                    setOnClickListener { artButton(index) }
                 })
             })
             Pronunciation.attach(this, body, tv, text, l.code, home.code)
@@ -1446,9 +1446,50 @@ class NewsActivity : Activity() {
 
     private fun artFile(a: Art, i: Int) = BookStore.artFile(this, a.book.id, a.section.index, a.lang, a.level, i)
 
+    // Pictures thrown away stay hidden (the file is kept) until the button brings them back.
+    private fun hiddenArt(): MutableSet<String> = HashSet(prefs.getStringSet("art_hidden", emptySet()) ?: emptySet())
+
+    private fun setHidden(name: String, hidden: Boolean) {
+        val set = hiddenArt()
+        if (hidden) set.add(name) else set.remove(name)
+        prefs.edit().putStringSet("art_hidden", set).apply()
+    }
+
+    // The picture button: draws the scene, hides the picture on screen, or brings a hidden one back.
+    private fun artButton(i: Int) {
+        val a = art ?: return
+        val holder = artHolders.getOrNull(i) ?: return
+        val f = artFile(a, i)
+        when {
+            holder.childCount > 0 && holder.getChildAt(0) is android.widget.ImageView -> throwAway(i, holder, holder.getChildAt(0), 0f, -1f)
+            f.exists() -> { setHidden(f.name, false); showSavedArt(i, holder) }
+            else -> paint(i, holder, false)
+        }
+    }
+
+    // Flies the picture off in a direction, then removes it and remembers it as hidden.
+    private fun throwAway(i: Int, holder: LinearLayout, v: View, vx: Float, vy: Float) {
+        val a = art ?: return
+        val len = Math.max(1f, Math.hypot(vx.toDouble(), vy.toDouble()).toFloat())
+        val dist = resources.displayMetrics.widthPixels * 1.3f
+        v.animate().cancel()
+        v.animate()
+            .translationXBy(vx / len * dist)
+            .translationYBy(vy / len * dist)
+            .rotationBy(if (vx >= 0) 25f else -25f)
+            .alpha(0f)
+            .setDuration(280)
+            .withEndAction {
+                holder.removeAllViews()
+                setHidden(artFile(a, i).name, true)
+            }
+            .start()
+    }
+
     private fun showSavedArt(i: Int, holder: LinearLayout) {
         val a = art ?: return
         val f = artFile(a, i)
+        if (f.name in hiddenArt()) return
         if (f.exists()) artNet.execute {
             val bmp = android.graphics.BitmapFactory.decodeFile(f.path)
             runOnUiThread { if (bmp != null && art === a) putPicture(i, holder, bmp) }
@@ -1467,14 +1508,72 @@ class NewsActivity : Activity() {
                     outline.setRoundRect(0, 0, view.width, view.height, dp(14).toFloat())
                 }
             }
-            // Long-press draws the scene again.
-            setOnLongClickListener {
+            // Press and throw it anywhere to hide it; long-press (without moving) draws it again.
+            val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+            var downX = 0f
+            var downY = 0f
+            var dragging = false
+            var tracker: android.view.VelocityTracker? = null
+            val redraw = Runnable {
+                performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                 android.app.AlertDialog.Builder(this@NewsActivity)
                     .setMessage(StudyText.t("art_redraw"))
                     .setPositiveButton(StudyText.t("art_redraw_yes")) { _, _ -> paint(i, holder, true) }
                     .setNegativeButton(I18n.t("close"), null)
                     .show().also { Ui.watch(it) }
-                true
+            }
+            setOnTouchListener { v, e ->
+                when (e.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        downX = e.rawX; downY = e.rawY
+                        dragging = false
+                        tracker?.recycle()
+                        tracker = android.view.VelocityTracker.obtain().also { it.addMovement(e) }
+                        v.postDelayed(redraw, android.view.ViewConfiguration.getLongPressTimeout().toLong())
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        tracker?.addMovement(e)
+                        val dx = e.rawX - downX
+                        val dy = e.rawY - downY
+                        if (!dragging && Math.hypot(dx.toDouble(), dy.toDouble()) > slop) {
+                            dragging = true
+                            v.removeCallbacks(redraw)
+                            v.parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                        if (dragging) {
+                            v.translationX = dx
+                            v.translationY = dy
+                            v.rotation = dx / 40f
+                            v.alpha = (1f - Math.hypot(dx.toDouble(), dy.toDouble()).toFloat() / (v.width * 1.5f)).coerceIn(0.3f, 1f)
+                        }
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        v.removeCallbacks(redraw)
+                        val t = tracker
+                        t?.addMovement(e)
+                        t?.computeCurrentVelocity(1000)
+                        val vx = t?.xVelocity ?: 0f
+                        val vy = t?.yVelocity ?: 0f
+                        t?.recycle()
+                        tracker = null
+                        if (dragging) {
+                            val dx = e.rawX - downX
+                            val dy = e.rawY - downY
+                            val fast = Math.hypot(vx.toDouble(), vy.toDouble()) > dp(900)
+                            val far = Math.hypot(dx.toDouble(), dy.toDouble()) > v.width * 0.35f
+                            if (e.actionMasked == android.view.MotionEvent.ACTION_UP && (fast || far)) {
+                                throwAway(i, holder, v, if (fast) vx else dx, if (fast) vy else dy)
+                            } else {
+                                v.animate().translationX(0f).translationY(0f).rotation(0f).alpha(1f).setDuration(200).start()
+                            }
+                        }
+                        dragging = false
+                        true
+                    }
+                    else -> false
+                }
             }
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             setMargins(dp(6), dp(6), dp(6), dp(10))
@@ -1518,7 +1617,7 @@ class NewsActivity : Activity() {
         artNet.execute {
             val result: Any = try { ImageGen.draw(prefs, prompt) } catch (e: Exception) { e }
             val bytes = result as? ByteArray
-            if (bytes != null) try { f.writeBytes(bytes) } catch (_: Exception) {}
+            if (bytes != null) try { f.writeBytes(bytes); setHidden(f.name, false) } catch (_: Exception) {}
             val bmp = bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
             artBusy.remove(key)
             runOnUiThread {
