@@ -57,7 +57,7 @@ class GlossaryView(
     }
 
     private fun dp(v: Int) = (v * density).toInt()
-    private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = Toast.makeText(context, Ui.plain(msg), Toast.LENGTH_SHORT).show()
     private fun currentText() = Glossary.text(prefs, home.code)
 
     fun refresh() {

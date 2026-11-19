@@ -214,7 +214,7 @@ object Pro {
     }
 
     private fun toast(s: String) {
-        app?.let { Toast.makeText(it, s, Toast.LENGTH_LONG).show() }
+        app?.let { Toast.makeText(it, Ui.plain(s), Toast.LENGTH_LONG).show() }
     }
 
     private fun buy(act: Activity, d: ProductDetails, offerToken: String?) {
@@ -435,8 +435,8 @@ object ProText {
     private fun m(ko: String, ja: String, en: String, zh: String) = mapOf("ko" to ko, "ja" to ja, "en" to en, "zh" to zh)
 
     private val table: Map<String, Map<String, String>> = mapOf(
-        "menu" to m("🦉 부엉이 프로", "🦉 フクロウ プロ", "🦉 Owl Pro", "🦉 猫头鹰 Pro"),
-        "title" to m("🦉 부엉이 프로", "🦉 フクロウ プロ", "🦉 Owl Pro", "🦉 猫头鹰 Pro"),
+        "menu" to m("✨ 부엉이 프로", "✨ フクロウ プロ", "✨ Owl Pro", "✨ 猫头鹰 Pro"),
+        "title" to m("✨ 부엉이 프로", "✨ フクロウ プロ", "✨ Owl Pro", "✨ 猫头鹰 Pro"),
         "sub" to m("통역은 무료로 계속 쓰고, 공부 기능을 모두 열어보세요.", "通訳は無料のまま、学習機能をすべて使えます。", "Interpreting stays free. Unlock every study feature.", "翻译功能继续免费，解锁全部学习功能。"),
         "b1" to m("자동 모드: 버튼 없이 듣고 통역", "自動モード：ボタンなしで通訳", "Auto mode: interpret hands-free", "自动模式：免按键翻译"),
         "b2" to m("매일 새 뉴스로 공부 (3단계 난이도)", "毎日のニュースで学習（3レベル）", "Daily news lessons at 3 levels", "每日新闻学习（3个难度）"),
@@ -456,7 +456,7 @@ object ProText {
         "loading" to m("Play 스토어에서 가격을 불러오는 중…", "Playストアから価格を読み込み中…", "Loading prices from Play Store…", "正在从 Play 商店加载价格…"),
         "beta" to m("지금은 테스트 기간이라 모든 기능이 무료로 열려 있어요.", "現在テスト期間中のため、すべて無料です。", "During testing, every feature is free.", "测试期间所有功能免费。"),
         "unavailable" to m("Play 스토어에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.", "Playストアに接続できません。後でもう一度お試しください。", "Can't reach Play Store. Please try again shortly.", "无法连接 Play 商店，请稍后再试。"),
-        "thanks" to m("고마워요! 부엉이 프로가 열렸어요 🦉", "ありがとう！プロが有効になりました 🦉", "Thank you! Owl Pro is on 🦉", "谢谢！Pro 已开启 🦉"),
+        "thanks" to m("고마워요! 부엉이 프로가 열렸어요", "ありがとう！プロが有効になりました", "Thank you! Owl Pro is on", "谢谢！Pro 已开启"),
         "pending" to m("결제가 처리 중이에요. 완료되면 자동으로 열려요.", "支払い処理中です。完了すると自動で有効になります。", "Payment is processing. Pro turns on when it completes.", "付款处理中，完成后自动开启。"),
         "status_on" to m("✔ 프로 이용 중이에요. 고마워요!", "✔ プロを利用中です。ありがとう！", "✔ Pro is active. Thank you!", "✔ Pro 已开启，谢谢！"),
         "cancel_note" to m("구독은 Play 스토어 > 결제 및 정기 결제에서 언제든 해지할 수 있어요.", "サブスクはPlayストアの「お支払いと定期購入」からいつでも解約できます。", "Cancel anytime in Play Store > Payments & subscriptions.", "可随时在 Play 商店 > 付款和订阅中取消。"),

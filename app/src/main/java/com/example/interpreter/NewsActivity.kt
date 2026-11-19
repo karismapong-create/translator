@@ -66,7 +66,7 @@ class NewsActivity : Activity() {
     private var backCallback: Any? = null
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = Toast.makeText(this, Ui.plain(msg), Toast.LENGTH_SHORT).show()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

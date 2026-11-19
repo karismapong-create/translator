@@ -161,7 +161,7 @@ class VocabView(
     }
 
     private fun dp(v: Int) = (v * density).toInt()
-    private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = Toast.makeText(context, Ui.plain(msg), Toast.LENGTH_SHORT).show()
     private fun day(time: Long): String = dayFormat.format(Date(time))
 
     /* ---------- Storage ---------- */

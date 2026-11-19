@@ -169,7 +169,7 @@ class ImportActivity : Activity() {
         try {
             startActivityForResult(pick, 1)
         } catch (_: Exception) {
-            Toast.makeText(this, "파일 선택 창을 열지 못했어요.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, Ui.plain("파일 선택 창을 열지 못했어요."), Toast.LENGTH_SHORT).show()
             finish()
         }
     }
@@ -193,7 +193,7 @@ class ImportActivity : Activity() {
                 "가져오지 못했어요: ${e.message}"
             }
             ContentBuilder.report(msg)
-            main.post { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
+            main.post { Toast.makeText(app, Ui.plain(msg), Toast.LENGTH_LONG).show() }
         }.start()
         finish()
     }
