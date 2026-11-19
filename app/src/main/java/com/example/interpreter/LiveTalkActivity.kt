@@ -1082,7 +1082,8 @@ class LiveTalkActivity : Activity() {
             })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(TextView(this).apply {
-                text = "☆"
+                val foreign = if (l.saidLang != home.code) l.said else l.tr
+                text = if (VocabStore.has(prefs, foreign)) "★" else "☆"
                 textSize = 20f
                 setTextColor(Ui.PRIMARY)
                 setPadding(dp(10), dp(4), dp(4), dp(4))

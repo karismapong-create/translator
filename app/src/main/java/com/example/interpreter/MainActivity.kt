@@ -64,6 +64,7 @@ class MainActivity : Activity() {
         val sl: Lang, val tl: Lang
     ) {
         var tr: String = ""
+        var star: TextView? = null
     }
 
     companion object {
@@ -1178,6 +1179,7 @@ class MainActivity : Activity() {
             setOnClickListener { if (seg.tr.isNotEmpty()) speakNow(seg.tr, seg.voice, seg, true) }
         }
         val saveView = TextView(this).apply {
+            seg.star = this
             text = "☆"
             textSize = 20f
             setTextColor(Ui.PRIMARY)
@@ -1251,6 +1253,8 @@ class MainActivity : Activity() {
         val tr = if (target == home.code) Corrections.apply(this, home.code, raw) else raw
         seg.tr = tr
         seg.view.text = tr
+        // Already in the vocabulary: the star shows filled.
+        if (VocabStore.has(prefs, sides(seg).first)) seg.star?.text = "★"
         Pronunciation.attach(this, segments, seg.view, tr, target, home.code)
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
         queueSpeech(id, seg)

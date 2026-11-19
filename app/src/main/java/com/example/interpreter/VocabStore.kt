@@ -24,6 +24,23 @@ object VocabStore {
 
     fun write(prefs: SharedPreferences, arr: JSONArray) = prefs.edit().putString(KEY, arr.toString()).apply()
 
+    // Saved texts, rebuilt only when the saved list changed.
+    private var savedRaw: String? = null
+    private var savedSet: Set<String> = emptySet()
+
+    /** True while this text is in the vocabulary (its star stays filled until it is deleted there). */
+    @Synchronized
+    fun has(prefs: SharedPreferences, text: String): Boolean {
+        if (text.isBlank()) return false
+        val raw = prefs.getString(KEY, "[]") ?: "[]"
+        if (raw != savedRaw) {
+            val arr = try { JSONArray(raw) } catch (_: Exception) { JSONArray() }
+            savedSet = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("t") }.toSet()
+            savedRaw = raw
+        }
+        return text.trim() in savedSet || text in savedSet
+    }
+
     // Adds a word or phrase unless it is already there. Returns false for a duplicate.
     fun save(
         prefs: SharedPreferences, text: String, meaning: String, langCode: String,
