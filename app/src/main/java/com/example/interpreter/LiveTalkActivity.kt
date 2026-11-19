@@ -274,6 +274,10 @@ class LiveTalkActivity : Activity() {
             setOnClickListener { toggleAuto() }
             setOnLongClickListener { openSensitivity(); true }
         }
+        meOnlyButton = Button(this).apply {
+            setOnClickListener { toggleMeOnly() }
+            setOnLongClickListener { openSensitivity(); true }
+        }
         linkButton = Button(this).apply {
             text = LiveText.t("link")
             setOnClickListener { if (link?.linked == true) unlink() else startLink() }
@@ -291,6 +295,7 @@ class LiveTalkActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             // Auto mode first, then the two languages it listens for.
             addView(autoButton)
+            addView(meOnlyButton)
             addView(tag(LiveText.t("mine_lang")))
             addView(mineSpinner, LinearLayout.LayoutParams(dp(130), LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(tag(LiveText.t("partner_lang")))
@@ -670,6 +675,9 @@ class LiveTalkActivity : Activity() {
     // Hands-free: the mic keeps listening; a nearby voice (loud enough) is recognised, the language
     // decides who spoke, and listening pauses while the app speaks so it never hears itself.
     private lateinit var autoButton: Button
+    private lateinit var meOnlyButton: Button
+    // "I keep talking": listens only to me, in my language, and translates every sentence for them.
+    private var meOnly = false
     private var auto = false
     private var speaking = false
     private var maxRms = -100f
@@ -683,7 +691,30 @@ class LiveTalkActivity : Activity() {
     private val level: Int get() = prefs.getInt("live_auto_level", 5)
     private val threshold: Float get() = 8f - level * 0.7f
 
+    private fun toggleMeOnly() {
+        if (auto && meOnly) { stopAuto(); return }
+        if (auto) {
+            // From two-way auto straight to "I keep talking".
+            meOnly = true
+            recognizer?.destroy(); recognizer = null
+            updateAutoButton()
+            scheduleAuto(150)
+            return
+        }
+        meOnly = true
+        toggleAuto()
+        if (!auto) meOnly = false
+    }
+
     private fun toggleAuto() {
+        if (auto && meOnly && !startingMeOnly()) {
+            // From "I keep talking" to two-way auto.
+            meOnly = false
+            recognizer?.destroy(); recognizer = null
+            updateAutoButton()
+            scheduleAuto(150)
+            return
+        }
         if (auto) {
             stopAuto()
             return
@@ -710,8 +741,12 @@ class LiveTalkActivity : Activity() {
         startAuto()
     }
 
+    // True only while toggleMeOnly is turning auto on.
+    private fun startingMeOnly() = false
+
     private fun stopAuto() {
         auto = false
+        meOnly = false
         me.live.removeCallbacks(restartAuto)
         me.live.removeCallbacks(speechFallback)
         recognizer?.destroy()
@@ -722,11 +757,18 @@ class LiveTalkActivity : Activity() {
     }
 
     private fun updateAutoButton() {
+        val two = auto && !meOnly
+        val mine = auto && meOnly
         autoButton.setCompoundDrawables(null, null, null, null)
-        autoButton.text = LiveText.t(if (auto) "auto_on" else "auto_off")
-        autoButton.alpha = if (auto) 1f else 0.75f
-        if (auto) Ui.primary(autoButton) else autoButton.setBackgroundResource(R.drawable.btn_bg)
-        if (!auto) autoButton.setTextColor(Ui.PRIMARY_DARK)
+        autoButton.text = LiveText.t(if (two) "auto_on" else "auto_off")
+        autoButton.alpha = if (two) 1f else 0.75f
+        if (two) Ui.primary(autoButton) else { autoButton.setBackgroundResource(R.drawable.btn_bg); autoButton.setTextColor(Ui.PRIMARY_DARK) }
+        if (::meOnlyButton.isInitialized) {
+            meOnlyButton.setCompoundDrawables(null, null, null, null)
+            meOnlyButton.text = LiveText.t(if (mine) "me_only_on" else "me_only_off")
+            meOnlyButton.alpha = if (mine) 1f else 0.75f
+            if (mine) Ui.primary(meOnlyButton) else { meOnlyButton.setBackgroundResource(R.drawable.btn_bg); meOnlyButton.setTextColor(Ui.PRIMARY_DARK) }
+        }
     }
 
     // The recogniser beeps every time it starts; quiet those system sounds while listening hands-free.
@@ -751,7 +793,9 @@ class LiveTalkActivity : Activity() {
     // follows the last speaker only as a hint, never as the decision.
     private var expect = Side.ME
 
-    private fun autoStatus() = LiveText.t("auto_listening") + "\n" + LiveText.f("auto_langs", home.native, partner.native)
+    private fun autoStatus() =
+        if (meOnly) LiveText.f("me_only_listening", home.native, partner.native)
+        else LiveText.t("auto_listening") + "\n" + LiveText.f("auto_langs", home.native, partner.native)
 
     private fun startAuto() {
         if (!auto || speaking || listening != null) return
@@ -781,7 +825,7 @@ class LiveTalkActivity : Activity() {
                     scheduleAuto(150)
                     return
                 }
-                val side = sideOf(text, detected)
+                val side = if (meOnly) Side.ME else sideOf(text, detected)
                 // The other person usually answers next.
                 expect = if (side == Side.ME) Side.THEM else Side.ME
                 heard(side, text)
@@ -802,16 +846,17 @@ class LiveTalkActivity : Activity() {
             override fun onEndOfSpeech() {}
             override fun onEvent(type: Int, p: Bundle?) {}
         })
-        val main = if (expect == Side.ME) home else partner
-        val other = if (expect == Side.ME) partner else home
+        val main = if (meOnly || expect == Side.ME) home else partner
+        val other = if (meOnly || expect == Side.ME) partner else home
         val both = arrayListOf(main.speechTag, other.speechTag)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, main.speechTag)
-            putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf(other.speechTag))
+            if (!meOnly) putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf(other.speechTag))
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
-            if (Build.VERSION.SDK_INT >= 34) {
+            // Talking on: a sentence ends at a longer pause, so thoughts aren't cut in the middle.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, if (meOnly) 1800L else 1500L)
+            if (Build.VERSION.SDK_INT >= 34 && !meOnly) {
                 putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
                 putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, both)
                 putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
