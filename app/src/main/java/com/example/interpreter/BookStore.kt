@@ -389,7 +389,7 @@ object BookStore {
             val pi = PendingIntent.getActivity(ctx, b.id, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             val n = Notification.Builder(ctx, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setContentTitle(StudyText.t("books_ready"))
+                .setContentTitle(Ui.plain(StudyText.t("books_ready")))
                 .setContentText(b.title)
                 .setContentIntent(pi)
                 .setAutoCancel(true)

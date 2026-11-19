@@ -86,7 +86,7 @@ class PlaybackService : Service() {
         )
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(TalkText.t("s_bg_playing"))
+            .setContentTitle(Ui.plain(TalkText.t("s_bg_playing")))
             .setContentText(title)
             .setContentIntent(open)
             .setOngoing(true)

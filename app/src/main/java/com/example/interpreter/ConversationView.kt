@@ -249,7 +249,7 @@ class ConversationView(
     /* ---------- Small helpers ---------- */
 
     private fun dp(v: Int) = (v * density).toInt()
-    private fun toast(msg: String) = Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = Toast.makeText(activity, Ui.plain(msg), Toast.LENGTH_SHORT).show()
     private fun scrollDown() = scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     private fun englishName(l: LangInfo) = Languages.byCode(l.code).english
 

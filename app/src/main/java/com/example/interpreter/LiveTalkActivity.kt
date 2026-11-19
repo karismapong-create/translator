@@ -198,7 +198,7 @@ class LiveTalkActivity : Activity() {
     private var routing = false
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = Toast.makeText(this, Ui.plain(msg), Toast.LENGTH_SHORT).show()
     private fun langOf(side: Side) = if (side == Side.ME) home else partner
     private fun panelOf(side: Side) = if (side == Side.ME) me else them
     private fun other(side: Side) = if (side == Side.ME) Side.THEM else Side.ME

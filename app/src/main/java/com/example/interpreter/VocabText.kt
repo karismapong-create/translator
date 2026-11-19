@@ -57,7 +57,7 @@ object VocabText {
         "q_next" to m("다음", "次へ", "Next", "Suivant", "Siguiente", "Weiter", "下一题"),
         "q_result_btn" to m("결과 보기", "結果を見る", "See results", "Voir les résultats", "Ver resultados", "Ergebnis", "查看结果"),
         "q_result" to m("결과", "結果", "Results", "Résultats", "Resultados", "Ergebnis", "结果"),
-        "q_perfect" to m("모두 맞혔어요! 👏", "全問正解！👏", "All correct! 👏", "Tout juste ! 👏", "¡Todo correcto! 👏", "Alles richtig! 👏", "全部答对！👏"),
+        "q_perfect" to m("모두 맞혔어요!", "全問正解！", "All correct!", "Tout juste !", "¡Todo correcto!", "Alles richtig!", "全部答对！"),
         "q_missed" to m("틀린 단어", "間違えた単語", "Missed words", "Mots ratés", "Palabras falladas", "Falsche Wörter", "答错的单词"),
         "q_retry_wrong" to m("틀린 것만 다시", "間違えたものだけ再挑戦", "Retry mistakes", "Refaire les erreurs", "Repetir errores", "Fehler wiederholen", "只重做错题"),
         "q_restart" to m("처음부터 다시", "最初から", "Start over", "Recommencer", "Empezar de nuevo", "Neu starten", "从头再来"),

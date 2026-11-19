@@ -33,7 +33,7 @@ class EngineSettings(
 
     private fun p(key: String) = prefs.getString(key, "").orEmpty().trim()
     private fun dp(v: Int) = (v * activity.resources.displayMetrics.density).toInt()
-    private fun toast(msg: String) = Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = Toast.makeText(activity, Ui.plain(msg), Toast.LENGTH_SHORT).show()
 
     fun currentId(): String = prefs.getString("engine", null) ?: if (p("deepl").isNotEmpty()) "deepl" else "mlkit"
 

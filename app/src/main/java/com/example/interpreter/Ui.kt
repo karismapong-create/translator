@@ -37,7 +37,7 @@ object Ui {
         // actions
         "🔊" to R.drawable.ic_volume_up, "☆" to R.drawable.ic_star, "★" to R.drawable.ic_star_fill,
         "💡" to R.drawable.ic_lightbulb, "⚠" to R.drawable.ic_warning, "🎙" to R.drawable.ic_mic,
-        "🎤" to R.drawable.ic_mic, "⬇" to R.drawable.ic_download, "📥" to R.drawable.ic_download, "📤" to R.drawable.ic_upload,
+        "🎤" to R.drawable.ic_mic, "⬇" to R.drawable.ic_download, "📥" to R.drawable.ic_download, "📤" to R.drawable.ic_upload, "ℹ" to R.drawable.ic_info, "✘" to R.drawable.ic_close, "◀" to R.drawable.ic_chevron_left, "↻" to R.drawable.ic_refresh,
         "🔍" to R.drawable.ic_search, "📋" to R.drawable.ic_content_copy, "📍" to R.drawable.ic_location_on,
         "⏹" to R.drawable.ic_stop, "▶" to R.drawable.ic_play_arrow, "⏸" to R.drawable.ic_pause,
         "🧑‍💼" to R.drawable.ic_support_agent, "🙋" to R.drawable.ic_person_raised_hand,
@@ -158,9 +158,59 @@ object Ui {
         if (top) tv.setCompoundDrawables(null, d, null, null) else tv.setCompoundDrawables(d, null, null, null)
     }
 
+    // An icon drawn inside a line of text, in place of an emoji in the middle of a label.
+    private class IconSpan(d: Drawable) : android.text.style.ImageSpan(
+        d, if (Build.VERSION.SDK_INT >= 29) android.text.style.DynamicDrawableSpan.ALIGN_CENTER else android.text.style.DynamicDrawableSpan.ALIGN_BASELINE
+    )
+
+    private val firstChars: Set<Char> by lazy { keys.map { it[0] }.toSet() }
+
+    // Emoji further inside a text (not only at the start) become the app's icons too.
+    private fun inlineIcons(tv: TextView) {
+        val text = tv.text ?: return
+        if (text.none { it in firstChars }) return
+        val spanned = text as? android.text.Spanned
+        var builder: android.text.SpannableStringBuilder? = null
+        var i = 0
+        while (i < text.length) {
+            if (text[i] in firstChars) {
+                val k = keys.firstOrNull { text.startsWith(it, i) }
+                if (k != null) {
+                    val done = spanned?.getSpans(i, i + k.length, IconSpan::class.java)?.isNotEmpty() == true
+                    if (!done) {
+                        val b = builder ?: android.text.SpannableStringBuilder(text).also { builder = it }
+                        var end = i + k.length
+                        if (end < text.length && text[end] == '\uFE0F') end++
+                        val size = (tv.textSize * 1.1f).toInt()
+                        b.setSpan(IconSpan(icon(tv.context, icons.getValue(k), tv.currentTextColor, size)), i, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                    i += k.length
+                    continue
+                }
+            }
+            i++
+        }
+        builder?.let { tv.text = it }
+    }
+
+    /** Text for places that can't show the app's icons (toasts, notifications): emoji removed. */
+    fun plain(text: CharSequence?): String {
+        val sb = StringBuilder()
+        var i = 0
+        val t = text?.toString().orEmpty()
+        while (i < t.length) {
+            val cp = t.codePointAt(i)
+            val emoji = cp in 0x1F000..0x1FAFF || cp in 0x2600..0x27BF || cp in 0x2B00..0x2BFF || cp == 0xFE0F || cp == 0x200D ||
+                cp in 0x2300..0x23FF || cp == 0x2139 || cp == 0x25B6 || cp == 0x25C0 || cp == 0x21BB
+            if (!emoji) sb.appendCodePoint(cp)
+            i += Character.charCount(cp)
+        }
+        return sb.toString().replace(Regex("[ \t]{2,}"), " ").replace(Regex("(?m)^ +"), "").trim()
+    }
+
     // Iconizes every text in a view tree.
     fun iconizeTree(v: View) {
-        if (v is TextView && v !is android.widget.EditText) iconize(v)
+        if (v is TextView && v !is android.widget.EditText) { iconize(v); inlineIcons(v) }
         if (v is ViewGroup) for (i in 0 until v.childCount) iconizeTree(v.getChildAt(i))
     }
 

@@ -11,6 +11,8 @@ jobs:
       HAS_KEY: ${{ secrets.RELEASE_KEYSTORE_B64 != '' }}
     steps:
       - uses: actions/checkout@v5
+      - name: Ground rule - icons match the app's icon style
+        run: python3 tools/check_icons.py
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

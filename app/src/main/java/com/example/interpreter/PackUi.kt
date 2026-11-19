@@ -35,12 +35,12 @@ object PackUi {
                 if (which == 1) { activity.startActivity(Intent(activity, ImportActivity::class.java)); return@setItems }
                 val app = activity.applicationContext
                 val main = Handler(Looper.getMainLooper())
-                Toast.makeText(app, plain(StudyText.t("pack_working")), Toast.LENGTH_SHORT).show()
+                Toast.makeText(app, Ui.plain(plain(StudyText.t("pack_working"))), Toast.LENGTH_SHORT).show()
                 Thread {
                     val msg = try {
                         ContentBuilder.export(app)?.let { StudyText.f("pack_exported", it) } ?: StudyText.t("sit_nothing")
                     } catch (e: Exception) { StudyText.f("failed", e.message ?: "") }
-                    main.post { Toast.makeText(app, plain(msg), Toast.LENGTH_LONG).show() }
+                    main.post { Toast.makeText(app, Ui.plain(plain(msg)), Toast.LENGTH_LONG).show() }
                 }.start()
             }
             .setNegativeButton(I18n.t("close"), null)
@@ -50,7 +50,7 @@ object PackUi {
     fun export(activity: Activity, onStatus: (String) -> Unit = {}) {
         val books = BookStore.shelf(activity)
         if (books.isEmpty()) {
-            Toast.makeText(activity, plain(StudyText.t("pack_no_books")), Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, Ui.plain(plain(StudyText.t("pack_no_books"))), Toast.LENGTH_LONG).show()
             return
         }
         val labels = books.map { "📚 " + it.title }.toTypedArray()
@@ -64,7 +64,7 @@ object PackUi {
                 val app = activity.applicationContext
                 val main = Handler(Looper.getMainLooper())
                 onStatus(StudyText.t("pack_working"))
-                Toast.makeText(app, plain(StudyText.t("pack_working")), Toast.LENGTH_SHORT).show()
+                Toast.makeText(app, Ui.plain(plain(StudyText.t("pack_working"))), Toast.LENGTH_SHORT).show()
                 Thread {
                     val msg = try {
                         val name = ContentPack.export(app, ids) { p -> main.post { onStatus(StudyText.t("pack_working") + " " + p) } }
@@ -72,7 +72,7 @@ object PackUi {
                     } catch (e: Exception) { StudyText.f("failed", e.message ?: "") }
                     main.post {
                         onStatus(msg)
-                        Toast.makeText(app, plain(msg), Toast.LENGTH_LONG).show()
+                        Toast.makeText(app, Ui.plain(plain(msg)), Toast.LENGTH_LONG).show()
                     }
                 }.start()
             }
@@ -104,7 +104,7 @@ class PackImportActivity : Activity() {
         if (resultCode != RESULT_OK || uri == null) { finish(); return }
         val app = applicationContext
         val main = Handler(Looper.getMainLooper())
-        Toast.makeText(app, PackUi.plain(StudyText.t("pack_working")), Toast.LENGTH_SHORT).show()
+        Toast.makeText(app, Ui.plain( Ui.plain(StudyText.t("pack_working"))), Toast.LENGTH_SHORT).show()
         Thread {
             val msg = try {
                 val s = app.contentResolver.openInputStream(uri)?.use { ContentPack.import(app, it) }
@@ -116,7 +116,7 @@ class PackImportActivity : Activity() {
                 }
             } catch (e: Exception) { StudyText.f("failed", e.message ?: "") }
             PackUi.changed = true
-            main.post { Toast.makeText(app, PackUi.plain(msg), Toast.LENGTH_LONG).show() }
+            main.post { Toast.makeText(app, Ui.plain( Ui.plain(msg)), Toast.LENGTH_LONG).show() }
         }.start()
         finish()
     }

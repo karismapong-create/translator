@@ -837,7 +837,7 @@ class MainActivity : Activity() {
         startActivity(Intent.createChooser(send, I18n.t("export_title")))
     }
 
-    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = Toast.makeText(this, Ui.plain(msg), Toast.LENGTH_SHORT).show()
 
     /* ---------- Language pack check ---------- */
 
