@@ -659,13 +659,13 @@ class MainActivity : Activity() {
     private fun artGestureLabel(): String {
         val t = prefs.getBoolean("art_throw", false)
         return when (I18n.lang) {
-            "ko" -> "🎨 그림 위에서 밀기: " + if (t) "그림 던져서 숨기기" else "앞뒤 감기"
-            "ja" -> "🎨 絵の上のスワイプ: " + if (t) "投げて隠す" else "早送り・巻き戻し"
-            "zh" -> "🎨 在图片上滑动：" + if (t) "甩出隐藏" else "快进/快退"
-            "fr" -> "🎨 Glisser sur une image : " + if (t) "la lancer pour masquer" else "avancer/reculer"
-            "es" -> "🎨 Deslizar sobre una imagen: " + if (t) "lanzarla para ocultar" else "avanzar/retroceder"
-            "de" -> "🎨 Wischen auf Bild: " + if (t) "wegwerfen zum Ausblenden" else "vor/zurück spulen"
-            else -> "🎨 Swipe on a picture: " + if (t) "throw it away to hide" else "skip forward/back"
+            "ko" -> "🖼 그림 위에서 밀기: " + if (t) "그림 던져서 숨기기" else "앞뒤 감기"
+            "ja" -> "🖼 絵の上のスワイプ: " + if (t) "投げて隠す" else "早送り・巻き戻し"
+            "zh" -> "🖼 在图片上滑动：" + if (t) "甩出隐藏" else "快进/快退"
+            "fr" -> "🖼 Glisser sur une image : " + if (t) "la lancer pour masquer" else "avancer/reculer"
+            "es" -> "🖼 Deslizar sobre una imagen: " + if (t) "lanzarla para ocultar" else "avanzar/retroceder"
+            "de" -> "🖼 Wischen auf Bild: " + if (t) "wegwerfen zum Ausblenden" else "vor/zurück spulen"
+            else -> "🖼 Swipe on a picture: " + if (t) "throw it away to hide" else "skip forward/back"
         }
     }
 
