@@ -97,8 +97,8 @@ class DualListener(private val ctx: Context) {
                     } else {
                         speech.add(copy)
                         quiet = if (db > thresholdDb - 6) 0 else quiet + 1
-                        // A sentence ends after 1.2 s of quiet.
-                        if (quiet >= 60 || speech.size >= maxFrames) break
+                        // A sentence ends after 0.8 s of quiet.
+                        if (quiet >= 40 || speech.size >= maxFrames) break
                     }
                 }
                 if (started && !cancelled && speech.size > 25) {
@@ -127,20 +127,75 @@ class DualListener(private val ctx: Context) {
 
     private class Pass(val text: String, val confidence: Float, val ok: Boolean, val error: Int)
 
+    // One recogniser per language, kept open: creating one and loading its model each sentence was
+    // most of the wait. Requests run one at a time (the on-device service takes one at a time).
+    private val recognizers = HashMap<String, SpeechRecognizer>()
+    private val queue = ArrayDeque<() -> Unit>()
+    private var running = false
+    private var generation = 0
+
+    private fun enqueue(job: () -> Unit) {
+        queue.addLast(job)
+        if (!running) next()
+    }
+
+    private fun next() {
+        val job = queue.removeFirstOrNull()
+        running = job != null
+        job?.invoke()
+    }
+
+    /**
+     * Gets everything ready before the first sentence: opens both recognisers, loads their models with
+     * a moment of silence, and loads language identification. Call when automatic listening starts.
+     */
+    fun warmUp(a: Lang, b: Lang) {
+        if (Build.VERSION.SDK_INT < 33) return
+        identify("hello") { }
+        val silence = ShortArray(RATE / 2)
+        for (tag in listOf(a.speechTag, b.speechTag).distinct()) {
+            if (recognizers.containsKey(tag)) continue
+            recognize(silence, tag) { }
+        }
+    }
+
+    /** Closes the recognisers (when automatic listening stops or the screen closes). */
+    fun release() {
+        cancel()
+        queue.clear()
+        for (r in recognizers.values) try { r.destroy() } catch (_: Exception) {}
+        recognizers.clear()
+        running = false
+        generation++
+    }
+
     private fun recognize(samples: ShortArray, tag: String, done: (Pass) -> Unit) {
         if (Build.VERSION.SDK_INT < 33) { done(Pass("", -1f, false, -1)); return }
-        val r = try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) } catch (_: Exception) { null }
+        enqueue {
+            val gen = generation
+            recognizeNow(samples, tag) { p -> done(p); if (gen == generation) next() }
+        }
+    }
+
+    private fun recognizeNow(samples: ShortArray, tag: String, done: (Pass) -> Unit) {
+        val r = recognizers[tag] ?: try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx).also { recognizers[tag] = it } } catch (_: Exception) { null }
         if (r == null) { done(Pass("", -1f, false, -1)); return }
         val pipe = ParcelFileDescriptor.createPipe()
         var finished = false
         fun finish(p: Pass) {
             if (finished) return
             finished = true
-            try { r.destroy() } catch (_: Exception) {}
+            // A broken or busy recogniser is opened fresh next time.
+            if (p.error == SpeechRecognizer.ERROR_CLIENT || p.error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+                p.error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED || p.error < 0) {
+                try { r.cancel(); r.destroy() } catch (_: Exception) {}
+                recognizers.remove(tag)
+            }
             try { pipe[0].close() } catch (_: Exception) {}
             done(p)
         }
-        val timeout = Runnable { finish(Pass("", -1f, false, SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) }
+        // No answer at all (-2): the recogniser is opened fresh next time.
+        val timeout = Runnable { finish(Pass("", -1f, false, -2)) }
         main.postDelayed(timeout, 12000)
         r.setRecognitionListener(object : RecognitionListener {
             override fun onResults(b: Bundle?) {
