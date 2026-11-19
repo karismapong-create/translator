@@ -175,6 +175,7 @@ class QuizView(
     }
 
     private fun finish() {
+        StudyLog.quiz(context, correct, order.size, wrong.map { it.front })
         progress.text = VocabText.t("q_result")
         prompt.text = "$correct / ${order.size}"
         speakButton.visibility = View.GONE

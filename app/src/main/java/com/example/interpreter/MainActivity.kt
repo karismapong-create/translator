@@ -150,6 +150,8 @@ class MainActivity : Activity() {
         Providers.migrate(prefs)
         OnDevice.refresh()
         Pro.init(this)
+        StudyLog.app = applicationContext
+        ReportUi.schedule(this)
         SpeechOut.loadRate(this)
         // Content packages shipped with this version (books with pictures, dialogues).
         Thread { try { ContentPack.installBundled(applicationContext) } catch (_: Exception) {} }.start()
@@ -404,6 +406,7 @@ class MainActivity : Activity() {
     }
 
     private fun showTab(i: Int) {
+        if (studySince > 0 || i == 1 || i == 2) { studyTabsTick(); if (!(i == 1 || i == 2)) studySince = 0L else studySince = System.currentTimeMillis() }
         currentTab = i
         pages.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
         tabViews.forEachIndexed { k, t ->
@@ -620,6 +623,7 @@ class MainActivity : Activity() {
             StudyText.t("sit_title"),
             "⏩ " + speedLabel(),
             "✏ " + fixesLabel(),
+            ReportText.t("menu"),
             I18n.t("m_privacy"),
             I18n.t("m_licenses"),
             ProText.t("menu")
@@ -652,8 +656,9 @@ class MainActivity : Activity() {
                         toast(Ui.plain(speedLabel()))
                     }
                     12 -> showFixes()
-                    13 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
-                    14 -> showLicenses()
+                    13 -> ReportUi.show(this)
+                    14 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
+                    15 -> showLicenses()
                     else -> Pro.showPaywall(this)
                 }
             }
@@ -1002,10 +1007,34 @@ class MainActivity : Activity() {
         else status(I18n.t("mic_perm"))
     }
 
+    // Study time for the daily report: time on the conversation and vocabulary tabs.
+    private var studySince = 0L
+
+    private fun studyTabsTick() {
+        if (studySince > 0) StudyLog.studied(this, (System.currentTimeMillis() - studySince) / 1000)
+        studySince = if (currentTab == 1 || currentTab == 2) System.currentTimeMillis() else 0L
+    }
+
     override fun onResume() {
         super.onResume()
         Pro.refresh()
         if (::vocabPage.isInitialized && currentTab == 2) vocabPage.refresh()
+        studySince = if (currentTab == 1 || currentTab == 2) System.currentTimeMillis() else 0L
+        if (intent?.getBooleanExtra("report", false) == true) {
+            intent.removeExtra("report")
+            ReportUi.show(this)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
+    override fun onPause() {
+        studyTabsTick()
+        studySince = 0L
+        super.onPause()
     }
 
     override fun onStop() {

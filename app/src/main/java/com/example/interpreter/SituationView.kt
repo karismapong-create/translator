@@ -729,6 +729,7 @@ class SituationView(
 
     // Called when the voice really begins a line, so highlight, scroll and sound stay together.
     private fun lineStarted(id: String?) {
+        if (id?.startsWith("line_") == true) StudyLog.listened(activity)
         if (playing && id == curId()) highlight(playIndex)
     }
 
