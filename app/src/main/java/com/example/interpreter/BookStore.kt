@@ -196,6 +196,7 @@ object BookStore {
         val list = shelf(ctx).filter { it.id != id }
         shelfFile(ctx).writeText(JSONArray().apply { list.forEach { put(it.toJson()) } }.toString())
         File(dir(ctx), "lessons").listFiles()?.filter { it.name.startsWith("${id}_") }?.forEach { it.delete() }
+        File(dir(ctx), "art").listFiles()?.filter { it.name.startsWith("${id}_") }?.forEach { it.delete() }
     }
 
     private val headingRe = Regex(
@@ -300,6 +301,10 @@ object BookStore {
 
     fun lesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int): JSONObject? =
         lessonFile(ctx, id, sec, lang, level).takeIf { it.exists() }?.let { try { JSONObject(it.readText()) } catch (_: Exception) { null } }
+
+    /** Picture drawn for one sentence of a part's lesson. */
+    fun artFile(ctx: Context, id: Int, sec: Int, lang: String, level: Int, sentence: Int) =
+        File(File(dir(ctx), "art").apply { mkdirs() }, "${id}_${sec}_${lang}_${level}_$sentence.jpg")
 
     fun saveLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, o: JSONObject) =
         lessonFile(ctx, id, sec, lang, level).writeText(o.toString())
