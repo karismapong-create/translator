@@ -66,35 +66,7 @@ object StudyText {
         "books_retrying" to m("서버가 바빠요. 잠시 뒤 자동으로 다시 받아요. 앱을 닫아도 돼요.", "サーバーが混んでいます。少し後に自動で再試行します。アプリを閉じても大丈夫です。", "The server is busy. It will retry by itself shortly; you can close the app.", "Serveur occupé. Nouvel essai automatique bientôt ; vous pouvez fermer l'app.", "Servidor ocupado. Reintentará solo en breve; puedes cerrar la app.", "Server ausgelastet. Neuer Versuch folgt automatisch; App darf geschlossen werden.", "服务器繁忙，稍后会自动重试，可以关闭应用。"),
         "books_making" to m("%s 수준으로 이 부분을 만드는 중… 한 번 만들면 저장돼서 다음부터는 바로 열려요.", "%sレベルでこのパートを作成中… 一度作ると保存され、次からすぐ開きます。", "Making this part at %s level… It's saved, so next time it opens at once.", "Création de cette partie (niveau %s)… Enregistrée pour la prochaine fois.", "Creando esta parte (nivel %s)… Se guarda para abrirla al instante.", "Dieser Teil wird erstellt (Stufe %s)… Er wird gespeichert.", "正在按%s水平制作本部分…制作后会保存，下次直接打开。"),
         "art_need_key" to m("그림을 그리려면 설정 → AI 엔진에서 Google Gemini 또는 OpenAI 키를 넣어 주세요. (두 곳 모두 그림 생성은 유료 결제가 켜진 키가 필요해요)", "絵を描くには、設定→AIエンジンでGoogle GeminiかOpenAIのキーを入れてください（どちらも画像生成は有料設定のキーが必要です）。", "To draw pictures, add a Google Gemini or OpenAI key in Settings → AI engine (both need billing turned on for images).", "Pour dessiner, ajoutez une clé Google Gemini ou OpenAI (facturation activée requise pour les images).", "Para dibujar, añade una clave de Google Gemini u OpenAI (las imágenes requieren facturación activada).", "Zum Zeichnen einen Google-Gemini- oder OpenAI-Schlüssel eintragen (Bilder brauchen aktivierte Abrechnung).", "要绘图，请在设置→AI 引擎中填写 Google Gemini 或 OpenAI 密钥（两者生成图片都需开通付费）。"),
-        "art_info" to m("🎨 문장마다 그 장면을 그림으로 그려요.
-
-• 내 Gemini(또는 OpenAI) 키로 그리고, 그림 한 장에 약 50~100원 정도 요금이 나와요. 무료 키로는 그려지지 않을 수 있어요.
-• 한 번 그린 그림은 폰에 저장돼서 다시 돈이 들지 않아요.
-• 그림을 길게 누르면 다시 그릴 수 있어요.", "🎨 文ごとにその場面を絵にします。
-
-• 自分のGemini（またはOpenAI）キーで描き、1枚あたり数円〜十数円かかります。無料キーでは描けない場合があります。
-• 一度描いた絵はスマホに保存され、再び料金はかかりません。
-• 絵を長押しで描き直せます。", "🎨 Draws the scene of a sentence.
-
-• Uses your own Gemini (or OpenAI) key; each picture costs a few cents. Free keys may not be able to draw.
-• Pictures are saved on the phone, so each is paid once.
-• Long-press a picture to draw it again.", "🎨 Dessine la scène d'une phrase.
-
-• Utilise votre clé Gemini (ou OpenAI) ; quelques centimes par image. Les clés gratuites peuvent ne pas suffire.
-• Les images sont enregistrées : payées une seule fois.
-• Appui long pour redessiner.", "🎨 Dibuja la escena de una frase.
-
-• Usa tu clave de Gemini (u OpenAI); unos céntimos por imagen. Las claves gratuitas pueden no servir.
-• Las imágenes se guardan: se pagan una vez.
-• Mantén pulsada una imagen para redibujarla.", "🎨 Zeichnet die Szene eines Satzes.
-
-• Nutzt deinen Gemini- (oder OpenAI-)Schlüssel; wenige Cent pro Bild. Kostenlose Schlüssel reichen evtl. nicht.
-• Bilder werden gespeichert und nur einmal bezahlt.
-• Bild lange drücken zum Neuzeichnen.", "🎨 为每句话画出场景。
-
-• 使用你自己的 Gemini（或 OpenAI）密钥，每张约几美分。免费密钥可能无法生成。
-• 画好的图保存在手机上，只付一次费。
-• 长按图片可重画。"),
+        "art_info" to m("🎨 문장마다 그 장면을 그림으로 그려요.\n\n• 내 Gemini(또는 OpenAI) 키로 그리고, 그림 한 장에 약 50~100원 정도 요금이 나와요. 무료 키로는 그려지지 않을 수 있어요.\n• 한 번 그린 그림은 폰에 저장돼서 다시 돈이 들지 않아요.\n• 그림을 길게 누르면 다시 그릴 수 있어요.", "🎨 文ごとにその場面を絵にします。\n\n• 自分のGemini（またはOpenAI）キーで描き、1枚あたり数円〜十数円かかります。無料キーでは描けない場合があります。\n• 一度描いた絵はスマホに保存され、再び料金はかかりません。\n• 絵を長押しで描き直せます。", "🎨 Draws the scene of a sentence.\n\n• Uses your own Gemini (or OpenAI) key; each picture costs a few cents. Free keys may not be able to draw.\n• Pictures are saved on the phone, so each is paid once.\n• Long-press a picture to draw it again.", "🎨 Dessine la scène d'une phrase.\n\n• Utilise votre clé Gemini (ou OpenAI) ; quelques centimes par image. Les clés gratuites peuvent ne pas suffire.\n• Les images sont enregistrées : payées une seule fois.\n• Appui long pour redessiner.", "🎨 Dibuja la escena de una frase.\n\n• Usa tu clave de Gemini (u OpenAI); unos céntimos por imagen. Las claves gratuitas pueden no servir.\n• Las imágenes se guardan: se pagan una vez.\n• Mantén pulsada una imagen para redibujarla.", "🎨 Zeichnet die Szene eines Satzes.\n\n• Nutzt deinen Gemini- (oder OpenAI-)Schlüssel; wenige Cent pro Bild. Kostenlose Schlüssel reichen evtl. nicht.\n• Bilder werden gespeichert und nur einmal bezahlt.\n• Bild lange drücken zum Neuzeichnen.", "🎨 为每句话画出场景。\n\n• 使用你自己的 Gemini（或 OpenAI）密钥，每张约几美分。免费密钥可能无法生成。\n• 画好的图保存在手机上，只付一次费。\n• 长按图片可重画。"),
         "art_go" to m("그려 주세요", "描いて", "Draw it", "Dessiner", "Dibujar", "Zeichnen", "开始绘制"),
         "art_drawing" to m("🎨 그림을 그리는 중… (10~30초)", "🎨 描いています…（10〜30秒）", "🎨 Drawing… (10–30 s)", "🎨 Dessin en cours… (10–30 s)", "🎨 Dibujando… (10–30 s)", "🎨 Wird gezeichnet… (10–30 s)", "🎨 正在绘制…（10～30秒）"),
         "art_failed" to m("그림을 그리지 못했어요: %s", "描けませんでした: %s", "Couldn't draw: %s", "Dessin impossible : %s", "No se pudo dibujar: %s", "Zeichnen fehlgeschlagen: %s", "绘制失败：%s"),
