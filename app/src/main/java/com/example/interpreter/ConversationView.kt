@@ -454,12 +454,16 @@ class ConversationView(
     private fun handleReply(raw: String) {
         turns.add("assistant" to raw)
         val o = Tutor.json(raw)
-        val reply = o?.optString("reply").orEmpty().ifEmpty { raw }
-        val meaning = o?.optString("meaning").orEmpty()
-        val correction = o?.optString("correction").orEmpty()
+        // Each part from the JSON, or read straight from the text when the JSON is broken,
+        // so a raw "{ "reply": ... }" never shows in the chat.
+        fun part(key: String) = o?.optString(key)?.takeIf { it.isNotEmpty() } ?: Tutor.field(raw, key).orEmpty()
+        val looksJson = raw.contains("\"reply\"")
+        val reply = part("reply").ifEmpty { if (looksJson) TalkText.t("busy") else raw.trim() }
+        val meaning = part("meaning")
+        val correction = part("correction")
         if (correction.isNotEmpty()) {
             lastUserBox?.let {
-                addCorrection(it, correction, o?.optString("correction_meaning").orEmpty(), o?.optString("explain").orEmpty())
+                addCorrection(it, correction, part("correction_meaning"), part("explain"))
             }
         }
         addAi(reply, meaning)
