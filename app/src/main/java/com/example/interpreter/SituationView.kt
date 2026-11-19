@@ -626,8 +626,11 @@ class SituationView(
     private fun highlight(i: Int) {
         cards.forEachIndexed { k, c -> c.background = bubble(if (k == i) highlightColor else baseColor(lines[k]), lines[k]) }
         if (i in cards.indices) {
-            val top = cards[i].top
-            dialogueScroll.post { dialogueScroll.smoothScrollTo(0, (top - dp(60)).coerceAtLeast(0)) }
+            // The line being read stays in the middle of the screen.
+            val card = cards[i]
+            dialogueScroll.post {
+                dialogueScroll.smoothScrollTo(0, (card.top + card.height / 2 - dialogueScroll.height / 2).coerceAtLeast(0))
+            }
         }
     }
 
