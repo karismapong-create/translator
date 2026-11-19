@@ -712,6 +712,7 @@ class LiveTalkActivity : Activity() {
 
     private fun stopAuto() {
         auto = false
+        dual.cancel()
         me.live.removeCallbacks(restartAuto)
         me.live.removeCallbacks(speechFallback)
         recognizer?.destroy()
@@ -753,8 +754,37 @@ class LiveTalkActivity : Activity() {
 
     private fun autoStatus() = LiveText.t("auto_listening") + "\n" + LiveText.f("auto_langs", home.native, partner.native)
 
+    // Hears each sentence in both languages and picks the right one (Android 13+ on-device speech).
+    private val dual by lazy { DualListener(this) }
+
+    private fun startDual() {
+        if (!auto || speaking || dual.isCapturing) return
+        me.live.text = autoStatus()
+        // Sensitivity 0..10 -> loudness that counts as speech, -28 dBFS (near only) to -50 (far too).
+        val db = -28f - level * 2.2f
+        dual.capture(db, onSpeech = { if (auto) me.live.text = LiveText.t("auto_hearing") }) { samples ->
+            if (!auto) return@capture
+            if (samples == null) { scheduleAuto(100); return@capture }
+            me.live.text = LiveText.t("auto_deciding")
+            // The last speaker is tried first: people often say several sentences in a row.
+            val first = if (expect == Side.ME) home else partner
+            val second = if (first == home) partner else home
+            dual.decide(samples, first, second) { h ->
+                if (!auto) return@decide
+                me.live.text = autoStatus()
+                if (h == null) { scheduleAuto(100); return@decide }
+                val side = if (h.lang == home.code) Side.ME else Side.THEM
+                expect = side
+                heard(side, h.text)
+                me.live.removeCallbacks(speechFallback)
+                me.live.postDelayed(speechFallback, 8000)
+            }
+        }
+    }
+
     private fun startAuto() {
         if (!auto || speaking || listening != null) return
+        if (DualListener.supported(this)) { startDual(); return }
 
         recognizer?.destroy()
         maxRms = -100f
@@ -782,8 +812,7 @@ class LiveTalkActivity : Activity() {
                     return
                 }
                 val side = sideOf(text, detected)
-                // The other person usually answers next.
-                expect = if (side == Side.ME) Side.THEM else Side.ME
+                expect = side
                 heard(side, text)
                 me.live.removeCallbacks(speechFallback)
                 me.live.postDelayed(speechFallback, 8000)
@@ -837,6 +866,7 @@ class LiveTalkActivity : Activity() {
 
     private fun speechStarted() {
         speaking = true
+        dual.cancel()
         me.live.removeCallbacks(speechFallback)
         me.live.removeCallbacks(restartAuto)
         if (auto) {
