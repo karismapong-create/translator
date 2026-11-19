@@ -188,7 +188,7 @@ class ImportActivity : Activity() {
             val msg = try {
                 val n = ContentBuilder.importZip(app, uri)
                 if (n > 0) "📥 파일 ${n}개를 가져와 합쳤어요."
-                else "가져올 콘텐츠를 찾지 못했어요. '내보내기'로 만든 situations.zip인지 확인하세요."
+                else "가져올 회화가 없어요. 상황별 회화 DB(situations.zip)인지 확인하세요. 책 DB 파일이라면 '책 DB 가져오기'를 쓰세요."
             } catch (e: Exception) {
                 "가져오지 못했어요: ${e.message}"
             }

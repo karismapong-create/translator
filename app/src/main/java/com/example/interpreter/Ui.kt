@@ -37,7 +37,7 @@ object Ui {
         // actions
         "🔊" to R.drawable.ic_volume_up, "☆" to R.drawable.ic_star, "★" to R.drawable.ic_star_fill,
         "💡" to R.drawable.ic_lightbulb, "⚠" to R.drawable.ic_warning, "🎙" to R.drawable.ic_mic,
-        "🎤" to R.drawable.ic_mic, "⬇" to R.drawable.ic_download, "📥" to R.drawable.ic_download,
+        "🎤" to R.drawable.ic_mic, "⬇" to R.drawable.ic_download, "📥" to R.drawable.ic_download, "📤" to R.drawable.ic_upload,
         "🔍" to R.drawable.ic_search, "📋" to R.drawable.ic_content_copy, "📍" to R.drawable.ic_location_on,
         "⏹" to R.drawable.ic_stop, "▶" to R.drawable.ic_play_arrow, "⏸" to R.drawable.ic_pause,
         "🧑‍💼" to R.drawable.ic_support_agent, "🙋" to R.drawable.ic_person_raised_hand,
