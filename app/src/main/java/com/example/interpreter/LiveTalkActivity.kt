@@ -729,12 +729,13 @@ class LiveTalkActivity : Activity() {
                 .setPositiveButton(LiveText.t("close"), null)
                 .show().also { Ui.watch(it) }
         }
+        if (DualListener.supported(this)) dual.warmUp(home, partner)
         startAuto()
     }
 
     private fun stopAuto() {
         auto = false
-        dual.cancel()
+        dual.release()
         me.live.removeCallbacks(restartAuto)
         me.live.removeCallbacks(speechFallback)
         recognizer?.destroy()
@@ -1238,6 +1239,7 @@ class LiveTalkActivity : Activity() {
     }
 
     override fun onDestroy() {
+        if (auto) dual.release()
         link?.stop()
         AudioRoute.stop()
         recognizer?.destroy()
