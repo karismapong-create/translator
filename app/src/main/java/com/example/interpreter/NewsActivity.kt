@@ -1857,9 +1857,14 @@ class NewsActivity : Activity() {
                 if (bmp != null) putPicture(i, holder, bmp)
                 else {
                     holder.removeAllViews()
-                    holder.addView(note(StudyText.f("art_failed", (result as? Exception)?.message ?: "")).apply {
-                        setOnClickListener { holder.removeAllViews() }
-                    })
+                    // The failure note shows for 5 seconds, then fades away (a tap removes it at once).
+                    val msg = note(StudyText.f("art_failed", (result as? Exception)?.message ?: "")).apply {
+                        setOnClickListener { holder.removeView(this) }
+                    }
+                    holder.addView(msg)
+                    msg.postDelayed({
+                        msg.animate().alpha(0f).setDuration(400).withEndAction { holder.removeView(msg) }.start()
+                    }, 5000)
                 }
             }
         }
