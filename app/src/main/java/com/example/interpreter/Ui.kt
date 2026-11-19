@@ -37,7 +37,7 @@ object Ui {
         // actions
         "🔊" to R.drawable.ic_volume_up, "☆" to R.drawable.ic_star, "★" to R.drawable.ic_star_fill,
         "💡" to R.drawable.ic_lightbulb, "⚠" to R.drawable.ic_warning, "🎙" to R.drawable.ic_mic,
-        "🎤" to R.drawable.ic_mic, "⬇" to R.drawable.ic_download, "📥" to R.drawable.ic_download, "📤" to R.drawable.ic_upload, "ℹ" to R.drawable.ic_info, "✘" to R.drawable.ic_close, "◀" to R.drawable.ic_chevron_left, "↻" to R.drawable.ic_refresh,
+        "🎤" to R.drawable.ic_mic, "⬇" to R.drawable.ic_download, "📥" to R.drawable.ic_download, "📤" to R.drawable.ic_upload, "ℹ" to R.drawable.ic_info, "✘" to R.drawable.ic_close, "◀" to R.drawable.ic_chevron_left, "↻" to R.drawable.ic_refresh, "🗑" to R.drawable.ic_delete, "⏩" to R.drawable.ic_speed,
         "🔍" to R.drawable.ic_search, "📋" to R.drawable.ic_content_copy, "📍" to R.drawable.ic_location_on,
         "⏹" to R.drawable.ic_stop, "▶" to R.drawable.ic_play_arrow, "⏸" to R.drawable.ic_pause,
         "🧑‍💼" to R.drawable.ic_support_agent, "🙋" to R.drawable.ic_person_raised_hand,
@@ -191,6 +191,25 @@ object Ui {
             i++
         }
         builder?.let { tv.text = it }
+    }
+
+    /** "⏩ 1.0×": playback speed; each tap goes to the next speed, for every voice in the app. */
+    fun speedChip(ctx: Context, onChanged: () -> Unit): TextView = TextView(ctx).apply {
+        fun label() = "⏩ " + String.format(java.util.Locale.US, "%.1f×", SpeechOut.rate)
+        SpeechOut.loadRate(ctx)
+        text = label()
+        textSize = 15f
+        setTextColor(PRIMARY)
+        gravity = android.view.Gravity.CENTER
+        setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
+        background = rounded(PRIMARY_SOFT, 18, ctx)
+        setOnClickListener {
+            val rates = SpeechOut.RATES
+            val i = rates.indexOfFirst { Math.abs(it - SpeechOut.rate) < 0.01f }
+            SpeechOut.setRate(ctx, rates[(i + 1) % rates.size])
+            text = label()
+            onChanged()
+        }
     }
 
     /** Text for places that can't show the app's icons (toasts, notifications): emoji removed. */

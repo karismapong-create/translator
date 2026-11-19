@@ -264,7 +264,7 @@ class NewsActivity : Activity() {
                 background = Ui.pressable(context)
                 setOnClickListener { openLesson(e) }
                 addView(TextView(context).apply {
-                    text = (if (item.read) "✔ " else "") + (if (date.isEmpty()) label(e.date) + " · " else "") + StudyText.category(item.category) +
+                    text = (if (newsRead(e.date, e.index)) "✔ " else "") + (if (date.isEmpty()) label(e.date) + " · " else "") + StudyText.category(item.category) +
                         if (item.topic.isNotBlank()) " · ${item.topic}" else ""
                     textSize = 12f
                     setTextColor(Ui.PRIMARY)
@@ -315,8 +315,10 @@ class NewsActivity : Activity() {
         val lv = level
         NewsStore.markRead(this, d, index)
         item.read = true
+        markNewsRead(d, index, l.code, lv)
         lessonToken++
         art = null
+        lessonSaver = { o -> NewsStore.saveLesson(this, d, index, l.code, lv, o) }
         val cached = NewsStore.lesson(this, d, index, l.code, lv)
         if (cached != null) {
             renderLesson(cached, l, newsHeader(item)) { newsFooter() }
@@ -337,6 +339,8 @@ class NewsActivity : Activity() {
             "Rewrite the news item as a short news article in ${l.english} at $spec. Use only facts in the item; add none. " +
             "Then list the key words and idioms from your article (an idiom or set phrase counts as one item). For words in Japanese or Chinese give the reading in kana or " +
             "pinyin, otherwise leave reading empty. Reply with JSON only, no code fences: " +
+"Every \"meaning\" is a faithful, natural translation in standard adult ${home.english}, whatever the level " +
+            "(never simplified for the level); translate idioms and phrasal verbs by their sense, not word by word. " +
             "{\"title\":\"${l.english} headline\",\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
             "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from the article\"}],"+
             "\"idioms\":[{\"text\":\"idiom, set phrase or phrasal verb exactly as written in one of your sentences\",\"meaning\":\"${home.english} meaning\",\"reading\":\"...\"}]}"
@@ -387,6 +391,20 @@ class NewsActivity : Activity() {
         tts?.let { SpeechOut.speak(it, text, l.speechTag, true, "news") }
     }
 
+    // Read marks belong to a language and level: an article read at one level is still new at another.
+    private fun newsReadKey(code: String, lv: Int) = "news_read_${code}_$lv"
+
+    private fun newsRead(date: String, index: Int) =
+        prefs.getStringSet(newsReadKey(lang.code, level), emptySet())?.contains("$date#$index") == true
+
+    private fun markNewsRead(date: String, index: Int, code: String, lv: Int) {
+        val set = HashSet(prefs.getStringSet(newsReadKey(code, lv), emptySet()) ?: emptySet())
+        set.add("$date#$index")
+        // Keeps the list from growing without end (two months of news).
+        if (set.size > 3000) set.retainAll(set.sorted().takeLast(2500).toSet())
+        prefs.edit().putStringSet(newsReadKey(code, lv), set).apply()
+    }
+
     private fun newsHeader(item: NewsStore.Item) = StudyText.category(item.category) + " · " + label(lessonDate)
 
     private fun newsFooter() {
@@ -399,8 +417,43 @@ class NewsActivity : Activity() {
         })
     }
 
+    // The lesson on screen and how to keep a corrected meaning in it.
+    private var shownLesson: JSONObject? = null
+    private var lessonSaver: ((JSONObject) -> Unit)? = null
+
+    // Long-press on a meaning: correct it here, and optionally fix the same mistake everywhere.
+    private fun editMeaning(i: Int, view: TextView) {
+        val o = shownLesson ?: return
+        val s = o.optJSONArray("sentences")?.optJSONObject(i) ?: return
+        val full = android.widget.EditText(this).apply { setText(view.text) }
+        val wrong = android.widget.EditText(this).apply { hint = StudyText.t("fix_wrong") }
+        val right = android.widget.EditText(this).apply { hint = StudyText.t("fix_right") }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), 0)
+            addView(full)
+            addView(note(StudyText.t("fix_everywhere")))
+            addView(wrong); addView(right)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(StudyText.t("fix_title"))
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton(StudyText.t("fix_save")) { _, _ ->
+                val w = wrong.text.toString().trim()
+                val r = right.text.toString().trim()
+                if (w.isNotEmpty()) Corrections.add(this, home.code, w, r)
+                val text = Corrections.apply(this, home.code, full.text.toString().trim())
+                s.put("meaning", text)
+                view.text = text
+                lessonSaver?.invoke(o)
+            }
+            .setNegativeButton(I18n.t("close"), null)
+            .show().also { Ui.watch(it) }
+    }
+
     // The reader: sentences with every reading tool, then key words, then the footer.
     private fun renderLesson(o: JSONObject, l: Lang, header: String, footer: () -> Unit) {
+        shownLesson = o
         lessonBox.addView(TextView(this).apply {
             text = header
             textSize = 12f
@@ -439,8 +492,14 @@ class NewsActivity : Activity() {
             }
             Ui.primary(this)
         }
-        lessonBox.addView(playButton,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)).apply { bottomMargin = dp(6) })
+        lessonBox.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(playButton, LinearLayout.LayoutParams(0, dp(56), 1f))
+            // Speed beside play; a change applies at once from the word being read.
+            addView(Ui.speedChip(context) { if (playing) { pausePlay(); resumePlay() } },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { leftMargin = dp(8) })
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) })
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -493,10 +552,11 @@ class NewsActivity : Activity() {
             Pronunciation.attach(this, body, tv, text, l.code, home.code)
             s.optString("meaning").takeIf { it.isNotBlank() }?.let {
                 body.addView(TextView(this).apply {
-                    this.text = it
+                    this.text = Corrections.apply(context, home.code, it)
                     textSize = 14f
                     setTextColor(Ui.PRIMARY)
                     setPadding(dp(6), 0, dp(6), dp(4))
+                    setOnLongClickListener { editMeaning(index, this); true }
                 })
             }
             // Room for the scene's picture; one drawn before shows again at once.
@@ -1196,7 +1256,7 @@ class NewsActivity : Activity() {
             list.addView(heading(StudyText.t("books_mine")))
             for (b in mine) {
                 val total = BookStore.sections(this, b.id).size
-                val done = BookStore.read(this, b.id).size
+                val done = BookStore.read(this, b.id, lang.code, level).size
                 addRow(bookRow(b, "${b.author} · ${StudyText.f("books_progress", done, total)}") { openBook(b) })
             }
         }
@@ -1252,7 +1312,7 @@ class NewsActivity : Activity() {
         list.removeAllViews()
         status.text = ""
         val secs = BookStore.sections(this, b.id)
-        val read = BookStore.read(this, b.id)
+        val read = BookStore.read(this, b.id, lang.code, level)
         list.addView(TextView(this).apply {
             text = b.title
             textSize = 20f
@@ -1265,7 +1325,7 @@ class NewsActivity : Activity() {
             list.addView(note(StudyText.t("books_empty")))
             return
         }
-        val next = if (read.isEmpty()) 0 else (secs.indices.firstOrNull { it > BookStore.last(this, b.id) && it !in read }
+        val next = if (read.isEmpty()) 0 else (secs.indices.firstOrNull { it > BookStore.last(this, b.id, lang.code, level) && it !in read }
             ?: secs.indices.firstOrNull { it !in read } ?: 0)
         list.addView(Button(this).apply {
             text = StudyText.f(if (read.isEmpty()) "books_start" else "books_continue", next + 1)
@@ -1309,11 +1369,33 @@ class NewsActivity : Activity() {
         list.addView(del)
     }
 
+    private fun confirmDeletePart(b: BookStore.Book, s: BookStore.Section) {
+        val withArt = android.widget.CheckBox(this).apply {
+            text = StudyText.t("books_delete_art")
+            isChecked = true
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(StudyText.t("books_delete_part"))
+            .setMessage(StudyText.t("books_delete_msg"))
+            .setView(LinearLayout(this).apply { setPadding(dp(20), 0, dp(20), 0); addView(withArt) })
+            .setPositiveButton(StudyText.t("books_delete_go")) { _, _ ->
+                BookStore.deleteLesson(this, b.id, s.index, lang.code, level, withArt.isChecked)
+                openSection(b, s.index)
+            }
+            .setNegativeButton(I18n.t("close"), null)
+            .show().also { Ui.watch(it) }
+    }
+
     private fun bookHeader(b: BookStore.Book, s: BookStore.Section) =
         "📚 ${b.title} · ${s.chapter.ifBlank { "" }} · " + StudyText.f("books_part", s.index + 1)
 
     private fun bookFooter(b: BookStore.Book, s: BookStore.Section) {
         val secs = BookStore.sections(this, b.id)
+        // A made part can be removed, to make it again (for example with another model).
+        if (BookStore.lesson(this, b.id, s.index, lang.code, level) != null) lessonBox.addView(Button(this).apply {
+            text = StudyText.t("books_delete_part")
+            setOnClickListener { confirmDeletePart(b, s) }
+        })
         // Shown with the phone's translation: the AI lesson can be tried again.
         if (BookStore.lesson(this, b.id, s.index, lang.code, level) == null && RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) {
             lessonBox.addView(Button(this).apply {
@@ -1352,6 +1434,8 @@ class NewsActivity : Activity() {
             "The text is part of the public-domain book \"${b.title}\" by ${b.author}. Write it in ${l.english} as a $spec. " +
             "Keep the story's events and add nothing. Then list $keyWords key words or idioms from your text (an idiom or set phrase counts as one item). " +
             "For Japanese or Chinese words give the reading in kana or pinyin, otherwise leave reading empty. " +
+"Every \"meaning\" is a faithful, natural translation in standard adult ${home.english}, whatever the level " +
+            "(never simplified for the level); translate idioms and phrasal verbs by their sense, not word by word. " +
             "Reply with JSON only, no code fences: {\"title\":\"short ${l.english} title for this part\"," +
             "\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
             "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from your text\"}],"+
@@ -1406,11 +1490,12 @@ class NewsActivity : Activity() {
         lessonPage.scrollTo(0, 0)
         registerBack()
         lessonBox.removeAllViews()
-        BookStore.markRead(this, b.id, index)
+        BookStore.markRead(this, b.id, index, lang.code, level)
         val token = ++lessonToken
         val l = lang
         val lv = level
         art = Art(b, s, l.code, lv)
+        lessonSaver = { o -> BookStore.saveLesson(this, b.id, index, l.code, lv, o) }
         val cached = BookStore.lesson(this, b.id, index, l.code, lv)
         if (cached != null) {
             renderLesson(cached, l, bookHeader(b, s)) { bookFooter(b, s) }

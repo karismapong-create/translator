@@ -208,7 +208,8 @@ class ConversationView(
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(autoSpeak, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(micButton, LayoutParams(dp(180), dp(60)))
+            addView(Ui.speedChip(activity) {}, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
+            addView(micButton, LayoutParams(dp(150), dp(60)))
         }
         chatPanel = LinearLayout(activity).apply {
             orientation = VERTICAL

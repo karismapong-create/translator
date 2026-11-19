@@ -476,7 +476,7 @@ class LiveTalkActivity : Activity() {
         val engine = RemoteTranslate.engine(prefs)
         val p = Glossary.prepare(text, sl.code, tl.code, terms, home.code)
         fast(p.input, sl, tl) { raw ->
-            val quick = p.restore(raw)
+            val quick = if (tl.code == home.code) Corrections.apply(this, home.code, p.restore(raw)) else p.restore(raw)
             bubble.set(quick, if (engine != null) LiveText.t("refining") else "")
             record(quick)
             if (engine == null) {
@@ -491,7 +491,7 @@ class LiveTalkActivity : Activity() {
                     RemoteTranslate.translate(prefs, engine, p.input, sl, tl, context, sceneText)
                 } catch (e: Exception) { "" }
                 runOnUiThread {
-                    val best = if (refined.isNotBlank()) p.restore(refined) else quick
+                    val best = if (refined.isNotBlank()) p.restore(refined).let { if (tl.code == home.code) Corrections.apply(this, home.code, it) else it } else quick
                     bubble.set(best, if (refined.isNotBlank()) "" else LiveText.t("fast"))
                     record(best)
                     speakFor(listener, best, tl)

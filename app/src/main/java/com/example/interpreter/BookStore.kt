@@ -291,20 +291,31 @@ object BookStore {
         JSONObject(progressFile(ctx).takeIf { it.exists() }?.readText() ?: "{}")
     } catch (_: Exception) { JSONObject() }
 
-    fun read(ctx: Context, id: Int): Set<Int> {
-        val a = progress(ctx).optJSONObject("$id")?.optJSONArray("read") ?: return emptySet()
-        return (0 until a.length()).map { a.optInt(it) }.toSet()
+    // Progress is kept per language and level ("read_en_1"); an older shared list counts only where a
+    // lesson for that language and level exists.
+    fun read(ctx: Context, id: Int, lang: String, level: Int): Set<Int> {
+        val b = progress(ctx).optJSONObject("$id") ?: return emptySet()
+        b.optJSONArray("read_${lang}_$level")?.let { a -> return (0 until a.length()).map { a.optInt(it) }.toSet() }
+        val old = b.optJSONArray("read") ?: return emptySet()
+        return (0 until old.length()).map { old.optInt(it) }.filter { lessonFile(ctx, id, it, lang, level).exists() }.toSet()
     }
 
-    fun last(ctx: Context, id: Int): Int = progress(ctx).optJSONObject("$id")?.optInt("last", 0) ?: 0
+    fun last(ctx: Context, id: Int, lang: String, level: Int): Int =
+        progress(ctx).optJSONObject("$id")?.optInt("last_${lang}_$level", -1) ?: -1
 
-    fun markRead(ctx: Context, id: Int, sec: Int) {
+    fun markRead(ctx: Context, id: Int, sec: Int, lang: String, level: Int) {
         val p = progress(ctx)
         val b = p.optJSONObject("$id") ?: JSONObject()
-        val set = read(ctx, id).toMutableSet().apply { add(sec) }
-        b.put("read", JSONArray(set.sorted())).put("last", sec)
+        val set = read(ctx, id, lang, level).toMutableSet().apply { add(sec) }
+        b.put("read_${lang}_$level", JSONArray(set.sorted())).put("last_${lang}_$level", sec)
         p.put("$id", b)
         progressFile(ctx).writeText(p.toString())
+    }
+
+    /** Removes a made part (and its pictures, which belong to its sentences) so it can be made again. */
+    fun deleteLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, withArt: Boolean) {
+        lessonFile(ctx, id, sec, lang, level).delete()
+        if (withArt) File(dir(ctx), "art").listFiles()?.filter { it.name.startsWith("${id}_${sec}_${lang}_${level}_") }?.forEach { it.delete() }
     }
 
     /* ---------------- Lessons ---------------- */

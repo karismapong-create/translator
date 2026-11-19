@@ -535,8 +535,12 @@ class SituationView(
         }
         dialogueBox.addView(LinearLayout(activity).apply {
             orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             addView(play, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(practice, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            // Speed next to play; a change applies at once from the word being read.
+            addView(Ui.speedChip(activity) { if (playing) { pausePlay(); resumePlay() } },
+                LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { leftMargin = dp(4) })
         })
         dialogueBox.addView(note(TalkText.t("s_tap_hint")))
         dialogueBox.addView(note(TalkText.t("s_disclaimer")))
@@ -589,7 +593,7 @@ class SituationView(
         card.addView(tv)
         attachInspector(tv, i, line)
         lineViews.add(tv)
-        if (line.meaning.isNotEmpty()) card.addView(text(line.meaning, 14f, blue).apply { setTextIsSelectable(false) })
+        if (line.meaning.isNotEmpty()) card.addView(text(Corrections.apply(activity, home.code, line.meaning), 14f, blue).apply { setTextIsSelectable(false) })
         card.addView(LinearLayout(activity).apply {
             orientation = HORIZONTAL
             addView(action("🔊") {
