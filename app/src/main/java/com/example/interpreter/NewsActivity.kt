@@ -310,6 +310,7 @@ class NewsActivity : Activity() {
         val lv = level
         NewsStore.markRead(this, d, index)
         item.read = true
+        lessonToken++
         val cached = NewsStore.lesson(this, d, index, l.code, lv)
         if (cached != null) {
             renderLesson(cached, l, newsHeader(item)) { newsFooter() }
@@ -328,17 +329,20 @@ class NewsActivity : Activity() {
         }
         val system = "You are a language teacher writing news lessons for ${home.english} speakers learning ${l.english}. " +
             "Rewrite the news item as a short news article in ${l.english} at $spec. Use only facts in the item; add none. " +
-            "Then list the key words from your article. For words in Japanese or Chinese give the reading in kana or " +
+            "Then list the key words and idioms from your article (an idiom or set phrase counts as one item). For words in Japanese or Chinese give the reading in kana or " +
             "pinyin, otherwise leave reading empty. Reply with JSON only, no code fences: " +
             "{\"title\":\"${l.english} headline\",\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
             "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from the article\"}]}"
         val user = "Date: $d\nTopic: ${item.topic}\nNews: ${item.text}"
+        val token = ++lessonToken
         net.execute {
             val result: Any = try {
-                Tutor.json(RemoteTranslate.ask(prefs, engine!!, system, user, 2500)) ?: IllegalStateException("format")
+                Tutor.json(RemoteTranslate.ask(prefs, engine!!, system, user, 2500))?.also { o ->
+                    if ((o.optJSONArray("sentences")?.length() ?: 0) > 0) NewsStore.saveLesson(this, d, index, l.code, lv, o)
+                } ?: IllegalStateException("format")
             } catch (e: Exception) { e }
             runOnUiThread {
-                if (lessonPage.visibility != View.VISIBLE) return@runOnUiThread
+                if (lessonPage.visibility != View.VISIBLE || token != lessonToken) return@runOnUiThread
                 lessonBox.removeAllViews()
                 val o = result as? JSONObject
                 if (o == null || (o.optJSONArray("sentences")?.length() ?: 0) == 0) {
@@ -346,7 +350,6 @@ class NewsActivity : Activity() {
                     offlineLesson(item, l)
                     return@runOnUiThread
                 }
-                NewsStore.saveLesson(this, d, index, l.code, lv, o)
                 renderLesson(o, l, newsHeader(item)) { newsFooter() }
             }
         }
@@ -478,6 +481,7 @@ class NewsActivity : Activity() {
         lessonBox.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(4)
         })
+        loadSentUnits(l)
 
         val words = o.optJSONArray("words") ?: JSONArray()
         if (words.length() > 0) {
@@ -667,7 +671,7 @@ class NewsActivity : Activity() {
         val i = sentenceOf(id) ?: return
         // A pause keeps the sentence and its word lit.
         if (pausedSentence >= 0) return
-        sentViews.getOrNull(i)?.let { it.text = sentTexts[i] }
+        sentViews.getOrNull(i)?.let { it.text = baseText(i) }
         if (i >= until - 1 || !playing) {
             playing = false
             current = -1
@@ -854,7 +858,7 @@ class NewsActivity : Activity() {
     private fun markSentence(i: Int) {
         sentViews.forEachIndexed { k, v ->
             v.background = if (k == i) Ui.rounded(sentenceColor, 10, this) else null
-            if (k != i) v.text = sentTexts[k]
+            if (k != i) v.text = baseText(k)
         }
         sentViews.getOrNull(i)?.let { v -> lessonPage.post { followSentence(v) } }
     }
@@ -876,11 +880,50 @@ class NewsActivity : Activity() {
         }
     }
 
+    // Words and idioms of each sentence (by index), found by the app; idioms are tinted green.
+    private val sentUnits = HashMap<Int, List<StudyUnits.Unit>>()
+    private var unitsGen = 0
+    private val unitsNet = Executors.newSingleThreadExecutor()
+    private val idiomColor = Color.argb(60, 46, 160, 90)
+
+    private fun baseText(i: Int): CharSequence {
+        val text = sentTexts.getOrNull(i) ?: return ""
+        val idioms = sentUnits[i]?.filter { it.idiom && it.end <= text.length } ?: return text
+        if (idioms.isEmpty()) return text
+        val span = android.text.SpannableString(text)
+        for (u in idioms) span.setSpan(android.text.style.BackgroundColorSpan(idiomColor), u.start, u.end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return span
+    }
+
+    private fun loadSentUnits(l: Lang) {
+        val gen = ++unitsGen
+        sentUnits.clear()
+        val texts = sentTexts.toList()
+        val ctx = applicationContext
+        unitsNet.execute {
+            val first = HashMap<Int, List<StudyUnits.Unit>>()
+            texts.forEachIndexed { i, t -> StudyUnits.cached(ctx, l.code, t)?.let { first[i] = it } }
+            if (first.isNotEmpty()) runOnUiThread { if (gen == unitsGen) { sentUnits.putAll(first); refreshSentences() } }
+            val got = try { StudyUnits.fetch(ctx, prefs, l.code, texts) } catch (_: Exception) { false }
+            if (!got) return@execute
+            val all = HashMap<Int, List<StudyUnits.Unit>>()
+            texts.forEachIndexed { i, t -> StudyUnits.cached(ctx, l.code, t)?.let { all[i] = it } }
+            runOnUiThread { if (gen == unitsGen) { sentUnits.putAll(all); refreshSentences() } }
+        }
+    }
+
+    // Redraws sentences that show no reading or pause highlight.
+    private fun refreshSentences() {
+        sentViews.forEachIndexed { k, v ->
+            if (!(playing && k == current) && k != pausedSentence) v.text = baseText(k)
+        }
+    }
+
     private fun markWord(i: Int, start: Int, end: Int, color: Int) {
         val v = sentViews.getOrNull(i) ?: return
         val text = sentTexts[i]
         if (start < 0 || end <= start || end > text.length) return
-        val span = android.text.SpannableString(text)
+        val span = android.text.SpannableString(baseText(i))
         span.setSpan(android.text.style.BackgroundColorSpan(color), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         v.text = span
     }
@@ -937,14 +980,14 @@ class NewsActivity : Activity() {
                         sentenceTapped(index)
                     } else {
                         tv.parent?.requestDisallowInterceptTouchEvent(false)
-                        tv.text = sentTexts[index]
+                        tv.text = baseText(index)
                     }
                     inspecting = false
                     true
                 }
                 android.view.MotionEvent.ACTION_CANCEL -> {
                     tv.removeCallbacks(longPress)
-                    if (inspecting) tv.text = sentTexts[index]
+                    if (inspecting) tv.text = baseText(index)
                     inspecting = false
                     true
                 }
@@ -956,6 +999,8 @@ class NewsActivity : Activity() {
     private fun rangeAt(tv: TextView, index: Int, l: Lang, x: Float, y: Float): Pair<Int, Int>? {
         val offset = tv.getOffsetForPosition(x, y)
         if (offset < 0) return null
+        // An idiom (or a word the app found) is picked as one piece.
+        sentUnits[index]?.let { us -> StudyUnits.at(us, offset)?.let { u -> return u.start to u.end } }
         return wordAt(sentTexts[index], offset, l)
     }
 
@@ -968,7 +1013,8 @@ class NewsActivity : Activity() {
         tts?.let { SpeechOut.speak(it, word, l.speechTag, true, "nw") }
         val loc = IntArray(2)
         tv.getLocationOnScreen(loc)
-        showMeaning(word, l, loc[0] + x.toInt(), loc[1] + y.toInt())
+        val unit = sentUnits[index]?.firstOrNull { it.start == w.first && it.end == w.second }
+        showMeaning(word, l, loc[0] + x.toInt(), loc[1] + y.toInt(), unit)
     }
 
     private var popup: android.widget.PopupWindow? = null
@@ -978,7 +1024,7 @@ class NewsActivity : Activity() {
     private val meanings = HashMap<String, String>()
 
     // A small card above the finger with the word, its meaning and a save button.
-    private fun showMeaning(word: String, l: Lang, x: Int, y: Int) {
+    private fun showMeaning(word: String, l: Lang, x: Int, y: Int, unit: StudyUnits.Unit? = null) {
         if (popup == null) {
             val w = TextView(this).apply { textSize = 18f; setTextColor(Color.WHITE); Ui.bold(this) }
             val m = TextView(this).apply { textSize = 15f; setTextColor(Color.rgb(220, 228, 255)) }
@@ -999,13 +1045,17 @@ class NewsActivity : Activity() {
             }
             popupWord = w; popupMeaning = m; popupSave = save
         }
-        popupWord?.text = word
-        val known = meanings[word] ?: lessonWords.firstOrNull { it.optString("word") == word || word.contains(it.optString("word")) && it.optString("word").length > 1 }
+        popupWord?.text = if (unit?.idiom == true) "${TalkText.t("u_idiom")} · $word" else word
+        val fromUnit = unit?.meaning?.takeIf { it.isNotBlank() }?.let { m ->
+            m + (unit.reading.takeIf { r -> r.isNotBlank() && r != word }?.let { r -> " ($r)" } ?: "")
+        }
+        if (fromUnit != null) meanings[word] = fromUnit
+        val known = fromUnit ?: meanings[word] ?: lessonWords.firstOrNull { it.optString("word") == word || word.contains(it.optString("word")) && it.optString("word").length > 1 }
             ?.let { it.optString("meaning") + it.optString("reading").takeIf { r -> r.isNotBlank() }?.let { r -> " ($r)" }.orEmpty() }
         popupMeaning?.text = known ?: "…"
         if (known == null) translate(word, l.code, home.code) { m ->
             meanings[word] = m
-            if (popupWord?.text == word) popupMeaning?.text = m
+            if (popupWord?.text?.endsWith(word) == true) popupMeaning?.text = m
         }
         popupSave?.text = "☆ " + LiveText.t("to_vocab")
         popupSave?.setOnClickListener {
@@ -1211,6 +1261,55 @@ class NewsActivity : Activity() {
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
     }
 
+    // Which lesson is on screen; a slow answer for another one must not replace it.
+    private var lessonToken = 0
+    private val making = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    private fun bookSystem(b: BookStore.Book, l: Lang, lv: Int): String {
+        val spec = when {
+            lv == 0 -> "beginner graded reader: retell the passage in 6 to 8 short, simple sentences with very common words"
+            lv == 1 -> "intermediate graded reader: retell the passage in 10 to 12 sentences with everyday words, keeping the important dialogue"
+            l.code == "en" -> "advanced: keep the original English wording exactly, only split it into sentences"
+            else -> "advanced: translate the passage faithfully into natural ${l.english}, sentence by sentence"
+        }
+        val keyWords = when (lv) { 0 -> 5; 1 -> 7; else -> 10 }
+        return "You are a language teacher making reading lessons for ${home.english} speakers learning ${l.english}. " +
+            "The text is part of the public-domain book \"${b.title}\" by ${b.author}. Write it in ${l.english} as a $spec. " +
+            "Keep the story's events and add nothing. Then list $keyWords key words or idioms from your text (an idiom or set phrase counts as one item). " +
+            "For Japanese or Chinese words give the reading in kana or pinyin, otherwise leave reading empty. " +
+            "Reply with JSON only, no code fences: {\"title\":\"short ${l.english} title for this part\"," +
+            "\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
+            "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from your text\"}]}"
+    }
+
+    // Makes and saves a part's lesson. Runs on a background thread; the result is kept even if I left
+    // the screen meanwhile, so a part is only ever made once per language and level.
+    private fun makeBookLesson(b: BookStore.Book, index: Int, l: Lang, lv: Int): Any {
+        BookStore.lesson(this, b.id, index, l.code, lv)?.let { return it }
+        val engine = RemoteTranslate.engine(prefs) ?: return IllegalStateException("engine")
+        val s = BookStore.sections(this, b.id).getOrNull(index) ?: return IllegalStateException("section")
+        val passage = BookStore.sectionText(this, b.id, s)
+        return try {
+            val o = Tutor.json(RemoteTranslate.ask(prefs, engine, bookSystem(b, l, lv), passage, 4000))
+            if (o == null || (o.optJSONArray("sentences")?.length() ?: 0) == 0) IllegalStateException("format")
+            else { BookStore.saveLesson(this, b.id, index, l.code, lv, o); o }
+        } catch (e: Exception) { e }
+    }
+
+    // Gets the next part ready in the background, so "Next" opens at once.
+    private fun prefetch(b: BookStore.Book, index: Int, l: Lang, lv: Int) {
+        if (index >= BookStore.sections(this, b.id).size) return
+        if (!RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) return
+        if (BookStore.lesson(this, b.id, index, l.code, lv) != null) return
+        val key = "${b.id}_${index}_${l.code}_$lv"
+        if (!making.add(key)) return
+        prefetchNet.execute {
+            try { makeBookLesson(b, index, l, lv) } finally { making.remove(key) }
+        }
+    }
+
+    private val prefetchNet = Executors.newSingleThreadExecutor()
+
     // A section as a lesson in my language and level (AI), or the text with phone translation (offline).
     private fun openSection(b: BookStore.Book, index: Int) {
         val s = BookStore.sections(this, b.id).getOrNull(index) ?: return
@@ -1222,55 +1321,43 @@ class NewsActivity : Activity() {
         registerBack()
         lessonBox.removeAllViews()
         BookStore.markRead(this, b.id, index)
+        val token = ++lessonToken
         val l = lang
         val lv = level
         val cached = BookStore.lesson(this, b.id, index, l.code, lv)
         if (cached != null) {
             renderLesson(cached, l, bookHeader(b, s)) { bookFooter(b, s) }
+            prefetch(b, index + 1, l, lv)
             return
         }
         val passage = BookStore.sectionText(this, b.id, s)
-        val engine = RemoteTranslate.engine(prefs)
-        if (!RemoteTranslate.canWrite(engine)) {
+        if (!RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) {
             offlineBookLesson(b, s, passage, l)
             return
         }
-        lessonBox.addView(note(StudyText.f("making", StudyText.t("level$lv"))))
-        val spec = when {
-            lv == 0 -> "beginner graded reader: retell the passage in 6 to 8 short, simple sentences with very common words"
-            lv == 1 -> "intermediate graded reader: retell the passage in 10 to 12 sentences with everyday words, keeping the important dialogue"
-            l.code == "en" -> "advanced: keep the original English wording exactly, only split it into sentences"
-            else -> "advanced: translate the passage faithfully into natural ${l.english}, sentence by sentence"
-        }
-        val keyWords = when (lv) { 0 -> 5; 1 -> 7; else -> 10 }
-        val system = "You are a language teacher making reading lessons for ${home.english} speakers learning ${l.english}. " +
-            "The text is part of the public-domain book \"${b.title}\" by ${b.author}. Write it in ${l.english} as a $spec. " +
-            "Keep the story's events and add nothing. Then list $keyWords key words or idioms from your text. " +
-            "For Japanese or Chinese words give the reading in kana or pinyin, otherwise leave reading empty. " +
-            "Reply with JSON only, no code fences: {\"title\":\"short ${l.english} title for this part\"," +
-            "\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
-            "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from your text\"}]}"
+        lessonBox.addView(note(StudyText.f("books_making", StudyText.t("level$lv"))))
+        val key = "${b.id}_${index}_${l.code}_$lv"
+        making.add(key)
         net.execute {
-            val result: Any = try {
-                Tutor.json(RemoteTranslate.ask(prefs, engine!!, system, passage, 4000)) ?: IllegalStateException("format")
-            } catch (e: Exception) { e }
+            val result = try { makeBookLesson(b, index, l, lv) } finally { making.remove(key) }
             runOnUiThread {
-                if (lessonPage.visibility != View.VISIBLE || currentBook !== b) return@runOnUiThread
+                if (token != lessonToken || lessonPage.visibility != View.VISIBLE) return@runOnUiThread
                 lessonBox.removeAllViews()
                 val o = result as? JSONObject
-                if (o == null || (o.optJSONArray("sentences")?.length() ?: 0) == 0) {
+                if (o == null) {
                     lessonBox.addView(note(StudyText.f("failed", (result as? Exception)?.message ?: "")))
                     offlineBookLesson(b, s, passage, l)
                     return@runOnUiThread
                 }
-                BookStore.saveLesson(this, b.id, index, l.code, lv, o)
                 renderLesson(o, l, bookHeader(b, s)) { bookFooter(b, s) }
+                prefetch(b, index + 1, l, lv)
             }
         }
     }
 
     // Without an AI engine: the original sentences (translated on the phone for other languages).
     private fun offlineBookLesson(b: BookStore.Book, s: BookStore.Section, passage: String, l: Lang) {
+        val token = lessonToken
         lessonBox.addView(note(StudyText.t("need_ai")))
         val it = java.text.BreakIterator.getSentenceInstance(java.util.Locale.ENGLISH)
         it.setText(passage)
@@ -1291,7 +1378,7 @@ class NewsActivity : Activity() {
                 translate(en, "en", home.code) { mine ->
                     out[i] = JSONObject().put("text", inLang).put("meaning", if (mine == inLang) "" else mine)
                     left--
-                    if (left == 0 && lessonPage.visibility == View.VISIBLE && currentBook === b) {
+                    if (left == 0 && lessonPage.visibility == View.VISIBLE && currentBook === b && token == lessonToken) {
                         val o = JSONObject().put("title", s.chapter)
                             .put("sentences", JSONArray().apply { out.forEach { x -> if (x != null) put(x) } })
                             .put("words", JSONArray())

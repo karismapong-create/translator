@@ -45,7 +45,7 @@ object Ui {
         "🔴" to R.drawable.ic_radio_button_checked, "🔑" to R.drawable.ic_key, "🤖" to R.drawable.ic_smart_toy,
         "✏" to R.drawable.ic_edit, "✍" to R.drawable.ic_edit_note, "←" to R.drawable.ic_arrow_back,
         "🎭" to R.drawable.ic_theater_comedy, "👏" to R.drawable.ic_thumb_up, "✕" to R.drawable.ic_close,
-        "⇄" to R.drawable.ic_swap_horiz, "📖" to R.drawable.ic_menu_book, "📦" to R.drawable.ic_inventory_2,
+        "⇄" to R.drawable.ic_swap_horiz, "📖" to R.drawable.ic_menu_book, "📚" to R.drawable.ic_menu_book, "📦" to R.drawable.ic_inventory_2,
         "🛠" to R.drawable.ic_build, "✔" to R.drawable.ic_check_circle, "✘" to R.drawable.ic_cancel,
         "ℹ" to R.drawable.ic_info, "⚙" to R.drawable.ic_settings,
         "🗣" to R.drawable.ic_record_voice_over, "🔗" to R.drawable.ic_link, "⛓" to R.drawable.ic_link_off,
