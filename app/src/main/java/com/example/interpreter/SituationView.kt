@@ -151,7 +151,7 @@ class SituationView(
         questionsBox = LinearLayout(activity).apply { orientation = VERTICAL }
         questionsScroll = ScrollView(activity).apply { addView(questionsBox) }
         dialogueBox = LinearLayout(activity).apply { orientation = VERTICAL }
-        dialogueScroll = ScrollView(activity).apply { addView(dialogueBox) }
+        dialogueScroll = SeekScroll().apply { addView(dialogueBox) }
 
         val body = FrameLayout(activity).apply {
             listOf(gridScroll, questionsScroll, dialogueScroll).forEach {
@@ -637,6 +637,7 @@ class SituationView(
         }
         if (pausedLine >= 0 && pausedLine != i) lineViews.getOrNull(pausedLine)?.text = lineText(pausedLine)
         pausedLine = -1
+        run++
         playing = true
         playIndex = i
         playButton?.text = TalkText.t("s_stop")
@@ -659,6 +660,7 @@ class SituationView(
     // Stops the voice but keeps the line and the word highlighted, remembering where to continue.
     private fun pausePlay() {
         if (!playing) return
+        run++
         playing = false
         pausedLine = playIndex
         pausedAt = wordAt
@@ -686,11 +688,16 @@ class SituationView(
         // The line lights up when its sound actually starts (lineStarted), not now: the start may
         // wait for the audio output to wake, and the picture must not run ahead of the voice.
         wordAt = from
-        speak(lines[playIndex], "line_$playIndex", from)
+        speak(lines[playIndex], curId(), from)
     }
 
-    // Line index from an utterance id such as "line_3" or "one_3".
-    private fun lineOf(id: String?): Int = id?.substringAfter('_', "")?.toIntOrNull() ?: -1
+    // Each start of playback gets a new run number in its utterance ids ("line_3_7"), so late reports
+    // from a stopped run can't skip a line or move the word.
+    private var run = 0
+    private fun curId() = "line_${playIndex}_$run"
+
+    // Line index from an utterance id such as "line_3_7" or "one_3".
+    private fun lineOf(id: String?): Int = id?.split('_')?.getOrNull(1)?.toIntOrNull() ?: -1
 
     // Moves a highlight over the word the voice is saying. Needs a voice engine that reports word positions.
     private fun wordHighlight(id: String?, s0: Int, e0: Int) {
@@ -699,7 +706,8 @@ class SituationView(
         val start = s0 + base
         val end = e0 + base
         // A late position report after a pause must not move the paused word.
-        if (id == "line_$playIndex") {
+        if (id?.startsWith("line_") == true && id != curId()) return
+        if (id == curId()) {
             if (!playing) return
             wordAt = start
         }
@@ -717,19 +725,21 @@ class SituationView(
 
     // Called when the voice really begins a line, so highlight, scroll and sound stay together.
     private fun lineStarted(id: String?) {
-        if (playing && id == "line_$playIndex") highlight(playIndex)
+        if (playing && id == curId()) highlight(playIndex)
     }
 
     private fun lineFinished(id: String?) {
         val done = lineOf(id)
+        if (id?.startsWith("line_") == true && id != curId()) return
         if (done in lines.indices) lineViews.getOrNull(done)?.text = lineText(done)
-        if (playing && id == "line_$playIndex") {
+        if (playing && id == curId()) {
             playIndex++
             playCurrent()
         }
     }
 
     private fun stopPlay() {
+        run++
         val wasPlaying = playing
         playing = false
         pausedLine = -1
@@ -744,6 +754,177 @@ class SituationView(
     fun stopPlayback() {
         stopPlay()
         SpeechOut.stop(tts)
+    }
+
+    /* ---------- Seek and pause by gestures (outside the lines' text) ---------- */
+
+    // Swipe right/left outside the lines: reading jumps forward/back word by word and plays from there
+    // when the finger lifts. A tap on an empty spot pauses or goes on.
+    private inner class SeekScroll : ScrollView(activity) {
+        private var downX = 0f
+        private var downY = 0f
+        private var onLine = false
+        private var seeking = false
+        private var decided = false
+        private val slop = android.view.ViewConfiguration.get(activity).scaledTouchSlop
+
+        private fun hitsLine(ev: android.view.MotionEvent): Boolean {
+            val r = android.graphics.Rect()
+            val x = ev.rawX.toInt()
+            val y = ev.rawY.toInt()
+            return lineViews.any { it.getGlobalVisibleRect(r) && r.contains(x, y) }
+        }
+
+        private fun watch(ev: android.view.MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = ev.x; downY = ev.y
+                    onLine = hitsLine(ev)
+                    seeking = false
+                    decided = false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> if (!decided && !onLine && lines.isNotEmpty()) {
+                    val dx = Math.abs(ev.x - downX)
+                    val dy = Math.abs(ev.y - downY)
+                    if (dx > slop * 2 && dx > dy * 1.5f) {
+                        decided = true
+                        seeking = true
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        seekStart()
+                    } else if (dy > slop) {
+                        decided = true
+                    }
+                }
+            }
+            return seeking
+        }
+
+        override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+            if (watch(ev)) return true
+            return super.onInterceptTouchEvent(ev)
+        }
+
+        override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+            if (!seeking) {
+                if (watch(ev)) return true
+                if (ev.actionMasked == android.view.MotionEvent.ACTION_UP && !onLine && !decided &&
+                    ev.eventTime - ev.downTime < android.view.ViewConfiguration.getLongPressTimeout() &&
+                    Math.abs(ev.x - downX) < slop && Math.abs(ev.y - downY) < slop) {
+                    togglePlay()
+                }
+                return super.onTouchEvent(ev)
+            }
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_MOVE -> seekMove(ev.x - downX)
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { seeking = false; seekEnd() }
+            }
+            return true
+        }
+    }
+
+    private fun togglePlay() {
+        if (lines.isEmpty() || screen != 2) return
+        when {
+            playing -> { pausePlay(); flash("⏸") }
+            pausedLine >= 0 -> { resumePlay(); flash("▶") }
+            else -> { playAll(); flash("▶") }
+        }
+    }
+
+    private var flashView: TextView? = null
+
+    private fun flash(symbol: String) {
+        val root = dialogueScroll.parent as? FrameLayout ?: return
+        val v = flashView ?: TextView(activity).apply {
+            textSize = 44f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = Ui.rounded(Color.argb(150, 20, 24, 40), 40, activity)
+            root.addView(this, FrameLayout.LayoutParams(dp(96), dp(96), Gravity.CENTER))
+        }.also { flashView = it }
+        v.text = symbol
+        v.animate().cancel()
+        v.alpha = 1f
+        v.visibility = View.VISIBLE
+        v.animate().alpha(0f).setStartDelay(450).setDuration(350).withEndAction { v.visibility = View.GONE }.start()
+    }
+
+    private var seekFrom = 0 to 0
+    private var seekAt = 0 to 0
+    private var seekShown = -1
+
+    // Where each word of a line begins.
+    private fun wordStarts(i: Int): List<Int> {
+        val us = units[i]
+        val starts = us?.map { it.start }?.distinct()?.sorted()
+            ?: StudyUnits.offline(lines[i].text, lang.code, lang.voice).map { it.start }
+        return starts.ifEmpty { listOf(0) }
+    }
+
+    private fun seekStart() {
+        val from = when {
+            playing -> playIndex to wordAt
+            pausedLine >= 0 -> pausedLine to pausedAt
+            else -> 0 to 0
+        }
+        if (playing) {
+            run++
+            playing = false
+            SpeechOut.stop(tts)
+        }
+        popup?.dismiss()
+        seekFrom = from
+        seekAt = from
+        seekShown = -1
+        dialogueScroll.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+    }
+
+    private fun seekMove(dx: Float) {
+        var steps = (dx / dp(14)).toInt()
+        var s = seekFrom.first.coerceIn(0, lines.size - 1)
+        var list = wordStarts(s)
+        var w = list.indexOfLast { it <= seekFrom.second }.coerceAtLeast(0)
+        while (steps > 0) {
+            if (w < list.size - 1) w++
+            else if (s < lines.size - 1) { s++; list = wordStarts(s); w = 0 }
+            else break
+            steps--
+        }
+        while (steps < 0) {
+            if (w > 0) w--
+            else if (s > 0) { s--; list = wordStarts(s); w = list.size - 1 }
+            else break
+            steps++
+        }
+        val at = s to list[w]
+        if (at == seekAt && seekShown == s) return
+        seekAt = at
+        dialogueScroll.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+        if (seekShown != s) {
+            lineViews.getOrNull(seekShown)?.text = lineText(seekShown)
+            seekShown = s
+            highlight(s)
+        }
+        val text = lines[s].text
+        val end = list.getOrNull(w + 1)?.let { n ->
+            // The word ends where its letters stop, not at the next word.
+            var e = n
+            while (e > list[w] && !Character.isLetterOrDigit(text[e - 1])) e--
+            e
+        } ?: text.trimEnd().length
+        if (end > list[w]) {
+            val span = SpannableString(lineText(s))
+            span.setSpan(BackgroundColorSpan(wordColor), list[w], end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            lineViews.getOrNull(s)?.text = span
+        }
+    }
+
+    private fun seekEnd() {
+        val (s, o) = seekAt
+        lineViews.getOrNull(seekShown)?.text = lineText(seekShown)
+        pausedLine = s
+        pausedAt = o
+        playFrom(s, o)
     }
 
     /* ---------- Words and idioms in a line ---------- */
@@ -767,13 +948,13 @@ class SituationView(
         unitsNet.execute {
             val first = HashMap<Int, List<StudyUnits.Unit>>()
             ls.forEachIndexed { i, line ->
-                first[i] = StudyUnits.cached(ctx, l.code, line.text) ?: StudyUnits.offline(line.text, l.code, l.voice)
+                first[i] = StudyUnits.full(ctx, l.code, line.text, l.voice)
             }
             post { if (gen == unitsGen) { units.putAll(first); refreshLineTexts() } }
             val got = try { StudyUnits.fetch(ctx, prefs, l.code, ls.map { it.text }) } catch (_: Exception) { false }
             if (!got) return@execute
             val better = HashMap<Int, List<StudyUnits.Unit>>()
-            ls.forEachIndexed { i, line -> StudyUnits.cached(ctx, l.code, line.text)?.let { better[i] = it } }
+            ls.forEachIndexed { i, line -> better[i] = StudyUnits.full(ctx, l.code, line.text, l.voice) }
             post { if (gen == unitsGen) { units.putAll(better); refreshLineTexts() } }
         }
     }
