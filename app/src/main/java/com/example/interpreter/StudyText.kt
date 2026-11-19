@@ -75,6 +75,7 @@ object StudyText {
         "books_retry" to m("✨ AI로 다시 만들기", "✨ AIでもう一度作る", "✨ Make it with AI again", "✨ Refaire avec l'IA", "✨ Volver a crear con IA", "✨ Mit KI neu erstellen", "✨ 用 AI 重新制作"),
         "art_hide_all" to m("🎨 그림 모두 숨기기", "🎨 絵をすべて隠す", "🎨 Hide all pictures", "🎨 Masquer les images", "🎨 Ocultar imágenes", "🎨 Bilder ausblenden", "🎨 隐藏全部图片"),
         "art_show_all" to m("🎨 그린 그림 모두 보이기", "🎨 描いた絵をすべて表示", "🎨 Show all drawn pictures", "🎨 Afficher les images", "🎨 Mostrar imágenes", "🎨 Bilder einblenden", "🎨 显示全部已画图片"),
+        "pack_title" to m("📦 글·그림 DB 내보내기/가져오기", "📦 文・絵DBの書き出し/取り込み", "📦 Export / import text & picture DB", "📦 Exporter / importer la base", "📦 Exportar / importar base de datos", "📦 Datenbank exportieren / importieren", "📦 导出/导入 文字·图片数据库"),
         "pack_export" to m("📦 내보내기", "📦 書き出す", "📦 Export", "📦 Exporter", "📦 Exportar", "📦 Exportieren", "📦 导出"),
         "pack_import" to m("📥 가져오기", "📥 取り込む", "📥 Import", "📥 Importer", "📥 Importar", "📥 Importieren", "📥 导入"),
         "pack_situations" to m("💬 상황별 회화 DB", "💬 場面別会話DB", "💬 Situation dialogues DB", "💬 Dialogues par situation", "💬 Diálogos por situación", "💬 Situationsdialoge", "💬 情景会话数据库"),
