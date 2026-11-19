@@ -14,7 +14,7 @@ object PackUi {
     @Volatile var changed = false
 
     // Toasts can't show the app's icons, so their text goes without the leading emoji.
-    private fun plain(s: String) = s.trimStart { !it.isLetterOrDigit() && it != '(' }
+    fun plain(s: String) = s.trimStart { !it.isLetterOrDigit() && it != '(' }
 
     /** Settings entry for the book DB: export or import. */
     fun menu(activity: Activity) {
@@ -104,7 +104,7 @@ class PackImportActivity : Activity() {
         if (resultCode != RESULT_OK || uri == null) { finish(); return }
         val app = applicationContext
         val main = Handler(Looper.getMainLooper())
-        Toast.makeText(app, plain(StudyText.t("pack_working")), Toast.LENGTH_SHORT).show()
+        Toast.makeText(app, PackUi.plain(StudyText.t("pack_working")), Toast.LENGTH_SHORT).show()
         Thread {
             val msg = try {
                 val s = app.contentResolver.openInputStream(uri)?.use { ContentPack.import(app, it) }
@@ -116,7 +116,7 @@ class PackImportActivity : Activity() {
                 }
             } catch (e: Exception) { StudyText.f("failed", e.message ?: "") }
             PackUi.changed = true
-            main.post { Toast.makeText(app, plain(msg), Toast.LENGTH_LONG).show() }
+            main.post { Toast.makeText(app, PackUi.plain(msg), Toast.LENGTH_LONG).show() }
         }.start()
         finish()
     }
