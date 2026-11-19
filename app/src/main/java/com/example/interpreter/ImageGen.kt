@@ -21,8 +21,16 @@ object ImageGen {
     fun available(prefs: SharedPreferences) =
         Providers.key(prefs, "gemini").isNotEmpty() || Providers.key(prefs, "openai").isNotEmpty()
 
+    // After a quota or billing refusal, no more picture requests for a while, so the same key keeps
+    // its allowance for making lessons.
+    @Volatile private var pausedUntil = 0L
+    @Volatile private var pausedReason = ""
+
+    private fun refused(code: Int) = code == 429 || code == 403 || code == 402
+
     /** JPEG bytes, at most 1024 px wide. Runs on a background thread. */
     fun draw(prefs: SharedPreferences, prompt: String): ByteArray {
+        if (System.currentTimeMillis() < pausedUntil) throw Failed(pausedReason)
         val g = Providers.key(prefs, "gemini")
         val o = Providers.key(prefs, "openai")
         var last: Exception? = null
@@ -62,7 +70,10 @@ object ImageGen {
     private const val G = "https://generativelanguage.googleapis.com/v1beta"
 
     // The image models this key can use, cheapest first ("lite", then "flash", then the rest).
+    private var listed: List<String>? = null
+
     private fun geminiModels(key: String): List<String> {
+        listed?.let { return it }
         val (code, body) = call("$G/models?pageSize=1000", "GET", mapOf("x-goog-api-key" to key), null)
         if (code !in 200..299) throw Failed(errorText(code, body))
         val arr = JSONObject(body).optJSONArray("models") ?: JSONArray()
@@ -79,17 +90,15 @@ object ImageGen {
             n.contains("pro") -> 3
             else -> 2
         }
-        return out.sortedWith(compareBy({ rank(it) }, { if (it.contains("preview")) 1 else 0 }, { -it.length }))
+        return out.sortedWith(compareBy({ rank(it) }, { if (it.contains("preview")) 1 else 0 }, { -it.length })).also { listed = it }
     }
 
     private fun gemini(prefs: SharedPreferences, key: String, prompt: String): ByteArray {
         val saved = prefs.getString("art_model", null)
-        val models = (listOfNotNull(saved) + try { geminiModels(key) } catch (e: Exception) {
-            if (saved == null) throw e else emptyList()
-        }).distinct()
+        val models = (if (saved != null) listOf(saved) else geminiModels(key)).distinct()
         if (models.isEmpty()) throw Failed("no image model for this key")
         var last: Exception? = null
-        for (m in models.take(3)) {
+        for (m in models.take(2)) {
             for (withConfig in listOf(true, false)) {
                 val config = JSONObject().put("responseModalities", JSONArray().put("TEXT").put("IMAGE"))
                 if (withConfig) config.put("imageConfig", JSONObject().put("aspectRatio", "4:3"))
@@ -112,6 +121,11 @@ object ImageGen {
                     break
                 }
                 last = Failed(errorText(code, body))
+                if (refused(code)) {
+                    pausedReason = errorText(code, body)
+                    pausedUntil = System.currentTimeMillis() + 10 * 60_000L
+                    throw last
+                }
                 // A 400 may be the picture settings; try once without them. Other errors: next model.
                 if (code != 400) break
             }
@@ -133,6 +147,11 @@ object ImageGen {
                 last = Failed("no picture in the answer")
             } else {
                 last = Failed(errorText(code, body))
+                if (refused(code)) {
+                    pausedReason = errorText(code, body)
+                    pausedUntil = System.currentTimeMillis() + 10 * 60_000L
+                    throw last
+                }
             }
         }
         throw last ?: Failed("failed")
