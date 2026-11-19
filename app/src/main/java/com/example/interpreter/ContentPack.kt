@@ -109,6 +109,9 @@ object ContentPack {
         val placeFile = Regex("^(\\d{1,2})\\.json$")
         val safe = Regex("^[A-Za-z0-9_.-]+$")
         var shelf: JSONArray? = null
+        // Lessons this phone already has with different sentences: their pictures in the package belong
+        // to other sentences, so they are skipped (lessons come before pictures in a package).
+        val keptOwn = HashSet<String>()
         ZipInputStream(input).use { zip ->
             var e = zip.nextEntry
             var n = 0
@@ -124,9 +127,14 @@ object ContentPack {
                             val dir = if (parts[1] == "text") booksDir(ctx) else File(booksDir(ctx), parts[1])
                             dir.mkdirs()
                             val f = File(dir, last)
-                            if (!f.exists()) {
-                                f.writeBytes(zip.readBytes())
+                            val bytes = zip.readBytes()
+                            if (parts[1] == "art" && last.substringBeforeLast('_') in keptOwn) {
+                                // skip: picture for a lesson this phone made differently
+                            } else if (!f.exists()) {
+                                f.writeBytes(bytes)
                                 when (parts[1]) { "lessons" -> s.lessons++; "art" -> s.pictures++ }
+                            } else if (parts[1] == "lessons" && !f.readBytes().contentEquals(bytes)) {
+                                keptOwn += last.removeSuffix(".json")
                             }
                         }
                         parts.size == 2 && parts[0] == "units" && safe.matches(last) ->
@@ -166,5 +174,25 @@ object ContentPack {
         f.writeText(mine.toString())
         StudyUnits.forget()
         return true
+    }
+
+    /* ---------------- Packages shipped with the app ---------------- */
+
+    /**
+     * Imports every package in assets/packs/ once per app version (an import only adds what is
+     * missing, so running it again after an update is safe). Background thread.
+     */
+    fun installBundled(ctx: Context) {
+        val prefs = ctx.getSharedPreferences("interpreter", Context.MODE_PRIVATE)
+        val version = try {
+            val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+            if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()
+        } catch (_: Exception) { 0L }
+        if (prefs.getLong("packs_installed_version", -1) == version) return
+        val names = try { ctx.assets.list("packs")?.filter { it.endsWith(".zip") }.orEmpty() } catch (_: Exception) { emptyList() }
+        for (name in names.sorted()) {
+            try { ctx.assets.open("packs/$name").use { import(ctx, it) } } catch (_: Exception) {}
+        }
+        prefs.edit().putLong("packs_installed_version", version).apply()
     }
 }

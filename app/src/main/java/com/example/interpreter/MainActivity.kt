@@ -150,6 +150,8 @@ class MainActivity : Activity() {
         Providers.migrate(prefs)
         OnDevice.refresh()
         Pro.init(this)
+        // Content packages shipped with this version (books with pictures, dialogues).
+        Thread { try { ContentPack.installBundled(applicationContext) } catch (_: Exception) {} }.start()
         // Daily world news for the vocabulary tab is fetched in the background once a day.
         try { NewsStore.schedule(this) } catch (_: Exception) {}
         home = Languages.home(prefs)
