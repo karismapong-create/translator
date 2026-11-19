@@ -332,7 +332,8 @@ class NewsActivity : Activity() {
             "Then list the key words and idioms from your article (an idiom or set phrase counts as one item). For words in Japanese or Chinese give the reading in kana or " +
             "pinyin, otherwise leave reading empty. Reply with JSON only, no code fences: " +
             "{\"title\":\"${l.english} headline\",\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
-            "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from the article\"}]}"
+            "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from the article\"}],"+
+            "\"idioms\":[{\"text\":\"idiom, set phrase or phrasal verb exactly as written in one of your sentences\",\"meaning\":\"${home.english} meaning\",\"reading\":\"...\"}]}"
         val user = "Date: $d\nTopic: ${item.topic}\nNews: ${item.text}"
         val token = ++lessonToken
         net.execute {
@@ -481,7 +482,7 @@ class NewsActivity : Activity() {
         lessonBox.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(4)
         })
-        loadSentUnits(l)
+        loadSentUnits(l, o)
 
         val words = o.optJSONArray("words") ?: JSONArray()
         if (words.length() > 0) {
@@ -895,19 +896,22 @@ class NewsActivity : Activity() {
         return span
     }
 
-    private fun loadSentUnits(l: Lang) {
+    // Idioms that came with the lesson show at once; sentences of older lessons are asked separately.
+    private fun loadSentUnits(l: Lang, lesson: JSONObject) {
         val gen = ++unitsGen
         sentUnits.clear()
         val texts = sentTexts.toList()
         val ctx = applicationContext
+        val given = lesson.optJSONArray("idioms")
         unitsNet.execute {
+            if (given != null) StudyUnits.seed(ctx, l.code, texts, given)
             val first = HashMap<Int, List<StudyUnits.Unit>>()
-            texts.forEachIndexed { i, t -> StudyUnits.cached(ctx, l.code, t)?.let { first[i] = it } }
-            if (first.isNotEmpty()) runOnUiThread { if (gen == unitsGen) { sentUnits.putAll(first); refreshSentences() } }
+            texts.forEachIndexed { i, t -> first[i] = StudyUnits.full(ctx, l.code, t, l.speechTag) }
+            runOnUiThread { if (gen == unitsGen) { sentUnits.putAll(first); refreshSentences() } }
             val got = try { StudyUnits.fetch(ctx, prefs, l.code, texts) } catch (_: Exception) { false }
             if (!got) return@execute
             val all = HashMap<Int, List<StudyUnits.Unit>>()
-            texts.forEachIndexed { i, t -> StudyUnits.cached(ctx, l.code, t)?.let { all[i] = it } }
+            texts.forEachIndexed { i, t -> all[i] = StudyUnits.full(ctx, l.code, t, l.speechTag) }
             runOnUiThread { if (gen == unitsGen) { sentUnits.putAll(all); refreshSentences() } }
         }
     }
@@ -1279,7 +1283,8 @@ class NewsActivity : Activity() {
             "For Japanese or Chinese words give the reading in kana or pinyin, otherwise leave reading empty. " +
             "Reply with JSON only, no code fences: {\"title\":\"short ${l.english} title for this part\"," +
             "\"sentences\":[{\"text\":\"${l.english} sentence\",\"meaning\":\"${home.english} translation\"}]," +
-            "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from your text\"}]}"
+            "\"words\":[{\"word\":\"...\",\"reading\":\"...\",\"meaning\":\"${home.english} meaning\",\"example\":\"sentence from your text\"}],"+
+            "\"idioms\":[{\"text\":\"idiom, set phrase or phrasal verb exactly as written in one of your sentences\",\"meaning\":\"${home.english} meaning\",\"reading\":\"...\"}]}"
     }
 
     // Makes and saves a part's lesson. Runs on a background thread; the result is kept even if I left

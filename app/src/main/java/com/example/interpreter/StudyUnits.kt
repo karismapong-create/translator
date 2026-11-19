@@ -102,7 +102,40 @@ object StudyUnits {
     }
 
     /**
-     * Asks the AI to split the sentences that are not cached yet. Runs on a background thread.
+     * Words (offline, instant) with the idioms found for this sentence laid over them.
+     * Any thread; Japanese analysis is slow the first time.
+     */
+    fun full(ctx: Context, code: String, sentence: String, tag: String): List<Unit> {
+        val known = cached(ctx, code, sentence) ?: emptyList()
+        // Older saves hold every word already.
+        if (known.any { !it.idiom }) return known
+        val words = offline(sentence, code, tag).filter { w -> known.none { w.start < it.end && it.start < w.end } }
+        return (known + words).sortedBy { it.start }
+    }
+
+    /** Saves idioms that came with a lesson, so no extra request is needed. */
+    fun seed(ctx: Context, code: String, sentences: List<String>, idioms: JSONArray) {
+        val found = HashMap<String, JSONArray>()
+        for (sentence in sentences) {
+            if (sentence.isBlank() || cached(ctx, code, sentence) != null) continue
+            val arr = JSONArray()
+            for (k in 0 until idioms.length()) {
+                val o = idioms.optJSONObject(k) ?: continue
+                val t = o.optString("text").ifBlank { o.optString("t") }.trim()
+                if (t.length < 2 || !sentence.contains(t)) continue
+                arr.put(JSONObject().put("t", t).put("m", o.optString("meaning").ifBlank { o.optString("m") })
+                    .put("r", o.optString("reading").ifBlank { o.optString("r") }).put("i", true))
+            }
+            found[sentence] = arr
+        }
+        if (found.isEmpty()) return
+        synchronized(this) { for ((k, v) in found) memory["$code|$k"] = v }
+        store(ctx, code, found)
+    }
+
+    /**
+     * Asks the AI for the idioms of the sentences not checked yet (only idioms, so the answer is short
+     * and quick), a few sentences per request, several requests at once. Runs on a background thread.
      * Returns true when something new was saved.
      */
     fun fetch(ctx: Context, prefs: SharedPreferences, code: String, sentences: List<String>): Boolean {
@@ -110,40 +143,47 @@ object StudyUnits {
         val todo = sentences.distinct().filter { it.isNotBlank() && cached(ctx, code, it) == null }
         if (todo.isEmpty()) return false
         val lang = Languages.byCode(code).english
-        val home = Languages.home(prefs)
-        val mine = home.english
+        val mine = Languages.home(prefs).english
         val reading = when (code) {
             "ja" -> "hiragana reading"
             "zh" -> "pinyin with tone marks"
             else -> "empty string"
         }
-        val system = "You split $lang sentences into study units for a $mine-speaking learner. " +
-            "Keep every idiom, set phrase, fixed greeting, phrasal verb and common collocation together as ONE unit " +
-            "with \"i\":true (for example a whole polite set expression). Everything else is a single word with \"i\":false; " +
-            "keep particles and auxiliaries as their own units. Skip punctuation. " +
-            "\"t\" must be copied exactly as it appears in the sentence. " +
-            "\"m\" is the $mine meaning in this sentence (for an idiom, the meaning of the whole expression). " +
-            "\"r\" is the $reading. " +
-            "Reply with JSON only, no code fences: {\"s\":[[{\"t\":\"\",\"m\":\"\",\"r\":\"\",\"i\":false}]]} " +
-            "with one inner list per input sentence, in the same order."
-        val found = HashMap<String, JSONArray>()
-        for (chunk in todo.chunked(12)) {
+        val system = "Find the idioms in each $lang sentence for a $mine-speaking learner: idioms, set phrases, fixed " +
+            "greetings and polite formulas, phrasal verbs, and common multi-word collocations or grammar patterns a learner " +
+            "should learn as one piece. Single words are NOT idioms. \"t\" must be copied exactly as it appears in the sentence. " +
+            "\"m\" is the $mine meaning of the whole expression here. \"r\" is the $reading. " +
+            "Reply with JSON only, no code fences: {\"s\":[[{\"t\":\"\",\"m\":\"\",\"r\":\"\"}]]} " +
+            "with one inner list per input sentence in the same order (an empty list when a sentence has none)."
+        val found = java.util.concurrent.ConcurrentHashMap<String, JSONArray>()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(3)
+        for (chunk in todo.chunked(8)) pool.execute {
             val input = JSONArray().apply { chunk.forEach { put(it) } }.toString()
             val raw = try {
-                Providers.complete(prefs, engine, system, listOf("user" to input), 4096, 45000)
-            } catch (_: Exception) { continue }
+                Providers.complete(prefs, engine, system, listOf("user" to input), 2048, 40000)
+            } catch (_: Exception) { return@execute }
             val o = try {
                 val a = raw.indexOf('{')
                 val b = raw.lastIndexOf('}')
                 if (a < 0 || b <= a) null else JSONObject(raw.substring(a, b + 1))
-            } catch (_: Exception) { null } ?: continue
-            val s = o.optJSONArray("s") ?: continue
+            } catch (_: Exception) { null } ?: return@execute
+            val s = o.optJSONArray("s") ?: return@execute
             for (i in chunk.indices) {
-                val units = s.optJSONArray(i) ?: continue
-                // Keeps the answer only when it really covers this sentence.
-                if (place(chunk[i], units).isNotEmpty()) found[chunk[i]] = units
+                val list = s.optJSONArray(i) ?: continue
+                val arr = JSONArray()
+                for (k in 0 until list.length()) {
+                    val u = list.optJSONObject(k) ?: continue
+                    val t = u.optString("t").trim()
+                    // Only real multi-word pieces that are in the sentence.
+                    if (t.length < 2 || !chunk[i].contains(t)) continue
+                    if (code !in setOf("ja", "zh") && !t.contains(' ')) continue
+                    arr.put(u.put("i", true))
+                }
+                found[chunk[i]] = arr
             }
         }
+        pool.shutdown()
+        try { pool.awaitTermination(90, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
         if (found.isEmpty()) return false
         synchronized(this) { for ((k, v) in found) memory["$code|$k"] = v }
         store(ctx, code, found)
