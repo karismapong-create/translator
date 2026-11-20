@@ -40,16 +40,20 @@ object ImageGen {
         pausedUntil[service] = System.currentTimeMillis() + 10 * 60_000L
     }
 
-    /** JPEG bytes, at most 1024 px wide. Runs on a background thread. */
-    fun draw(prefs: SharedPreferences, prompt: String): ByteArray {
+    /**
+     * JPEG bytes, at most 1024 px wide. Runs on a background thread. [prompt] is the full request for
+     * Gemini and OpenAI, which reason over it; [visual] is a short picture description for the free
+     * diffusion models (Cloudflare, Pollinations), which draw best from one.
+     */
+    fun draw(prefs: SharedPreferences, prompt: String, visual: String = prompt): ByteArray {
         val tries = ArrayList<Pair<String, () -> ByteArray>>()
         val cfA = cfAccount(prefs)
         val cfT = cfToken(prefs)
         val pk = pollKey(prefs)
         val g = Providers.key(prefs, "gemini")
         val o = Providers.key(prefs, "openai")
-        if (cfA.isNotEmpty() && cfT.isNotEmpty()) tries += "cloudflare" to { cloudflare(cfA, cfT, prompt) }
-        if (pk.isNotEmpty()) tries += "pollinations" to { pollinations(pk, prompt) }
+        if (cfA.isNotEmpty() && cfT.isNotEmpty()) tries += "cloudflare" to { cloudflare(cfA, cfT, visual) }
+        if (pk.isNotEmpty()) tries += "pollinations" to { pollinations(pk, visual) }
         if (g.isNotEmpty()) tries += "gemini" to { gemini(prefs, g, prompt) }
         if (o.isNotEmpty()) tries += "openai" to { openai(o, prompt) }
         var last: Exception? = null
@@ -177,29 +181,72 @@ object ImageGen {
 
     /* ---------------- Cloudflare Workers AI (free daily allowance) ---------------- */
 
+    // FLUX.2 klein first (a newer, much better model, about 120 pictures a day free), then FLUX.1 schnell.
     private fun cloudflare(account: String, token: String, prompt: String): ByteArray {
-        val req = JSONObject().put("prompt", prompt.take(2000)).put("steps", 6)
-        val (code, body) = call("https://api.cloudflare.com/client/v4/accounts/$account/ai/run/@cf/black-forest-labs/flux-1-schnell",
-            "POST", mapOf("Authorization" to "Bearer $token"), req.toString())
+        val base = "https://api.cloudflare.com/client/v4/accounts/$account/ai/run/@cf/black-forest-labs"
+        try {
+            val (code, body) = multipart("$base/flux-2-klein-4b", token,
+                mapOf("prompt" to prompt.take(2000), "width" to "1024", "height" to "768"))
+            if (code in 200..299) {
+                val img = try { JSONObject(body).optJSONObject("result")?.optString("image") } catch (_: Exception) { null }
+                if (!img.isNullOrEmpty()) return Base64.decode(img, Base64.DEFAULT)
+            } else if (code == 401) {
+                throw Failed(cfError(code, body))
+            }
+        } catch (e: Failed) { throw e } catch (_: Exception) {}
+        val req = JSONObject().put("prompt", prompt.take(2000)).put("steps", 8)
+        val (code, body) = call("$base/flux-1-schnell", "POST", mapOf("Authorization" to "Bearer $token"), req.toString())
         if (code in 200..299) {
             val img = try { JSONObject(body).optJSONObject("result")?.optString("image") } catch (_: Exception) { null }
             if (!img.isNullOrEmpty()) return Base64.decode(img, Base64.DEFAULT)
             throw Failed("no picture in the answer")
         }
-        val msg = try {
-            JSONObject(body).optJSONArray("errors")?.optJSONObject(0)?.optString("message")
-        } catch (_: Exception) { null }
-        val text = "HTTP $code" + (msg?.takeIf { it.isNotBlank() }?.let { ": " + it.take(160) } ?: "")
+        val text = cfError(code, body)
         // 429: today's free allowance is used up (it resets at 09:00 Korean time).
         if (refused(code)) pause("cloudflare", text)
         throw Failed(text)
     }
 
+    private fun cfError(code: Int, body: String): String {
+        val msg = try {
+            JSONObject(body).optJSONArray("errors")?.optJSONObject(0)?.optString("message")
+        } catch (_: Exception) { null }
+        return "HTTP $code" + (msg?.takeIf { it.isNotBlank() }?.let { ": " + it.take(160) } ?: "")
+    }
+
+    private fun multipart(url: String, token: String, fields: Map<String, String>): Pair<Int, String> {
+        val boundary = "owl" + System.nanoTime()
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.connectTimeout = 20000
+        c.readTimeout = 120000
+        c.doOutput = true
+        c.setRequestProperty("Authorization", "Bearer $token")
+        c.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+        val sb = StringBuilder()
+        for ((k, v) in fields) sb.append("--$boundary\r\nContent-Disposition: form-data; name=\"$k\"\r\n\r\n$v\r\n")
+        sb.append("--$boundary--\r\n")
+        c.outputStream.use { it.write(sb.toString().toByteArray()) }
+        val code = c.responseCode
+        val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
+        c.disconnect()
+        return code to text
+    }
+
     /* ---------------- Pollinations (free credit that refills) ---------------- */
 
+    // Z-Image first (sharper), then Flux; a model the free credit doesn't cover moves on to the next.
     private fun pollinations(key: String, prompt: String): ByteArray {
+        var last: Exception? = null
+        for (model in listOf("zimage", "flux")) {
+            try { return pollinations(key, prompt, model, model == "flux") } catch (e: Exception) { last = e }
+        }
+        throw last ?: Failed("failed")
+    }
+
+    private fun pollinations(key: String, prompt: String, model: String, final: Boolean): ByteArray {
         val q = java.net.URLEncoder.encode(prompt.take(1500), "UTF-8").replace("+", "%20")
-        val c = URL("https://gen.pollinations.ai/image/$q?model=flux&width=1024&height=768&nologo=true&safe=true")
+        val c = URL("https://gen.pollinations.ai/image/$q?model=$model&width=1024&height=768&nologo=true&safe=true")
             .openConnection() as HttpURLConnection
         c.connectTimeout = 20000
         c.readTimeout = 120000
@@ -210,7 +257,7 @@ object ImageGen {
             val body = c.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
             val msg = try { JSONObject(body).let { it.optString("message").ifBlank { it.optJSONObject("error")?.optString("message").orEmpty() } } } catch (_: Exception) { body.take(160) }
             val text = "HTTP $code" + (msg.takeIf { it.isNotBlank() }?.let { ": " + it.take(160) } ?: "")
-            if (refused(code)) pause("pollinations", text)
+            if (final && refused(code)) pause("pollinations", text)
             throw Failed(text)
         } finally { c.disconnect() }
     }
