@@ -91,6 +91,10 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
         <service
+            android:name=".FilmService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
             android:name=".PlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
