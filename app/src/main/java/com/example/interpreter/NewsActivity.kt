@@ -2410,7 +2410,7 @@ class NewsActivity : Activity() {
                 st.current >= 0 -> StudyText.f("video_step_mac", st.current + 1, n)
                 else -> StudyText.f("video_step_mac", got, n)
             } + (if (st.lastError.isNotBlank()) "\n· " + st.lastError.take(140) else "")
-            show(line, got * 60 / n.coerceAtLeast(1))
+            show(line, got * 90 / n.coerceAtLeast(1))
             when (st.state) {
                 "done" -> break
                 "error" -> throw IllegalStateException(st.error.ifBlank { st.lastError })
@@ -2527,7 +2527,7 @@ class NewsActivity : Activity() {
                 for (i in (if (onMac) n else 0) until n) {
                     if (makingCancelled) throw VideoMaker.Cancelled()
                     val step = StudyText.f("video_step_art", i + 1, n)
-                    show(step, i * 60 / n)
+                    show(step, i * 90 / n)
                     val (prompt, visual) = artPrompts(a, texts, i, cast)
                     var bytes: ByteArray? = null
                     // The engine being tried and its last error show under the step, so a slow or
@@ -2535,7 +2535,7 @@ class NewsActivity : Activity() {
                     for (attempt in 0..1) {
                         if (makingCancelled) throw VideoMaker.Cancelled()
                         bytes = try {
-                            ImageGen.draw(prefs, prompt, visual, ref) { what -> show("$step\n· ${what.take(140)}", i * 60 / n) }
+                            ImageGen.draw(prefs, prompt, visual, ref) { what -> show("$step\n· ${what.take(140)}", i * 90 / n) }
                         } catch (e: Exception) { lastArtError = e.message.orEmpty(); null }
                         if (bytes != null) break
                         Thread.sleep(1500)
@@ -2551,12 +2551,12 @@ class NewsActivity : Activity() {
                 }
                 // 2. The narration, with the time of every word.
                 val spoken = VideoMaker.narrate(this, texts, playLang.speechTag, tmp, { makingCancelled }) { i ->
-                    show(StudyText.f("video_step_voice", i + 1, n), 60 + i * 10 / n)
+                    show(StudyText.f("video_step_voice", i + 1, n), 90 + i * 5 / n)
                 }
                 // 3. The video.
                 val mp4 = java.io.File(tmp, "film.mp4")
                 val timing = VideoMaker.render(spoken, drawn.toList(), mp4, { makingCancelled }) { pct ->
-                    show(StudyText.f("video_step_film", pct), 70 + pct * 30 / 100)
+                    show(StudyText.f("video_step_film", pct), 95 + pct * 5 / 100)
                 }
                 // 4. All at once: the new pictures replace the old ones, and the video is kept with them.
                 val hidden = hiddenArt()
