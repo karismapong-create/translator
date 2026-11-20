@@ -1,7 +1,7 @@
 #!/bin/bash
 # Owl Studio installer for an Apple Silicon Mac.
 #   bash install.sh          install, pick models for this Mac's memory, start at login
-#   bash install.sh --test   also draw two test pictures (downloads the models the first time)
+#   bash install.sh --test   also draw two test pictures (downloads the model the first time)
 set -e
 cd "$(dirname "$0")"
 HERE="$(pwd)"
@@ -81,7 +81,7 @@ launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
 
 if [ "$1" = "--test" ]; then
-  echo "Drawing two test pictures (the first run downloads the models, tens of GB)..."
+  echo "Drawing two test pictures (the first run downloads the model, about 20 GB)..."
   /usr/bin/python3 owl_studio.py --selftest
 fi
 

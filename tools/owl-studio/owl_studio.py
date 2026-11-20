@@ -4,8 +4,9 @@ Owl Studio: draws a book part's pictures on your Mac with local Qwen models, for
 
 - Ollama (a local Qwen text model) writes the book's character sheet once and a short visual
   description for every sentence.
-- mflux draws the first picture with Qwen-Image, and each next one with Qwen-Image-Edit from the
-  picture before it, so characters and style carry through the whole part.
+- mflux draws every picture with Qwen-Image from the same character sheet and seed, so characters and
+  style carry through the whole part. (Optionally, "use_edit" draws each next one with
+  Qwen-Image-Edit from the picture before it.)
 - The app sends a job, then fetches each picture as soon as it is ready; the job goes on if the
   phone sleeps, and sending the same part again picks it up where it is. The phone records the
   narration and makes the video itself.
@@ -37,12 +38,18 @@ DEFAULTS = {
     "width": 1024,
     "height": 768,
     "steps": 20,
+    # Draw each next picture with Qwen-Image-Edit from the one before it. Off by default: on a real run
+    # (mflux, OsaurusAI Edit q6) the edit model kept the reference almost unchanged whatever the prompt
+    # said, took about 14 minutes a picture against 5, and the colours grew harsher from one to the next.
+    # With it off every picture is drawn fresh from the same character sheet and seed, which kept the
+    # characters recognisable.
+    "use_edit": False,
     # {model} {prompt} {out} {ref} {width} {height} {steps} {seed} are filled in for each picture.
     "gen_model": "OsaurusAI/Qwen-Image-mflux-6bit",
     "edit_model": "OsaurusAI/Qwen-Image-Edit-mflux-q6",
-    "gen_cmd": ["mflux-generate-qwen", "--model", "{model}", "--base-model", "qwen", "--prompt", "{prompt}",
+    "gen_cmd": ["mflux-generate-qwen", "--model", "{model}", "--base-model", "qwen-image", "--prompt", "{prompt}",
                 "--width", "{width}", "--height", "{height}", "--steps", "{steps}", "--seed", "{seed}", "--output", "{out}"],
-    "edit_cmd": ["mflux-generate-qwen-edit", "--model", "{model}", "--base-model", "qwen", "--image-paths", "{ref}",
+    "edit_cmd": ["mflux-generate-qwen-edit", "--model", "{model}", "--base-model", "qwen-image-edit", "--image-paths", "{ref}",
                  "--prompt", "{prompt}", "--width", "{width}", "--height", "{height}", "--steps", "{steps}",
                  "--seed", "{seed}", "--output", "{out}"],
 }
@@ -91,8 +98,10 @@ def ask_llm(system, user, max_tokens=400):
     with urllib.request.urlopen(req, timeout=300) as r:
         text = json.loads(r.read().decode())["message"]["content"]
     # Reasoning models may still wrap thoughts in <think> tags.
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip().strip('"')
-    return text
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    # Markdown bold/headings only add noise to an image prompt.
+    text = re.sub(r"\*\*|__|^#+\s*", "", text, flags=re.M)
+    return text.strip().strip('"')
 
 
 def cast_sheet(book_id, title, author):
@@ -207,7 +216,7 @@ def work(jid):
         write_state(jid, st)
         prompt = visual(st, i, cast)
         try:
-            if prev is None:
+            if prev is None or not CFG.get("use_edit"):
                 run_draw("gen_cmd", CFG["gen_model"], prompt, png, None, seed)
             else:
                 edit = ("The picture is the previous illustration of this story. Keep exactly the same characters "
@@ -367,6 +376,13 @@ def selftest():
     t = time.time()
     run_draw("gen_cmd", CFG["gen_model"], STYLE + " A small owl reading a book under a lamp.", out, None, 7)
     print("Qwen-Image OK in", int(time.time() - t), "s ->", out)
+    out1 = DATA / "selftest-2.png"
+    out1.unlink(missing_ok=True)
+    t = time.time()
+    run_draw("gen_cmd", CFG["gen_model"], STYLE + " The same small owl now flies over a moonlit lake.", out1, None, 7)
+    print("Qwen-Image (next picture) OK in", int(time.time() - t), "s ->", out1)
+    if not CFG.get("use_edit"):
+        return
     out2 = DATA / "selftest-edit.png"
     out2.unlink(missing_ok=True)
     t = time.time()
