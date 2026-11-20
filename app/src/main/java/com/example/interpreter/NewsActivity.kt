@@ -1899,7 +1899,9 @@ class NewsActivity : Activity() {
     private fun paint(i: Int, holder: LinearLayout?, again: Boolean) {
         val a = art ?: return
         holder ?: return
-        if (!ImageGen.available(prefs)) {
+        // "MacBook local Qwen" draws single pictures on the Mac too, not with the other engines.
+        val onMac = ImageGen.engine(prefs) == "mac" && MacStudio.configured(prefs)
+        if (!onMac && !ImageGen.available(prefs)) {
             android.app.AlertDialog.Builder(this).setMessage(StudyText.t("art_need_key")).setPositiveButton(I18n.t("close"), null)
                 .show().also { Ui.watch(it) }
             return
@@ -1926,9 +1928,15 @@ class NewsActivity : Activity() {
             // The same characters and style in every picture of the book, so a part's pictures read as
             // one continuous story: the book's character sheet goes into every request, and the
             // nearest earlier picture of this part is the reference.
-            val (prompt, visual) = artPrompts(a, texts, i, castSheet(a))
-            val ref = referenceArt(a, i)
-            val result: Any = try { ImageGen.draw(prefs, prompt, visual, ref) } catch (e: Exception) { e }
+            val result: Any = try {
+                if (onMac) {
+                    MacStudio.drawOne(prefs, "${a.book.id}_${a.section.index}_${a.lang}_${a.level}_s$i", a.book.id, a.book.title,
+                        a.book.author, a.section.chapter, texts[i], texts.getOrNull(i - 1).orEmpty(), texts.getOrNull(i + 1).orEmpty(), again)
+                } else {
+                    val (prompt, visual) = artPrompts(a, texts, i, castSheet(a))
+                    ImageGen.draw(prefs, prompt, visual, referenceArt(a, i))
+                }
+            } catch (e: Exception) { e }
             val bytes = result as? ByteArray
             if (bytes != null) try { f.writeBytes(bytes); setHidden(f.name, false) } catch (_: Exception) {}
             val bmp = bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }

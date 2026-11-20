@@ -78,7 +78,7 @@ object ImageGen {
         val pk = pollKey(prefs)
         val g = Providers.key(prefs, "gemini")
         val o = Providers.key(prefs, "openai")
-        val nano = engine(prefs) != "auto"
+        val nano = engine(prefs) == "nano" || engine(prefs) == "pro"
         if (nano && g.isNotEmpty()) tries += "gemini" to { gemini(prefs, g, prompt, ref) }
         if (cfT.isNotEmpty()) tries += "cloudflare" to { cloudflare(cfAccountFor(prefs, cfT), cfT, visual, ref) }
         if (pk.isNotEmpty()) tries += "pollinations" to { pollinations(pk, visual) }
