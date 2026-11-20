@@ -11,34 +11,54 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Draws a picture from a description with the user's own key: Gemini image models first (the
- * cheapest image model the key can use is looked up, so renamed models keep working), then OpenAI.
- * Image generation is a paid feature on both services.
+ * Draws a picture from a description with the user's own key. Free services first: Cloudflare
+ * Workers AI (FLUX.1 schnell, a free daily allowance) and Pollinations (free credit that refills),
+ * then Gemini image models (the cheapest model the key can use is looked up) and OpenAI, which
+ * draw only with billing turned on.
  */
 object ImageGen {
     class Failed(message: String) : Exception(message)
 
-    fun available(prefs: SharedPreferences) =
-        Providers.key(prefs, "gemini").isNotEmpty() || Providers.key(prefs, "openai").isNotEmpty()
+    // Picture-only keys, kept apart from the AI engine keys.
+    fun cfAccount(prefs: SharedPreferences) = prefs.getString("cf_account", "").orEmpty().trim()
+    fun cfToken(prefs: SharedPreferences) = prefs.getString("cf_token", "").orEmpty().trim()
+    fun pollKey(prefs: SharedPreferences) = prefs.getString("poll_key", "").orEmpty().trim()
 
-    // After a quota or billing refusal, no more picture requests for a while, so the same key keeps
-    // its allowance for making lessons.
-    @Volatile private var pausedUntil = 0L
-    @Volatile private var pausedReason = ""
+    fun available(prefs: SharedPreferences) =
+        (cfAccount(prefs).isNotEmpty() && cfToken(prefs).isNotEmpty()) || pollKey(prefs).isNotEmpty() ||
+            Providers.key(prefs, "gemini").isNotEmpty() || Providers.key(prefs, "openai").isNotEmpty()
+
+    // After a quota or billing refusal, that service gets no picture requests for a while (the others
+    // are still tried), so a shared key keeps its allowance for making lessons.
+    private val pausedUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val pausedReason = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private fun refused(code: Int) = code == 429 || code == 403 || code == 402
 
+    private fun pause(service: String, reason: String) {
+        pausedReason[service] = reason
+        pausedUntil[service] = System.currentTimeMillis() + 10 * 60_000L
+    }
+
     /** JPEG bytes, at most 1024 px wide. Runs on a background thread. */
     fun draw(prefs: SharedPreferences, prompt: String): ByteArray {
-        if (System.currentTimeMillis() < pausedUntil) throw Failed(pausedReason)
+        val tries = ArrayList<Pair<String, () -> ByteArray>>()
+        val cfA = cfAccount(prefs)
+        val cfT = cfToken(prefs)
+        val pk = pollKey(prefs)
         val g = Providers.key(prefs, "gemini")
         val o = Providers.key(prefs, "openai")
+        if (cfA.isNotEmpty() && cfT.isNotEmpty()) tries += "cloudflare" to { cloudflare(cfA, cfT, prompt) }
+        if (pk.isNotEmpty()) tries += "pollinations" to { pollinations(pk, prompt) }
+        if (g.isNotEmpty()) tries += "gemini" to { gemini(prefs, g, prompt) }
+        if (o.isNotEmpty()) tries += "openai" to { openai(o, prompt) }
         var last: Exception? = null
-        if (g.isNotEmpty()) {
-            try { return shrink(gemini(prefs, g, prompt)) } catch (e: Exception) { last = e }
-        }
-        if (o.isNotEmpty()) {
-            try { return shrink(openai(o, prompt)) } catch (e: Exception) { last = e }
+        for ((service, run) in tries) {
+            if (System.currentTimeMillis() < (pausedUntil[service] ?: 0L)) {
+                if (last == null) last = Failed(pausedReason[service].orEmpty())
+                continue
+            }
+            try { return shrink(run()) } catch (e: Exception) { last = Failed(service + ": " + (e.message ?: "")) }
         }
         throw last ?: Failed("no key")
     }
@@ -122,8 +142,7 @@ object ImageGen {
                 }
                 last = Failed(errorText(code, body))
                 if (refused(code)) {
-                    pausedReason = errorText(code, body)
-                    pausedUntil = System.currentTimeMillis() + 10 * 60_000L
+                    pause("gemini", errorText(code, body))
                     throw last
                 }
                 // A 400 may be the picture settings; try once without them. Other errors: next model.
@@ -148,13 +167,52 @@ object ImageGen {
             } else {
                 last = Failed(errorText(code, body))
                 if (refused(code)) {
-                    pausedReason = errorText(code, body)
-                    pausedUntil = System.currentTimeMillis() + 10 * 60_000L
+                    pause("openai", errorText(code, body))
                     throw last
                 }
             }
         }
         throw last ?: Failed("failed")
+    }
+
+    /* ---------------- Cloudflare Workers AI (free daily allowance) ---------------- */
+
+    private fun cloudflare(account: String, token: String, prompt: String): ByteArray {
+        val req = JSONObject().put("prompt", prompt.take(2000)).put("steps", 6)
+        val (code, body) = call("https://api.cloudflare.com/client/v4/accounts/$account/ai/run/@cf/black-forest-labs/flux-1-schnell",
+            "POST", mapOf("Authorization" to "Bearer $token"), req.toString())
+        if (code in 200..299) {
+            val img = try { JSONObject(body).optJSONObject("result")?.optString("image") } catch (_: Exception) { null }
+            if (!img.isNullOrEmpty()) return Base64.decode(img, Base64.DEFAULT)
+            throw Failed("no picture in the answer")
+        }
+        val msg = try {
+            JSONObject(body).optJSONArray("errors")?.optJSONObject(0)?.optString("message")
+        } catch (_: Exception) { null }
+        val text = "HTTP $code" + (msg?.takeIf { it.isNotBlank() }?.let { ": " + it.take(160) } ?: "")
+        // 429: today's free allowance is used up (it resets at 09:00 Korean time).
+        if (refused(code)) pause("cloudflare", text)
+        throw Failed(text)
+    }
+
+    /* ---------------- Pollinations (free credit that refills) ---------------- */
+
+    private fun pollinations(key: String, prompt: String): ByteArray {
+        val q = java.net.URLEncoder.encode(prompt.take(1500), "UTF-8").replace("+", "%20")
+        val c = URL("https://gen.pollinations.ai/image/$q?model=flux&width=1024&height=768&nologo=true&safe=true")
+            .openConnection() as HttpURLConnection
+        c.connectTimeout = 20000
+        c.readTimeout = 120000
+        c.setRequestProperty("Authorization", "Bearer $key")
+        try {
+            val code = c.responseCode
+            if (code in 200..299 && c.contentType.orEmpty().startsWith("image")) return c.inputStream.use { it.readBytes() }
+            val body = c.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val msg = try { JSONObject(body).let { it.optString("message").ifBlank { it.optJSONObject("error")?.optString("message").orEmpty() } } } catch (_: Exception) { body.take(160) }
+            val text = "HTTP $code" + (msg.takeIf { it.isNotBlank() }?.let { ": " + it.take(160) } ?: "")
+            if (refused(code)) pause("pollinations", text)
+            throw Failed(text)
+        } finally { c.disconnect() }
     }
 
     private fun shrink(bytes: ByteArray): ByteArray {
