@@ -25,6 +25,7 @@ class FilmService : Service() {
         private const val ACTION_STOP = "com.example.interpreter.STOP_FILM"
         private const val ACTION_UPDATE = "com.example.interpreter.UPDATE_FILM"
         private const val ACTION_DONE = "com.example.interpreter.DONE_FILM"
+        private const val ACTION_NOTE = "com.example.interpreter.NOTE_FILM"
         private const val CHANNEL = "film_make"
         private const val ID = 7101
         private const val DONE_ID = 7102
@@ -37,6 +38,17 @@ class FilmService : Service() {
         @Volatile var text = ""
         @Volatile var pct = 0
         @Volatile var preview: android.graphics.Bitmap? = null
+        /** The part being made now ("" between parts) and its name, e.g. "The Jungle Book · 2". */
+        @Volatile var currentKey = ""
+            private set
+        @Volatile var label = ""
+            private set
+        // Parts asked for, in order (the one being made first). One video at a time, whichever screen
+        // asked for it, so the next part waits for the one before.
+        private val keys = ArrayList<String>()
+        val work: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+        fun isQueued(key: String) = synchronized(keys) { key in keys }
 
         private fun send(ctx: Context, action: String?, text: String, pct: Int, first: Boolean) {
             val i = Intent(ctx, FilmService::class.java).setAction(action).putExtra("text", text).putExtra("pct", pct)
@@ -45,16 +57,35 @@ class FilmService : Service() {
             } catch (_: Exception) {}
         }
 
-        fun start(ctx: Context, text: String) {
-            running = true; this.text = text; pct = 0; preview = null
-            send(ctx, null, text, 0, true)
+        /** On the UI thread, when the user asks for a part's video: queues it, starting the service if needed. */
+        fun enqueue(ctx: Context, key: String, label: String) {
+            synchronized(keys) {
+                keys.add(key)
+                if (!running) {
+                    running = true; text = ""; pct = 0; preview = null; this.label = label
+                    send(ctx, null, label, 0, true)
+                }
+            }
         }
+
+        /** On the work thread, when that part's turn comes. */
+        fun begin(key: String, label: String) {
+            currentKey = key; this.label = label; text = ""; pct = 0; preview = null
+        }
+
         fun update(ctx: Context, text: String, pct: Int) { if (running) send(ctx, ACTION_UPDATE, text, pct, false) }
-        /** [text] empty: no "done" notification (cancelled). */
-        fun finish(ctx: Context, text: String) {
-            onStop = null
-            if (running) send(ctx, ACTION_DONE, text, 100, false)
-            running = false
+
+        /** That part is over; [text] empty: no "done" notification (cancelled). The service stops after the last part. */
+        fun end(ctx: Context, key: String, text: String) {
+            synchronized(keys) {
+                keys.remove(key)
+                onStop = null
+                currentKey = ""
+                if (keys.isEmpty()) {
+                    running = false
+                    send(ctx, ACTION_DONE, text, 100, false)
+                } else if (text.isNotBlank()) send(ctx, ACTION_NOTE, text, 0, false)
+            }
         }
     }
 
@@ -70,6 +101,7 @@ class FilmService : Service() {
             ACTION_STOP -> { onStop?.invoke(); update(StudyText.t("video_cancel") + "…", pct) }
             ACTION_UPDATE -> update(text, pct)
             ACTION_DONE -> finish(text)
+            ACTION_NOTE -> done(text)
             else -> { goForeground(text); acquire() }
         }
         return START_NOT_STICKY
@@ -136,8 +168,14 @@ class FilmService : Service() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         stopForeground(STOP_FOREGROUND_REMOVE)
+        done(text)
+        stopSelf()
+    }
+
+    // How one part ended, as its own notification (each part keeps its own).
+    private fun done(text: String) {
         if (text.isNotBlank()) {
-            manager().notify(DONE_ID, builder()
+            manager().notify(DONE_ID + (text.hashCode() and 0xffff), builder()
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setContentTitle(Ui.plain("🎬 " + StudyText.t("video_make")))
                 .setContentText(Ui.plain(text))
@@ -146,7 +184,6 @@ class FilmService : Service() {
                 .setAutoCancel(true)
                 .build())
         }
-        stopSelf()
     }
 
     override fun onDestroy() {

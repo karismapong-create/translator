@@ -2431,12 +2431,13 @@ class NewsActivity : Activity() {
 
     @Volatile private var makingCancelled = false
     @Volatile private var lastArtError = ""
-    private val makeNet = Executors.newSingleThreadExecutor()
 
     private fun confirmMakeFilm() {
         val a = art ?: return
-        // Already making one (maybe with its dialog closed): show where it is again.
-        if (FilmService.running) { showFilmProgress(); return }
+        // This part's video is being made (maybe with its dialog closed): show where it is again.
+        val key = filmKey(a)
+        if (FilmService.currentKey == key) { showFilmProgress(); return }
+        if (FilmService.isQueued(key)) { toast(StudyText.t("video_queued_already")); return }
         // The progress notification while the video is made in the background.
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -2473,7 +2474,7 @@ class NewsActivity : Activity() {
             addView(bar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(22), dp(4), dp(22), dp(12)) })
         }
         val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle(Ui.plain("🎬 " + StudyText.t("video_make")))
+            .setTitle(Ui.plain("🎬 " + FilmService.label))
             .setView(box)
             .setCancelable(false)
             // The work goes on with the dialog closed, the app in the background or the screen off:
@@ -2486,6 +2487,7 @@ class NewsActivity : Activity() {
             override fun run() {
                 if (!dialog.isShowing) return
                 if (!FilmService.running) { try { dialog.dismiss() } catch (_: Exception) {}; return }
+                dialog.setTitle(Ui.plain("🎬 " + FilmService.label))
                 status.text = FilmService.text
                 bar.progress = FilmService.pct
                 FilmService.preview?.takeIf { it !== shown }?.let { shown = it; preview.setImageBitmap(it); preview.visibility = View.VISIBLE }
@@ -2496,25 +2498,34 @@ class NewsActivity : Activity() {
         return dialog
     }
 
+    private fun filmKey(a: Art) = "${a.book.id}_${a.section.index}_${a.lang}_${a.level}"
+
     private fun makeFilm(a: Art) {
         filmPause()
         if (playing) pausePlay()
-        makingCancelled = false
         val app = applicationContext
-        FilmService.start(app, StudyText.t("video_make"))
-        FilmService.onStop = { makingCancelled = true }
-        val dialog = showFilmProgress()
+        val key = filmKey(a)
+        val label = a.book.title + " · " + a.section.chapter.ifBlank { (a.section.index + 1).toString() }
+        val busy = FilmService.running
+        val before = FilmService.label
+        FilmService.enqueue(app, key, label)
+        // Another part's video is being made: this one follows it (the dialog shows the one being made).
+        if (busy) toast(StudyText.f("video_queued", before)) else showFilmProgress()
         var lastNote = 0L
         fun show(text: String, pct: Int) {
             FilmService.text = text
             FilmService.pct = pct
             val now = System.currentTimeMillis()
-            if (now - lastNote > 1500) { lastNote = now; FilmService.update(app, a.book.title + "\n" + text, pct) }
+            if (now - lastNote > 1500) { lastNote = now; FilmService.update(app, label + "\n" + text, pct) }
         }
         val texts = sentTexts.toList()
         val n = texts.size
-        val tmp = java.io.File(cacheDir, "film_${a.book.id}_${a.section.index}").apply { deleteRecursively(); mkdirs() }
-        makeNet.execute {
+        val tmp = java.io.File(cacheDir, "film_${a.book.id}_${a.section.index}")
+        FilmService.work.execute {
+            FilmService.begin(key, label)
+            makingCancelled = false
+            FilmService.onStop = { makingCancelled = true }
+            tmp.deleteRecursively(); tmp.mkdirs()
             val result: Any = try {
                 // 1. Every picture again, in order, each following the one before it: on the Mac with
                 // local Qwen, or here with the picture engine.
@@ -2573,14 +2584,13 @@ class NewsActivity : Activity() {
                 n - failed
             } catch (e: Exception) { e }
             tmp.deleteRecursively()
-            FilmService.finish(app, when (result) {
-                is Int -> a.book.title + "\n" + StudyText.f("video_made", result)
+            FilmService.end(app, key, when (result) {
+                is Int -> label + "\n" + StudyText.f("video_made", result)
                 is VideoMaker.Cancelled -> ""
-                is Exception -> a.book.title + "\n" + StudyText.f("video_failed", result.message ?: "")
+                is Exception -> label + "\n" + StudyText.f("video_failed", result.message ?: "")
                 else -> ""
             })
             runOnUiThread {
-                try { dialog.dismiss() } catch (_: Exception) {}
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 when (result) {
                     is Int -> {
