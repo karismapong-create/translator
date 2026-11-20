@@ -421,6 +421,8 @@ class NewsActivity : Activity() {
 
     // The lesson on screen and how to keep a corrected meaning in it.
     private var shownLesson: JSONObject? = null
+    private val meaningViews = HashMap<Int, TextView>()
+    private val reviewNet = Executors.newSingleThreadExecutor()
     private var lessonSaver: ((JSONObject) -> Unit)? = null
 
     // Long-press on a meaning: correct it here, and optionally fix the same mistake everywhere.
@@ -437,6 +439,28 @@ class NewsActivity : Activity() {
             addView(note(StudyText.t("fix_everywhere")))
             addView(wrong); addView(right)
         }
+        val src = s.optString("text")
+        val reviewLang = playLang
+        val status = note("")
+        box.addView(status, 0)
+        status.visibility = View.GONE
+        if (MeaningReview.available(prefs)) box.addView(Button(this).apply {
+            text = StudyText.t("review_ai")
+            setOnClickListener {
+                isEnabled = false
+                status.visibility = View.VISIBLE
+                status.text = StudyText.t("review_checking")
+                val draft = full.text.toString()
+                reviewNet.execute {
+                    val r = MeaningReview.review(prefs, src, draft, reviewLang, home)
+                    runOnUiThread {
+                        isEnabled = true
+                        if (r != null) { full.setText(r); status.text = StudyText.t("review_done") }
+                        else status.text = StudyText.t("review_failed")
+                    }
+                }
+            }
+        }, 1)
         android.app.AlertDialog.Builder(this)
             .setTitle(StudyText.t("fix_title"))
             .setView(ScrollView(this).apply { addView(box) })
@@ -451,6 +475,44 @@ class NewsActivity : Activity() {
             }
             .setNegativeButton(I18n.t("close"), null)
             .show().also { Ui.watch(it) }
+    }
+
+    // Second check: translations that look wrong (other scripts mixed in, empty, copied) are reviewed
+    // again in the background by the phone's AI or the chosen engine, then saved and shown.
+    private fun autoReview(o: JSONObject, l: Lang) {
+        val sentences = o.optJSONArray("sentences") ?: return
+        val h = home
+        val bad = (0 until sentences.length()).filter { i ->
+            val st = sentences.optJSONObject(i) ?: return@filter false
+            meaningViews.containsKey(i) && MeaningReview.suspicious(st.optString("text"), st.optString("meaning"), h.code)
+        }
+        if (bad.isEmpty()) return
+        val canReview = MeaningReview.available(prefs)
+        bad.forEach { i ->
+            meaningViews[i]?.apply {
+                alpha = 0.55f
+                if (!canReview) text = StudyText.f("review_flag", text)
+            }
+        }
+        if (!canReview) return
+        val saver = lessonSaver
+        reviewNet.execute {
+            var changed = false
+            for (i in bad) {
+                val st = sentences.optJSONObject(i) ?: continue
+                val fixed = MeaningReview.review(prefs, st.optString("text"), st.optString("meaning"), l, h)
+                if (fixed != null) { st.put("meaning", fixed); changed = true }
+                runOnUiThread {
+                    if (shownLesson !== o) return@runOnUiThread
+                    meaningViews[i]?.apply {
+                        alpha = 1f
+                        text = if (fixed != null) Corrections.apply(context, h.code, fixed)
+                        else StudyText.f("review_flag", text)
+                    }
+                }
+            }
+            if (changed) saver?.invoke(o)
+        }
     }
 
     // The reader: sentences with every reading tool, then key words, then the footer.
@@ -473,6 +535,7 @@ class NewsActivity : Activity() {
             lessonBox.addView(tv)
         }
         val sentences = o.optJSONArray("sentences") ?: JSONArray()
+        meaningViews.clear()
         sentViews.clear()
         artHolders.clear()
         sentTexts.clear()
@@ -561,7 +624,7 @@ class NewsActivity : Activity() {
                     // A tap pauses or goes on, as on the white space; a long press corrects the meaning.
                     setOnClickListener { togglePlay() }
                     setOnLongClickListener { editMeaning(index, this); true }
-                })
+                }.also { meaningViews[index] = it })
             }
             // Room for the scene's picture; one drawn before shows again at once.
             if (art != null) {
@@ -576,6 +639,7 @@ class NewsActivity : Activity() {
             topMargin = dp(4)
         })
         loadSentUnits(l, o)
+        autoReview(o, l)
 
         val words = o.optJSONArray("words") ?: JSONArray()
         if (words.length() > 0) {
