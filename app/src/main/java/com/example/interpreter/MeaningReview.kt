@@ -27,14 +27,11 @@ object MeaningReview {
     // Background thread. Returns a checked translation, or null when no engine could give a good one.
     fun review(prefs: SharedPreferences, text: String, meaning: String, src: Lang, home: Lang): String? {
         val tries = mutableListOf<() -> String>()
-        if (OnDevice.ready) tries += { OnDevice.review(text, meaning, src.code, home.code) }
+        if (OnDevice.ready) tries.add { OnDevice.review(text, meaning, src.code, home.code) }
         val e = RemoteTranslate.engine(prefs)
         if (e != null && e != OnDevice.ID) {
-            tries += if (RemoteTranslate.canWrite(e)) {
-                { RemoteTranslate.ask(prefs, e, system(src, home), user(text, meaning), 600) }
-            } else {
-                { RemoteTranslate.translate(prefs, e, text, src, home, "") }
-            }
+            if (RemoteTranslate.canWrite(e)) tries.add { RemoteTranslate.ask(prefs, e, system(src, home), user(text, meaning), 600) }
+            else tries.add { RemoteTranslate.translate(prefs, e, text, src, home, "") }
         }
         for (t in tries) {
             try {
