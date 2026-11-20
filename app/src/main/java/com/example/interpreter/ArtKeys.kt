@@ -60,7 +60,8 @@ object ArtKeys {
         val engines = listOf(
             "auto" to t("자동 — 무료 서비스 먼저", "自動 — 無料サービスを先に", "自动 — 先用免费服务", "Auto — free services first"),
             "nano" to t("나노 바나나 먼저 (Gemini 키, 장당 약 50원)", "Nano Banana を先に（Geminiキー、1枚約5円）", "先用 Nano Banana（Gemini 密钥，每张约 0.04 美元）", "Nano Banana first (Gemini key, about 4¢ a picture)"),
-            "pro" to t("나노 바나나 Pro 먼저 (가장 좋음, 장당 약 200원)", "Nano Banana Pro を先に（最高品質、1枚約20円）", "先用 Nano Banana Pro（最佳，每张约 0.15 美元）", "Nano Banana Pro first (best, about 15¢ a picture)"))
+            "pro" to t("나노 바나나 Pro 먼저 (가장 좋음, 장당 약 200원)", "Nano Banana Pro を先に（最高品質、1枚約20円）", "先用 Nano Banana Pro（最佳，每张约 0.15 美元）", "Nano Banana Pro first (best, about 15¢ a picture)"),
+            "mac" to t("맥북 로컬 Qwen (영상 만들기, 무료)", "MacBookのローカルQwen（動画作成、無料）", "MacBook 本地 Qwen（制作视频，免费）", "MacBook local Qwen (making videos, free)"))
         val group = android.widget.RadioGroup(a)
         val current = ImageGen.engine(prefs)
         engines.forEachIndexed { k, (id, name) ->
@@ -93,6 +94,27 @@ object ArtKeys {
                 "③ Paste the key below (the same key as the Gemini AI engine)."))
         link(t("Google AI Studio 열기", "Google AI Studioを開く", "打开 Google AI Studio", "Open Google AI Studio"), "https://aistudio.google.com/apikey")
         val gemini = field(t("Gemini API 키 (AIza…)", "Gemini APIキー（AIza…）", "Gemini API 密钥（AIza…）", "Gemini API key (AIza…)"), Providers.key(prefs, "gemini"))
+
+        // Owl Studio on the user's Mac (tools/owl-studio): local Qwen draws a part's pictures for its video.
+        text(t("맥북 (로컬 Qwen)", "MacBook（ローカルQwen）", "MacBook（本地 Qwen）", "MacBook (local Qwen)"), 16f, true)
+        text(t("맥북에서 Owl Studio를 실행하면, 영상 만들기의 그림을 맥북의 Qwen이 그려서 한 장씩 바로 보내 줘요. 폰을 꺼도 맥북은 계속 그려요. 설치 스크립트가 알려 주는 주소(WireGuard IP:8765)와 토큰을 넣으세요.",
+            "MacでOwl Studioを動かすと、動画作成の絵をMacのQwenが描いて1枚ずつ送ります。スマホを切ってもMacは描き続けます。インストーラーが表示するアドレスとトークンを入れてください。",
+            "在 Mac 上运行 Owl Studio 后，制作视频的插图由 Mac 上的 Qwen 绘制并逐张发送，手机关屏 Mac 也会继续。请填写安装脚本显示的地址和令牌。",
+            "Run Owl Studio on your Mac and its local Qwen draws the pictures for making a video, sending each as soon as it's done; the Mac keeps going if the phone sleeps. Enter the address (WireGuard IP:8765) and token the installer shows."), 13f)
+        val macUrl = field(t("주소 (예: 10.0.0.2:8765)", "アドレス（例: 10.0.0.2:8765）", "地址（如 10.0.0.2:8765）", "Address (e.g. 10.0.0.2:8765)"), prefs.getString("mac_url", "").orEmpty())
+        val macToken = field(t("토큰", "トークン", "令牌", "Token"), prefs.getString("mac_token", "").orEmpty())
+        Button(a).apply {
+            text = t("연결 확인", "接続を確認", "测试连接", "Test the connection")
+            isAllCaps = false
+            setOnClickListener {
+                val url = MacStudio.base(macUrl.text.toString())
+                val tok = macToken.text.toString().trim()
+                Thread {
+                    val msg = try { MacStudio.health(url, tok) } catch (e: Exception) { "✘ " + (e.message ?: e.javaClass.simpleName) }
+                    a.runOnUiThread { Toast.makeText(a, Ui.plain(msg), Toast.LENGTH_LONG).show() }
+                }.start()
+            }
+        }.also { box.addView(it) }
 
         text("Cloudflare Workers AI", 16f, true)
         text(t("하루 무료 사용량 안에서 100장 넘게 그릴 수 있어요 (매일 오전 9시에 다시 채워져요).\n" +
@@ -146,6 +168,8 @@ object ArtKeys {
                     .putString("cf_token", cfToken.text.toString().trim())
                     .putString("poll_key", poll.text.toString().trim())
                     .putString("gemini_key", gemini.text.toString().trim())
+                    .putString("mac_url", macUrl.text.toString().trim())
+                    .putString("mac_token", macToken.text.toString().trim())
                     .apply()
                 val acc = cfAccount.text.toString().trim()
                 if (acc.isNotEmpty() && !ImageGen.validAccount(acc)) {
