@@ -52,7 +52,8 @@ object ImageGen {
      * [ref], if given, is an earlier picture of the same part: Nano Banana and FLUX.2 klein keep its
      * characters and style, so the pictures of a part look like one continuous story.
      */
-    fun draw(prefs: SharedPreferences, prompt: String, visual: String = prompt, ref: ByteArray? = null): ByteArray {
+    fun draw(prefs: SharedPreferences, prompt: String, visual: String = prompt, ref: ByteArray? = null,
+             status: ((String) -> Unit)? = null): ByteArray {
         val tries = ArrayList<Pair<String, () -> ByteArray>>()
         val cfA = cfAccount(prefs)
         val cfT = cfToken(prefs)
@@ -71,7 +72,11 @@ object ImageGen {
                 if (last == null) last = Failed(pausedReason[service].orEmpty())
                 continue
             }
-            try { return shrink(run()) } catch (e: Exception) { last = Failed(service + ": " + (e.message ?: "")) }
+            status?.invoke(service)
+            try { return shrink(run()) } catch (e: Exception) {
+                last = Failed(service + ": " + (e.message ?: e.javaClass.simpleName))
+                status?.invoke(last.message.orEmpty())
+            }
         }
         throw last ?: Failed("no key")
     }
@@ -80,7 +85,7 @@ object ImageGen {
         val c = URL(url).openConnection() as HttpURLConnection
         c.requestMethod = method
         c.connectTimeout = 20000
-        c.readTimeout = 120000
+        c.readTimeout = 60000
         headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
         if (body != null) {
             c.doOutput = true
@@ -243,7 +248,7 @@ object ImageGen {
         val c = URL(url).openConnection() as HttpURLConnection
         c.requestMethod = "POST"
         c.connectTimeout = 20000
-        c.readTimeout = 120000
+        c.readTimeout = 60000
         c.doOutput = true
         c.setRequestProperty("Authorization", "Bearer $token")
         c.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
@@ -278,7 +283,7 @@ object ImageGen {
         val c = URL("https://gen.pollinations.ai/image/$q?model=$model&width=1024&height=768&nologo=true&safe=true")
             .openConnection() as HttpURLConnection
         c.connectTimeout = 20000
-        c.readTimeout = 120000
+        c.readTimeout = 60000
         c.setRequestProperty("Authorization", "Bearer $key")
         try {
             val code = c.responseCode
