@@ -2383,7 +2383,7 @@ class NewsActivity : Activity() {
     // The Mac draws the part (resuming a job it already has); each picture is fetched the moment it's
     // done and shown in the dialog. Returns how many sentences got no picture.
     private fun drawOnMac(a: Art, texts: List<String>, tmp: java.io.File, drawn: Array<java.io.File?>,
-                          preview: android.widget.ImageView, show: (String, Int) -> Unit): Int {
+                          show: (String, Int) -> Unit): Int {
         val n = texts.size
         val key = "${a.book.id}_${a.section.index}_${a.lang}_${a.level}"
         val (id, first) = try {
@@ -2401,7 +2401,7 @@ class NewsActivity : Activity() {
                     // Each picture shows in the book right away, not only when the whole video is done.
                     try { f.copyTo(artFile(a, i), overwrite = true); setHidden(artFile(a, i).name, false) } catch (_: Exception) {}
                     runOnUiThread { if (art === a && !isDestroyed) artHolders.getOrNull(i)?.let { showSavedArt(i, it) } }
-                    decodeFit(f, 900)?.let { bmp -> runOnUiThread { preview.setImageBitmap(bmp); preview.visibility = View.VISIBLE } }
+                    decodeFit(f, 900)?.let { bmp -> FilmService.preview = bmp }
                 }
             }
             val got = drawn.count { it != null }
@@ -2435,7 +2435,8 @@ class NewsActivity : Activity() {
 
     private fun confirmMakeFilm() {
         val a = art ?: return
-        if (FilmService.running) { toast(StudyText.t("video_busy")); return }
+        // Already making one (maybe with its dialog closed): show where it is again.
+        if (FilmService.running) { showFilmProgress(); return }
         // The progress notification while the video is made in the background.
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -2454,10 +2455,9 @@ class NewsActivity : Activity() {
             .show().also { Ui.watch(it) }
     }
 
-    private fun makeFilm(a: Art) {
-        filmPause()
-        if (playing) pausePlay()
-        makingCancelled = false
+    // The progress of the video being made. It only reads FilmService's state, so it can be closed
+    // ("in the background") and opened again from the make-video button, even from a new screen.
+    private fun showFilmProgress(): android.app.AlertDialog {
         val status = TextView(this).apply { textSize = 15f; setTextColor(Ui.INK); setPadding(dp(22), dp(18), dp(22), dp(6)) }
         val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
         // Pictures from the Mac show here as they arrive.
@@ -2479,14 +2479,35 @@ class NewsActivity : Activity() {
             // The work goes on with the dialog closed, the app in the background or the screen off:
             // FilmService keeps the phone awake and shows the progress in a notification.
             .setPositiveButton(StudyText.t("video_background"), null)
-            .setNegativeButton(StudyText.t("video_cancel")) { _, _ -> makingCancelled = true }
+            .setNegativeButton(StudyText.t("video_cancel")) { _, _ -> FilmService.onStop?.invoke() }
             .show().also { Ui.watch(it) }
+        var shown: android.graphics.Bitmap? = null
+        val tick = object : Runnable {
+            override fun run() {
+                if (!dialog.isShowing) return
+                if (!FilmService.running) { try { dialog.dismiss() } catch (_: Exception) {}; return }
+                status.text = FilmService.text
+                bar.progress = FilmService.pct
+                FilmService.preview?.takeIf { it !== shown }?.let { shown = it; preview.setImageBitmap(it); preview.visibility = View.VISIBLE }
+                box.postDelayed(this, 500)
+            }
+        }
+        box.post(tick)
+        return dialog
+    }
+
+    private fun makeFilm(a: Art) {
+        filmPause()
+        if (playing) pausePlay()
+        makingCancelled = false
         val app = applicationContext
         FilmService.start(app, StudyText.t("video_make"))
         FilmService.onStop = { makingCancelled = true }
+        val dialog = showFilmProgress()
         var lastNote = 0L
         fun show(text: String, pct: Int) {
-            runOnUiThread { status.text = text; bar.progress = pct }
+            FilmService.text = text
+            FilmService.pct = pct
             val now = System.currentTimeMillis()
             if (now - lastNote > 1500) { lastNote = now; FilmService.update(app, a.book.title + "\n" + text, pct) }
         }
@@ -2500,7 +2521,7 @@ class NewsActivity : Activity() {
                 val drawn = arrayOfNulls<java.io.File>(n)
                 var failed = 0
                 val onMac = ImageGen.engine(prefs) == "mac" && MacStudio.configured(prefs)
-                if (onMac) failed = drawOnMac(a, texts, tmp, drawn, preview, ::show)
+                if (onMac) failed = drawOnMac(a, texts, tmp, drawn, ::show)
                 val cast = if (onMac) "" else castSheet(a)
                 var ref: ByteArray? = null
                 for (i in (if (onMac) n else 0) until n) {

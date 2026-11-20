@@ -77,7 +77,6 @@ object StudyText {
         "mac_waiting" to m("맥북이 앞 작업 %d개를 마치는 중이에요", "Macが前の作業%d件を処理中です", "The Mac is finishing %d earlier job(s)", "Le Mac termine %d tâche(s)", "El Mac termina %d trabajo(s)", "Der Mac beendet %d Auftrag/Aufträge", "Mac 正在完成前面的 %d 个任务"),
         "mac_offline" to m("맥북 Owl Studio에 연결하지 못해요 (주소·토큰·WireGuard 확인): %s", "MacのOwl Studioに接続できません（アドレス・トークン・WireGuardを確認）: %s", "Can't reach Owl Studio on the Mac (check address, token, WireGuard): %s", "Owl Studio injoignable : %s", "No se puede conectar con Owl Studio: %s", "Owl Studio nicht erreichbar: %s", "无法连接 Mac 上的 Owl Studio（检查地址、令牌、WireGuard）：%s"),
         "video_background" to m("백그라운드로", "バックグラウンドで", "In the background", "En arrière-plan", "En segundo plano", "Im Hintergrund", "后台运行"),
-        "video_busy" to m("영상을 만드는 중이에요. 알림에서 진행 상황을 볼 수 있어요.", "動画を作成中です。通知で進み具合を見られます。", "A video is being made; see the notification for progress.", "Une vidéo est en cours ; voir la notification.", "Se está creando un vídeo; mira la notificación.", "Ein Video wird erstellt; siehe Benachrichtigung.", "正在制作视频，可在通知中查看进度。"),
         "video_cancel" to m("그만두기", "中止", "Stop", "Arrêter", "Detener", "Abbrechen", "停止"),
         "video_step_art" to m("그림 그리는 중 %d / %d", "絵を描いています %d / %d", "Drawing %d / %d", "Dessin %d / %d", "Dibujando %d / %d", "Zeichne %d / %d", "正在绘图 %d / %d"),
         "video_step_voice" to m("낭독 녹음 중 %d / %d", "朗読を録音中 %d / %d", "Recording the narration %d / %d", "Enregistrement %d / %d", "Grabando la narración %d / %d", "Nehme auf %d / %d", "正在录制朗读 %d / %d"),

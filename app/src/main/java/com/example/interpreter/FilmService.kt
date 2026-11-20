@@ -33,6 +33,10 @@ class FilmService : Service() {
             private set
         /** Set by the film thread; the notification's stop button calls it. */
         @Volatile var onStop: (() -> Unit)? = null
+        /** Where the video is, for the progress dialog (which can be closed and opened again). */
+        @Volatile var text = ""
+        @Volatile var pct = 0
+        @Volatile var preview: android.graphics.Bitmap? = null
 
         private fun send(ctx: Context, action: String?, text: String, pct: Int, first: Boolean) {
             val i = Intent(ctx, FilmService::class.java).setAction(action).putExtra("text", text).putExtra("pct", pct)
@@ -41,7 +45,10 @@ class FilmService : Service() {
             } catch (_: Exception) {}
         }
 
-        fun start(ctx: Context, text: String) { running = true; send(ctx, null, text, 0, true) }
+        fun start(ctx: Context, text: String) {
+            running = true; this.text = text; pct = 0; preview = null
+            send(ctx, null, text, 0, true)
+        }
         fun update(ctx: Context, text: String, pct: Int) { if (running) send(ctx, ACTION_UPDATE, text, pct, false) }
         /** [text] empty: no "done" notification (cancelled). */
         fun finish(ctx: Context, text: String) {
