@@ -2368,19 +2368,66 @@ class NewsActivity : Activity() {
 
     /* ---------- Making the video: the whole part drawn again in one go, then the MP4 ---------- */
 
+    // The Mac draws the part (resuming a job it already has); each picture is fetched the moment it's
+    // done and shown in the dialog. Returns how many sentences got no picture.
+    private fun drawOnMac(a: Art, texts: List<String>, tmp: java.io.File, drawn: Array<java.io.File?>,
+                          preview: android.widget.ImageView, show: (String, Int) -> Unit): Int {
+        val n = texts.size
+        val key = "${a.book.id}_${a.section.index}_${a.lang}_${a.level}"
+        val (id, first) = try {
+            MacStudio.submit(prefs, key, a.book.id, a.book.title, a.book.author, a.section.chapter, texts, restart = filmFile(a).exists())
+        } catch (e: Exception) { throw IllegalStateException(StudyText.f("mac_offline", e.message ?: e.javaClass.simpleName)) }
+        var st = first
+        var misses = 0
+        while (true) {
+            if (makingCancelled) { MacStudio.cancel(prefs, id); throw VideoMaker.Cancelled() }
+            for (i in st.done) {
+                if (i !in 0 until n || drawn[i] != null) continue
+                val f = java.io.File(tmp, "$i.jpg")
+                if (MacStudio.fetch(prefs, id, i, f)) {
+                    drawn[i] = f
+                    decodeFit(f, 900)?.let { bmp -> runOnUiThread { preview.setImageBitmap(bmp); preview.visibility = View.VISIBLE } }
+                }
+            }
+            val got = drawn.count { it != null }
+            val line = when {
+                st.queue > 1 -> StudyText.f("mac_waiting", st.queue - 1)
+                st.current >= 0 -> StudyText.f("video_step_mac", st.current + 1, n)
+                else -> StudyText.f("video_step_mac", got, n)
+            } + (if (st.lastError.isNotBlank()) "\n· " + st.lastError.take(140) else "")
+            show(line, got * 60 / n.coerceAtLeast(1))
+            when (st.state) {
+                "done" -> break
+                "error" -> throw IllegalStateException(st.error.ifBlank { st.lastError })
+                "cancelled" -> throw VideoMaker.Cancelled()
+            }
+            Thread.sleep(3000)
+            st = try {
+                MacStudio.poll(prefs, id).also { misses = 0 }
+            } catch (e: Exception) {
+                // A dropped connection (WireGuard reconnecting, the phone waking): keep trying a while.
+                if (++misses > 40) throw IllegalStateException(StudyText.f("mac_offline", e.message ?: ""))
+                st
+            }
+        }
+        if (drawn.all { it == null }) throw IllegalStateException(StudyText.t("video_no_art") + "\n" + st.lastError.take(200))
+        return drawn.count { it == null }
+    }
+
     @Volatile private var makingCancelled = false
     @Volatile private var lastArtError = ""
     private val makeNet = Executors.newSingleThreadExecutor()
 
     private fun confirmMakeFilm() {
         val a = art ?: return
-        if (!ImageGen.available(prefs)) {
+        val onMac = ImageGen.engine(prefs) == "mac" && MacStudio.configured(prefs)
+        if (!onMac && !ImageGen.available(prefs)) {
             android.app.AlertDialog.Builder(this).setMessage(StudyText.t("art_need_key")).setPositiveButton(I18n.t("close"), null)
                 .show().also { Ui.watch(it) }
             return
         }
         android.app.AlertDialog.Builder(this)
-            .setMessage(StudyText.f("video_make_ask", sentTexts.size))
+            .setMessage(StudyText.f(if (onMac) "video_make_ask_mac" else "video_make_ask", sentTexts.size))
             .setPositiveButton(StudyText.t("video_make")) { _, _ -> makeFilm(a) }
             .setNegativeButton(I18n.t("close"), null)
             .show().also { Ui.watch(it) }
@@ -2392,8 +2439,15 @@ class NewsActivity : Activity() {
         makingCancelled = false
         val status = TextView(this).apply { textSize = 15f; setTextColor(Ui.INK); setPadding(dp(22), dp(18), dp(22), dp(6)) }
         val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
+        // Pictures from the Mac show here as they arrive.
+        val preview = android.widget.ImageView(this).apply {
+            adjustViewBounds = true
+            visibility = View.GONE
+            setPadding(dp(22), dp(10), dp(22), 0)
+        }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            addView(preview, LinearLayout.LayoutParams(-1, -2))
             addView(status)
             addView(bar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(22), dp(4), dp(22), dp(12)) })
         }
@@ -2409,12 +2463,15 @@ class NewsActivity : Activity() {
         val tmp = java.io.File(cacheDir, "film_${a.book.id}_${a.section.index}").apply { deleteRecursively(); mkdirs() }
         makeNet.execute {
             val result: Any = try {
-                // 1. Every picture again, in order, each following the one before it.
-                val cast = castSheet(a)
+                // 1. Every picture again, in order, each following the one before it: on the Mac with
+                // local Qwen, or here with the picture engine.
                 val drawn = arrayOfNulls<java.io.File>(n)
-                var ref: ByteArray? = null
                 var failed = 0
-                for (i in 0 until n) {
+                val onMac = ImageGen.engine(prefs) == "mac" && MacStudio.configured(prefs)
+                if (onMac) failed = drawOnMac(a, texts, tmp, drawn, preview, ::show)
+                val cast = if (onMac) "" else castSheet(a)
+                var ref: ByteArray? = null
+                for (i in (if (onMac) n else 0) until n) {
                     if (makingCancelled) throw VideoMaker.Cancelled()
                     val step = StudyText.f("video_step_art", i + 1, n)
                     show(step, i * 60 / n)
