@@ -53,6 +53,7 @@ object Ui {
         "💬" to R.drawable.ic_forum,
         "📰" to R.drawable.ic_newspaper, "🧠" to R.drawable.ic_psychology, "🔥" to R.drawable.ic_local_fire_department,
         "📅" to R.drawable.ic_today,
+        "🎬" to R.drawable.ic_movie,
         // places
         "✈" to R.drawable.ic_flight_takeoff, "🛂" to R.drawable.ic_badge, "🧳" to R.drawable.ic_luggage,
         "🛍" to R.drawable.ic_shopping_bag, "💱" to R.drawable.ic_currency_exchange, "🚇" to R.drawable.ic_subway,

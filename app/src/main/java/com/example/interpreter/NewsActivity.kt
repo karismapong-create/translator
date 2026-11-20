@@ -501,6 +501,12 @@ class NewsActivity : Activity() {
             // Speed beside play; a change applies at once from the word being read.
             addView(Ui.speedChip(context) { if (playing) { pausePlay(); resumePlay() } },
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { leftMargin = dp(8) })
+            // Books: the part as a film of its pictures, read aloud with live subtitles.
+            if (art != null) addView(Button(context).apply {
+                text = "🎬"
+                contentDescription = StudyText.t("video_open")
+                setOnClickListener { openVideo() }
+            }, LinearLayout.LayoutParams(dp(56), dp(56)).apply { leftMargin = dp(6) })
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) })
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -713,6 +719,7 @@ class NewsActivity : Activity() {
             offsets[id] = start
             SpeechOut.speak(engine, sentTexts[k].substring(start), playLang.speechTag, k == i, id)
         }
+        if (video != null) { showVideoSentence(i); drift(i) }
     }
 
     private fun stopPlay() {
@@ -735,6 +742,7 @@ class NewsActivity : Activity() {
         markSentence(current)
         markWordAt(current, pausedAt)
         playButton?.text = TalkText.t("s_resume")
+        videoImage?.animate()?.cancel()
     }
 
     private fun resumePlay() {
@@ -767,6 +775,7 @@ class NewsActivity : Activity() {
         // A pause keeps the sentence and its word lit.
         if (pausedSentence >= 0) return
         sentViews.getOrNull(i)?.let { it.text = baseText(i) }
+        if (i == videoIndex) videoSub?.text = baseText(i)
         if (i >= until - 1 || !playing) {
             playing = false
             current = -1
@@ -861,7 +870,8 @@ class NewsActivity : Activity() {
 
     // A big symbol in the middle of the screen for a moment.
     private fun flash(symbol: String) {
-        val root = lessonPage.parent as? android.widget.FrameLayout ?: return
+        val root = video ?: lessonPage.parent as? android.widget.FrameLayout ?: return
+        flashView?.takeIf { it.parent !== root }?.let { (it.parent as? android.view.ViewGroup)?.removeView(it); flashView = null }
         val v = flashView ?: TextView(this).apply {
             textSize = 44f
             setTextColor(Color.WHITE)
@@ -955,6 +965,7 @@ class NewsActivity : Activity() {
     }
 
     private fun markSentence(i: Int) {
+        if (video != null && i >= 0) showVideoSentence(i)
         sentViews.forEachIndexed { k, v ->
             v.background = if (k == i) Ui.rounded(sentenceColor, 10, this) else null
             if (k != i) v.text = baseText(k)
@@ -1054,6 +1065,7 @@ class NewsActivity : Activity() {
         val span = android.text.SpannableString(baseText(i))
         span.setSpan(android.text.style.BackgroundColorSpan(color), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         v.text = span
+        if (i == videoIndex) videoSub?.text = span
     }
 
     // The word around a character position (dictionary-based breaks, so it also works for Japanese and Chinese).
@@ -1080,7 +1092,10 @@ class NewsActivity : Activity() {
 
     // Long-press a word: its meaning appears. Keep the finger down and slide: each word under the finger
     // lights up and is spoken, and the meaning follows. A short tap reads the sentence from there.
-    private fun attachInspector(tv: TextView, index: Int, l: Lang) {
+    private fun attachInspector(tv: TextView, index: Int, l: Lang) = attachInspector(tv, l) { index }
+
+    // [at] gives the sentence the view shows (the video's subtitle changes sentence as it plays).
+    private fun attachInspector(tv: TextView, l: Lang, at: () -> Int) {
         var inspecting = false
         var last: Pair<Int, Int>? = null
         var downX = 0f
@@ -1090,7 +1105,7 @@ class NewsActivity : Activity() {
             tv.parent?.requestDisallowInterceptTouchEvent(true)
             tv.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
             last = null
-            inspect(tv, index, l, downX, downY) { last = it }
+            inspect(tv, at(), l, downX, downY) { last = it }
         }
         tv.setOnTouchListener { _, e ->
             when (e.actionMasked) {
@@ -1104,10 +1119,10 @@ class NewsActivity : Activity() {
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
                     if (inspecting) {
-                        val w = rangeAt(tv, index, l, e.x, e.y)
+                        val w = rangeAt(tv, at(), l, e.x, e.y)
                         if (w != null && w != last) {
                             last = w
-                            inspect(tv, index, l, e.x, e.y) { }
+                            inspect(tv, at(), l, e.x, e.y) { }
                         }
                     } else if (Math.abs(e.x - downX) > dp(10) || Math.abs(e.y - downY) > dp(10)) {
                         tv.removeCallbacks(longPress)
@@ -1117,17 +1132,17 @@ class NewsActivity : Activity() {
                 android.view.MotionEvent.ACTION_UP -> {
                     tv.removeCallbacks(longPress)
                     if (!inspecting) {
-                        sentenceTapped(index)
+                        sentenceTapped(at())
                     } else {
                         tv.parent?.requestDisallowInterceptTouchEvent(false)
-                        tv.text = baseText(index)
+                        tv.text = baseText(at())
                     }
                     inspecting = false
                     true
                 }
                 android.view.MotionEvent.ACTION_CANCEL -> {
                     tv.removeCallbacks(longPress)
-                    if (inspecting) tv.text = baseText(index)
+                    if (inspecting) tv.text = baseText(at())
                     inspecting = false
                     true
                 }
@@ -1973,7 +1988,206 @@ class NewsActivity : Activity() {
         return true
     }
 
-    private fun goBack(): Boolean = closeLesson() || closeBook()
+    /* ---------- Video: the part as a film of its pictures, read aloud, with live subtitles ---------- */
+
+    // A full-screen window over the reader. It plays the same reading as the page (same run, same
+    // pause, seek, speed and word long-press), so everything the page does works here too: the
+    // subtitle mirrors the sentence being read, the picture is that sentence's (or the last one
+    // before it), slowly drifting and zooming like a camera over a painting.
+    private var video: android.widget.FrameLayout? = null
+    private var videoImage: android.widget.ImageView? = null
+    private var videoCurtain: View? = null
+    private var videoSub: TextView? = null
+    private var videoMeaning: TextView? = null
+    private var videoBar: android.widget.ProgressBar? = null
+    private var videoIndex = -1
+    private var videoPicture: java.io.File? = null
+
+    private fun openVideo() {
+        val a = art ?: return
+        if (video != null || sentTexts.isEmpty()) return
+        val root = window.decorView as? android.view.ViewGroup ?: return
+        val start = when { current >= 0 -> current; pausedSentence >= 0 -> pausedSentence; else -> 0 }
+        val gestures = videoGestures()
+        val frame = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            isClickable = true
+            keepScreenOn = true
+        }
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // Top: close, title, speed.
+        column.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(28), dp(8), dp(4))
+            addView(TextView(context).apply {
+                text = "✘"
+                textSize = 20f
+                setTextColor(Color.WHITE)
+                setPadding(dp(10), dp(8), dp(14), dp(8))
+                setOnClickListener { closeVideo() }
+            })
+            addView(TextView(context).apply {
+                text = a.book.title + (a.section.chapter.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
+                textSize = 14f
+                setTextColor(Color.rgb(200, 205, 220))
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(Ui.speedChip(context) { if (playing) { pausePlay(); resumePlay() } })
+        })
+        // The picture fills the rest of the top; a tap pauses, a sideways drag seeks.
+        val stage = android.widget.FrameLayout(this).apply {
+            clipChildren = true
+            setOnTouchListener(gestures)
+        }
+        val img = android.widget.ImageView(this).apply { scaleType = android.widget.ImageView.ScaleType.CENTER_CROP }
+        stage.addView(img, android.widget.FrameLayout.LayoutParams(-1, -1))
+        val curtain = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 1f }
+        stage.addView(curtain, android.widget.FrameLayout.LayoutParams(-1, -1))
+        column.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
+        val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = sentTexts.size
+            progressTintList = android.content.res.ColorStateList.valueOf(Ui.ACCENT)
+        }
+        column.addView(bar, LinearLayout.LayoutParams(-1, dp(4)))
+        // Subtitles: the sentence (long-press a word for its meaning and the vocabulary, tap to read
+        // from it), then its translation (tap pauses, long-press corrects it).
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(30))
+            setBackgroundColor(Color.rgb(16, 18, 28))
+            minimumHeight = dp(190)
+            setOnTouchListener(gestures)
+        }
+        val sub = TextView(this).apply {
+            textSize = 22f
+            setTextColor(Color.WHITE)
+            setLineSpacing(0f, 1.15f)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        attachInspector(sub, playLang) { videoIndex.coerceAtLeast(0) }
+        val meaning = TextView(this).apply {
+            textSize = 16f
+            setTextColor(Color.rgb(170, 190, 255))
+            setPadding(dp(4), dp(8), dp(4), dp(4))
+            setOnClickListener { togglePlay() }
+            setOnLongClickListener { if (videoIndex >= 0) editMeaning(videoIndex, this); true }
+        }
+        panel.addView(sub)
+        panel.addView(meaning)
+        column.addView(panel, LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT))
+        frame.addView(column, android.widget.FrameLayout.LayoutParams(-1, -1))
+        root.addView(frame, android.view.ViewGroup.LayoutParams(-1, -1))
+        video = frame; videoImage = img; videoCurtain = curtain; videoSub = sub; videoMeaning = meaning; videoBar = bar
+        videoIndex = -1
+        videoPicture = null
+        if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(android.view.WindowInsets.Type.systemBars())
+        showVideoSentence(start)
+        if (!playing) { if (pausedSentence >= 0) resumePlay() else playFrom(start) } else drift(start)
+    }
+
+    private fun closeVideo(): Boolean {
+        val v = video ?: return false
+        if (playing) pausePlay()
+        popup?.dismiss()
+        videoImage?.animate()?.cancel()
+        (v.parent as? android.view.ViewGroup)?.removeView(v)
+        video = null; videoImage = null; videoCurtain = null; videoSub = null; videoMeaning = null; videoBar = null
+        flashView = null
+        videoIndex = -1
+        if (Build.VERSION.SDK_INT >= 30) window.insetsController?.show(android.view.WindowInsets.Type.systemBars())
+        return true
+    }
+
+    // Tap: pause or go on. Sideways drag: seek word by word, reading again from there on release.
+    private fun videoGestures(): View.OnTouchListener {
+        var downX = 0f
+        var downY = 0f
+        var seeking = false
+        var decided = false
+        val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+        return View.OnTouchListener { _, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; seeking = false; decided = false }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (!decided) {
+                        val dx = Math.abs(e.rawX - downX)
+                        val dy = Math.abs(e.rawY - downY)
+                        if (dx > slop * 2 && dx > dy * 1.5f) { decided = true; seeking = true; seekStart() }
+                        else if (dy > slop * 2) decided = true
+                    }
+                    if (seeking) seekMove(e.rawX - downX)
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    if (seeking) seekEnd(true)
+                    else if (!decided && e.eventTime - e.downTime < android.view.ViewConfiguration.getLongPressTimeout()) togglePlay()
+                    seeking = false
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> { if (seeking) seekEnd(true); seeking = false }
+            }
+            true
+        }
+    }
+
+    private fun showVideoSentence(i: Int) {
+        if (video == null || i !in sentTexts.indices || i == videoIndex) return
+        videoIndex = i
+        videoSub?.text = baseText(i)
+        videoMeaning?.text = shownLesson?.optJSONArray("sentences")?.optJSONObject(i)?.optString("meaning")
+            ?.takeIf { it.isNotBlank() }?.let { Corrections.apply(this, home.code, it) }.orEmpty()
+        videoBar?.progress = i + 1
+        val pic = videoPictureFor(i)
+        if (pic == videoPicture) return
+        videoPicture = pic
+        val img = videoImage ?: return
+        val curtain = videoCurtain ?: return
+        val bmp = pic?.let { decodeFit(it, 1280) }
+        // A soft fade through black into the next picture (on a curtain above it, so the camera move
+        // on the picture can't cut it short); with none drawn yet, a quiet dark stage.
+        curtain.animate().cancel()
+        curtain.animate().alpha(1f).setDuration(220).withEndAction {
+            img.animate().cancel()
+            if (bmp != null) img.setImageBitmap(bmp) else { img.setImageDrawable(null); img.setBackgroundColor(Color.rgb(28, 30, 44)) }
+            img.scaleX = 1.04f; img.scaleY = 1.04f; img.translationX = 0f; img.translationY = 0f
+            if (playing) drift(videoIndex)
+            curtain.animate().alpha(0f).setDuration(380).start()
+        }.start()
+    }
+
+    // The sentence's own picture, else the nearest one before it (the scene goes on), else after it.
+    private fun videoPictureFor(i: Int): java.io.File? {
+        val a = art ?: return null
+        val hidden = hiddenArt()
+        fun ok(j: Int) = artFile(a, j).takeIf { it.exists() && it.length() > 0 && it.name !in hidden }
+        for (j in i downTo 0) ok(j)?.let { return it }
+        for (j in i + 1 until sentTexts.size) ok(j)?.let { return it }
+        return null
+    }
+
+    private fun decodeFit(f: java.io.File, max: Int): android.graphics.Bitmap? = try {
+        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(f.path, o)
+        var sample = 1
+        while (o.outWidth / (sample * 2) >= max) sample *= 2
+        android.graphics.BitmapFactory.decodeFile(f.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+    } catch (_: Exception) { null }
+
+    // A slow camera move over the picture for about as long as the sentence takes to read.
+    private fun drift(i: Int) {
+        val img = videoImage ?: return
+        if (i !in sentTexts.indices) return
+        val ms = (sentTexts[i].length * 75L / SpeechOut.rate.coerceAtLeast(0.3f)).toLong().coerceIn(2500L, 20000L)
+        val w = img.width.coerceAtLeast(1) * 0.04f
+        val h = img.height.coerceAtLeast(1) * 0.04f
+        val (tx, ty) = when (i % 4) { 0 -> -w to -h; 1 -> w to -h; 2 -> w to h; else -> -w to h }
+        val zoom = if (i % 2 == 0) 1.16f else 1.10f
+        img.animate().cancel()
+        img.animate().scaleX(zoom).scaleY(zoom).translationX(tx).translationY(ty).setDuration(ms)
+            .setInterpolator(android.view.animation.LinearInterpolator()).start()
+    }
+
+    private fun goBack(): Boolean = closeVideo() || closeLesson() || closeBook()
 
     // Android 13+ delivers the back gesture through a callback; older phones call onBackPressed.
     private fun registerBack() {
