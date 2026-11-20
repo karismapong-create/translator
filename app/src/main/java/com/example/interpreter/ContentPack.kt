@@ -35,8 +35,8 @@ object ContentPack {
     const val FORMAT = "owl-content-pack"
     const val VERSION = 1
 
-    class Summary(var books: Int = 0, var lessons: Int = 0, var pictures: Int = 0, var idioms: Int = 0, var dialogueFiles: Int = 0) {
-        fun isEmpty() = books + lessons + pictures + idioms == 0
+    class Summary(var books: Int = 0, var lessons: Int = 0, var pictures: Int = 0, var idioms: Int = 0, var dialogueFiles: Int = 0, var videos: Int = 0) {
+        fun isEmpty() = books + lessons + pictures + idioms + videos == 0
         /** The file was a situation dialogues DB, not a book package. */
         fun wrongKind() = isEmpty() && dialogueFiles > 0
     }
@@ -83,6 +83,11 @@ object ContentPack {
                         put("books/art/${f.name}", f.readBytes()); s.pictures++
                         if (i % 20 == 0) progress("🎨 ${i + 1}/${art.size}")
                     }
+                    // Videos of the parts (MP4 and its timing) go with their pictures.
+                    File(booksDir(ctx), "video").listFiles()?.filter { f -> prefixes.any { f.name.startsWith(it) } }?.forEach {
+                        put("books/video/${it.name}", it.readBytes())
+                        if (it.extension == "mp4") { s.videos++; progress("🎬 ${s.videos}") }
+                    }
                 }
                 unitsDir(ctx).listFiles()?.filter { it.extension == "json" }?.forEach {
                     put("units/${it.name}", it.readBytes()); s.idioms++
@@ -91,7 +96,7 @@ object ContentPack {
                     .put("format", FORMAT).put("kind", "books").put("version", VERSION)
                     .put("created", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(Date()))
                     .put("books", JSONArray().apply { books.forEach { put(it.id) } })
-                    .put("lessons", s.lessons).put("pictures", s.pictures)
+                    .put("lessons", s.lessons).put("pictures", s.pictures).put("videos", s.videos)
                 put("manifest.json", manifest.toString(2).toByteArray())
             }
         } ?: throw IllegalStateException("can't write the file")
@@ -121,16 +126,17 @@ object ContentPack {
                     when {
                         parts.size == 2 && parts[0] == "books" && last == "shelf.json" ->
                             shelf = try { JSONArray(zip.readBytes().toString(Charsets.UTF_8)) } catch (_: Exception) { null }
-                        parts.size == 3 && parts[0] == "books" && parts[1] in setOf("text", "lessons", "art") && safe.matches(last) -> {
+                        parts.size == 3 && parts[0] == "books" && parts[1] in setOf("text", "lessons", "art", "video") && safe.matches(last) -> {
                             val dir = if (parts[1] == "text") booksDir(ctx) else File(booksDir(ctx), parts[1])
                             dir.mkdirs()
                             val f = File(dir, last)
                             val bytes = zip.readBytes()
-                            if (parts[1] == "art" && last.substringBeforeLast('_') in keptOwn) {
+                            if ((parts[1] == "art" && last.substringBeforeLast('_') in keptOwn) ||
+                                (parts[1] == "video" && last.substringBeforeLast('.') in keptOwn)) {
                                 // skip: picture for a lesson this phone made differently
                             } else if (!f.exists()) {
                                 f.writeBytes(bytes)
-                                when (parts[1]) { "lessons" -> s.lessons++; "art" -> s.pictures++ }
+                                when (parts[1]) { "lessons" -> s.lessons++; "art" -> s.pictures++; "video" -> if (last.endsWith(".mp4")) s.videos++ }
                             } else if (parts[1] == "lessons" && !f.readBytes().contentEquals(bytes)) {
                                 keptOwn += last.removeSuffix(".json")
                             }

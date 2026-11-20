@@ -753,6 +753,7 @@ class NewsActivity : Activity() {
     // Tapping the sentence being read pauses on its word; tapping it again goes on from that word;
     // tapping another sentence reads from there.
     private fun sentenceTapped(index: Int) {
+        if (film != null) { filmSeekSentence(index); return }
         when {
             playing && index == current -> pausePlay()
             !playing && index == pausedSentence -> resumePlay()
@@ -858,6 +859,7 @@ class NewsActivity : Activity() {
     }
 
     private fun togglePlay() {
+        if (film != null) { filmToggle(); return }
         if (sentTexts.isEmpty()) return
         when {
             playing -> { pausePlay(); flash("⏸") }
@@ -1163,6 +1165,7 @@ class NewsActivity : Activity() {
         val w = rangeAt(tv, index, l, x, y) ?: return
         picked(w)
         if (playing) stopPlay()
+        filmPause()
         markWord(index, w.first, w.second, pickColor)
         val word = sentTexts[index].substring(w.first, w.second)
         tts?.let { SpeechOut.speak(it, word, l.speechTag, true, "nw") }
@@ -1491,6 +1494,20 @@ class NewsActivity : Activity() {
     // Which lesson is on screen; a slow answer for another one must not replace it.
     private var lessonToken = 0
     private val making = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    // The full request (for Gemini and OpenAI) and the short picture description (for the free models).
+    private fun artPrompts(a: Art, texts: List<String>, i: Int, cast: String): Pair<String, String> {
+        val scene = texts.getOrNull(i).orEmpty()
+        val before = texts.getOrNull(i - 1).orEmpty()
+        val after = texts.getOrNull(i + 1).orEmpty()
+        val prompt = "A single illustration for a scene in the classic public-domain book \"${a.book.title}\" by ${a.book.author}" +
+            (a.section.chapter.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") + ". " +
+            "Scene to draw: $scene\nContext before: $before\nContext after: $after\n" +
+            (if (cast.isNotEmpty()) "Characters and style, always exactly like this: $cast\n" else "") +
+            "Style: gentle hand-painted watercolor storybook illustration, warm soft colors, period-appropriate costumes and " +
+            "settings, consistent with the book's era. Absolutely no text, letters, captions, signatures or speech bubbles."
+        return prompt to visualPrompt(a, scene, before, after, cast)
+    }
 
     // The book's character sheet: written once by my AI engine (each main character's fixed look, the
     // setting and palette) and kept with the book's pictures, so every picture, part and level agrees.
@@ -1904,22 +1921,13 @@ class NewsActivity : Activity() {
         if (!artBusy.add(key)) return
         holder.removeAllViews()
         holder.addView(note(StudyText.t("art_drawing")))
-        val scene = sentTexts.getOrNull(i).orEmpty()
-        val before = sentTexts.getOrNull(i - 1).orEmpty()
-        val after = sentTexts.getOrNull(i + 1).orEmpty()
+        val texts = sentTexts.toList()
         artNet.execute {
             // The same characters and style in every picture of the book, so a part's pictures read as
-            // one continuous story (and can later become a video): the book's character sheet goes
-            // into every request, and the nearest earlier picture of this part is the reference.
-            val cast = castSheet(a)
-            val prompt = "A single illustration for a scene in the classic public-domain book \"${a.book.title}\" by ${a.book.author}" +
-                (a.section.chapter.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") + ". " +
-                "Scene to draw: $scene\nContext before: $before\nContext after: $after\n" +
-                (if (cast.isNotEmpty()) "Characters and style, always exactly like this: $cast\n" else "") +
-                "Style: gentle hand-painted watercolor storybook illustration, warm soft colors, period-appropriate costumes and " +
-                "settings, consistent with the book's era. Absolutely no text, letters, captions, signatures or speech bubbles."
+            // one continuous story: the book's character sheet goes into every request, and the
+            // nearest earlier picture of this part is the reference.
+            val (prompt, visual) = artPrompts(a, texts, i, castSheet(a))
             val ref = referenceArt(a, i)
-            val visual = visualPrompt(a, scene, before, after, cast)
             val result: Any = try { ImageGen.draw(prefs, prompt, visual, ref) } catch (e: Exception) { e }
             val bytes = result as? ByteArray
             if (bytes != null) try { f.writeBytes(bytes); setHidden(f.name, false) } catch (_: Exception) {}
@@ -2034,7 +2042,14 @@ class NewsActivity : Activity() {
                 isSingleLine = true
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(Ui.speedChip(context) { if (playing) { pausePlay(); resumePlay() } })
+            addView(TextView(context).apply {
+                text = "↻ " + StudyText.t(if (filmFile(a).exists()) "video_remake" else "video_make")
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                setOnClickListener { confirmMakeFilm() }
+            })
+            addView(Ui.speedChip(context) { if (film != null) filmSpeed() else if (playing) { pausePlay(); resumePlay() } })
         })
         // The picture fills the rest of the top; a tap pauses, a sideways drag seeks.
         val stage = android.widget.FrameLayout(this).apply {
@@ -2083,6 +2098,8 @@ class NewsActivity : Activity() {
         videoIndex = -1
         videoPicture = null
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(android.view.WindowInsets.Type.systemBars())
+        // A made video plays as it is; otherwise the pictures are shown live with the page's reading.
+        if (startFilm(a, stage, start)) return
         showVideoSentence(start)
         if (!playing) { if (pausedSentence >= 0) resumePlay() else playFrom(start) } else drift(start)
     }
@@ -2090,6 +2107,7 @@ class NewsActivity : Activity() {
     private fun closeVideo(): Boolean {
         val v = video ?: return false
         if (playing) pausePlay()
+        stopFilm()
         popup?.dismiss()
         videoImage?.animate()?.cancel()
         (v.parent as? android.view.ViewGroup)?.removeView(v)
@@ -2114,17 +2132,17 @@ class NewsActivity : Activity() {
                     if (!decided) {
                         val dx = Math.abs(e.rawX - downX)
                         val dy = Math.abs(e.rawY - downY)
-                        if (dx > slop * 2 && dx > dy * 1.5f) { decided = true; seeking = true; seekStart() }
+                        if (dx > slop * 2 && dx > dy * 1.5f) { decided = true; seeking = true; if (film != null) filmSeekStart() else seekStart() }
                         else if (dy > slop * 2) decided = true
                     }
-                    if (seeking) seekMove(e.rawX - downX)
+                    if (seeking) { if (film != null) filmSeekMove(e.rawX - downX) else seekMove(e.rawX - downX) }
                 }
                 android.view.MotionEvent.ACTION_UP -> {
-                    if (seeking) seekEnd(true)
+                    if (seeking) { if (film != null) filmSeekEnd() else seekEnd(true) }
                     else if (!decided && e.eventTime - e.downTime < android.view.ViewConfiguration.getLongPressTimeout()) togglePlay()
                     seeking = false
                 }
-                android.view.MotionEvent.ACTION_CANCEL -> { if (seeking) seekEnd(true); seeking = false }
+                android.view.MotionEvent.ACTION_CANCEL -> { if (seeking) { if (film != null) filmSeekEnd() else seekEnd(true) }; seeking = false }
             }
             true
         }
@@ -2185,6 +2203,276 @@ class NewsActivity : Activity() {
         img.animate().cancel()
         img.animate().scaleX(zoom).scaleY(zoom).translationX(tx).translationY(ty).setDuration(ms)
             .setInterpolator(android.view.animation.LinearInterpolator()).start()
+    }
+
+    /* ---------- The made video (MP4) with live subtitles ---------- */
+
+    private var film: android.widget.VideoView? = null
+    private var filmPlayer: android.media.MediaPlayer? = null
+    private var filmTiming: JSONArray? = null
+    private var filmWord = -1
+    private val filmTick = object : Runnable {
+        override fun run() {
+            val v = film ?: return
+            filmShowAt(v.currentPosition.toLong())
+            v.postDelayed(this, 60)
+        }
+    }
+
+    private fun filmFile(a: Art) = BookStore.videoFile(this, a.book.id, a.section.index, a.lang, a.level)
+    private fun filmTimingFile(a: Art) = BookStore.videoTiming(this, a.book.id, a.section.index, a.lang, a.level)
+
+    private fun startFilm(a: Art, stage: android.widget.FrameLayout, start: Int): Boolean {
+        val f = filmFile(a)
+        val timing = try { JSONObject(filmTimingFile(a).readText()).optJSONArray("sentences") } catch (_: Exception) { null }
+        if (!f.exists() || timing == null || timing.length() != sentTexts.size) return false
+        if (playing) pausePlay()
+        videoCurtain?.alpha = 0f
+        val vv = android.widget.VideoView(this)
+        stage.addView(vv, 0, android.widget.FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        // The video view takes touches for itself; the stage's tap and seek gestures go on working.
+        val cover = View(this).apply { setOnTouchListener(videoGestures()) }
+        stage.addView(cover, android.widget.FrameLayout.LayoutParams(-1, -1))
+        videoImage?.visibility = View.GONE
+        film = vv
+        filmTiming = timing
+        filmWord = -1
+        vv.setVideoURI(Uri.fromFile(f))
+        vv.setOnPreparedListener { mp ->
+            filmPlayer = mp
+            val at = timing.optJSONObject(start.coerceIn(0, timing.length() - 1))?.optLong("start") ?: 0L
+            vv.seekTo(at.toInt())
+            filmStart()
+        }
+        vv.setOnCompletionListener { flash("⏹") }
+        // A video this phone can't play: the pictures are shown live instead, read by the page.
+        vv.setOnErrorListener { _, _, _ ->
+            stopFilm()
+            stage.removeView(vv)
+            stage.removeView(cover)
+            toast(StudyText.t("video_error"))
+            videoImage?.visibility = View.VISIBLE
+            val i = videoIndex.coerceAtLeast(0)
+            videoIndex = -1
+            showVideoSentence(i)
+            playFrom(i)
+            true
+        }
+        vv.post(filmTick)
+        return true
+    }
+
+    private fun stopFilm() {
+        film?.let { it.removeCallbacks(filmTick); try { it.stopPlayback() } catch (_: Exception) {} }
+        film = null; filmPlayer = null; filmTiming = null
+    }
+
+    private fun filmStart() {
+        val v = film ?: return
+        v.start()
+        filmSpeed()
+    }
+
+    private fun filmPause() { film?.takeIf { it.isPlaying }?.pause() }
+
+    // Speed follows the app's speed chip (setting the speed of a paused player would start it).
+    private fun filmSpeed() {
+        val mp = filmPlayer ?: return
+        val v = film ?: return
+        if (!v.isPlaying) return
+        try { mp.playbackParams = mp.playbackParams.setSpeed(SpeechOut.rate) } catch (_: Exception) {}
+    }
+
+    private fun filmToggle() {
+        val v = film ?: return
+        if (v.isPlaying) { v.pause(); flash("⏸") } else { filmStart(); flash("▶") }
+    }
+
+    private fun filmSeekSentence(i: Int) {
+        val t = filmTiming?.optJSONObject(i)?.optLong("start") ?: return
+        film?.seekTo(t.toInt())
+        filmStart()
+    }
+
+    // Which sentence and word are at a time; the subtitle follows (the word lit as it is spoken).
+    private fun filmShowAt(ms: Long) {
+        val timing = filmTiming ?: return
+        var s = 0
+        for (k in 0 until timing.length()) if ((timing.optJSONObject(k)?.optLong("start") ?: Long.MAX_VALUE) <= ms) s = k
+        if (s != videoIndex) {
+            videoIndex = s
+            filmWord = -1
+            videoSub?.text = baseText(s)
+            videoMeaning?.text = shownLesson?.optJSONArray("sentences")?.optJSONObject(s)?.optString("meaning")
+                ?.takeIf { it.isNotBlank() }?.let { Corrections.apply(this, home.code, it) }.orEmpty()
+            videoBar?.progress = s + 1
+        }
+        val words = timing.optJSONObject(s)?.optJSONArray("words") ?: return
+        val end = timing.optJSONObject(s)?.optLong("end") ?: Long.MAX_VALUE
+        var w = -1
+        for (k in 0 until words.length()) if ((words.optJSONArray(k)?.optLong(2) ?: Long.MAX_VALUE) <= ms) w = k
+        if (ms > end) w = -1
+        if (w == filmWord) return
+        filmWord = w
+        val r = words.optJSONArray(w)
+        if (r == null) { videoSub?.text = baseText(s); return }
+        filmMark(s, r.optInt(0), r.optInt(1))
+    }
+
+    private fun filmMark(s: Int, start: Int, end: Int) {
+        val text = sentTexts.getOrNull(s) ?: return
+        if (start < 0 || end <= start || end > text.length) return
+        val span = android.text.SpannableString(baseText(s))
+        span.setSpan(android.text.style.BackgroundColorSpan(wordColor), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        videoSub?.text = span
+    }
+
+    // Seeking the video word by word, as on the page: every word's time in one list.
+    private var filmSeekList: List<Triple<Int, IntArray, Long>> = emptyList()
+    private var filmSeekFrom = 0
+    private var filmSeekAt = 0
+
+    private fun filmSeekStart() {
+        val timing = filmTiming ?: return
+        val list = ArrayList<Triple<Int, IntArray, Long>>()
+        for (s in 0 until timing.length()) {
+            val o = timing.optJSONObject(s) ?: continue
+            val ws = o.optJSONArray("words")
+            if (ws == null || ws.length() == 0) list += Triple(s, intArrayOf(0, 0), o.optLong("start"))
+            else for (k in 0 until ws.length()) ws.optJSONArray(k)?.let { list += Triple(s, intArrayOf(it.optInt(0), it.optInt(1)), it.optLong(2)) }
+        }
+        filmSeekList = list
+        val now = film?.currentPosition?.toLong() ?: 0L
+        filmSeekFrom = list.indexOfLast { it.third <= now }.coerceAtLeast(0)
+        filmSeekAt = filmSeekFrom
+        filmPause()
+        video?.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+    }
+
+    private fun filmSeekMove(dx: Float) {
+        if (filmSeekList.isEmpty()) return
+        val k = (filmSeekFrom + (dx / dp(14)).toInt()).coerceIn(0, filmSeekList.size - 1)
+        if (k == filmSeekAt) return
+        filmSeekAt = k
+        video?.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+        val (s, r, _) = filmSeekList[k]
+        if (s != videoIndex) filmShowAt(filmSeekList[k].third)
+        filmMark(s, r[0], r[1])
+    }
+
+    private fun filmSeekEnd() {
+        val t = filmSeekList.getOrNull(filmSeekAt)?.third ?: return
+        film?.seekTo(t.toInt())
+        filmStart()
+    }
+
+    /* ---------- Making the video: the whole part drawn again in one go, then the MP4 ---------- */
+
+    @Volatile private var makingCancelled = false
+    private val makeNet = Executors.newSingleThreadExecutor()
+
+    private fun confirmMakeFilm() {
+        val a = art ?: return
+        if (!ImageGen.available(prefs)) {
+            android.app.AlertDialog.Builder(this).setMessage(StudyText.t("art_need_key")).setPositiveButton(I18n.t("close"), null)
+                .show().also { Ui.watch(it) }
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setMessage(StudyText.f("video_make_ask", sentTexts.size))
+            .setPositiveButton(StudyText.t("video_make")) { _, _ -> makeFilm(a) }
+            .setNegativeButton(I18n.t("close"), null)
+            .show().also { Ui.watch(it) }
+    }
+
+    private fun makeFilm(a: Art) {
+        filmPause()
+        if (playing) pausePlay()
+        makingCancelled = false
+        val status = TextView(this).apply { textSize = 15f; setTextColor(Ui.INK); setPadding(dp(22), dp(18), dp(22), dp(6)) }
+        val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(status)
+            addView(bar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(22), dp(4), dp(22), dp(12)) })
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle(Ui.plain("🎬 " + StudyText.t("video_make")))
+            .setView(box)
+            .setCancelable(false)
+            .setNegativeButton(StudyText.t("video_cancel")) { _, _ -> makingCancelled = true }
+            .show().also { Ui.watch(it) }
+        fun show(text: String, pct: Int) = runOnUiThread { status.text = text; bar.progress = pct }
+        val texts = sentTexts.toList()
+        val n = texts.size
+        val tmp = java.io.File(cacheDir, "film_${a.book.id}_${a.section.index}").apply { deleteRecursively(); mkdirs() }
+        makeNet.execute {
+            val result: Any = try {
+                // 1. Every picture again, in order, each following the one before it.
+                val cast = castSheet(a)
+                val drawn = arrayOfNulls<java.io.File>(n)
+                var ref: ByteArray? = null
+                var failed = 0
+                for (i in 0 until n) {
+                    if (makingCancelled) throw VideoMaker.Cancelled()
+                    show(StudyText.f("video_step_art", i + 1, n), i * 60 / n)
+                    val (prompt, visual) = artPrompts(a, texts, i, cast)
+                    var bytes: ByteArray? = null
+                    for (attempt in 0..1) {
+                        bytes = try { ImageGen.draw(prefs, prompt, visual, ref) } catch (_: Exception) { null }
+                        if (bytes != null) break
+                        Thread.sleep(2500)
+                    }
+                    if (bytes == null) {
+                        failed++
+                        if (i < 3 && failed > 2) throw IllegalStateException(StudyText.t("video_no_art"))
+                        continue
+                    }
+                    val f = java.io.File(tmp, "$i.jpg").apply { writeBytes(bytes) }
+                    drawn[i] = f
+                    ref = bytes
+                }
+                // 2. The narration, with the time of every word.
+                val spoken = VideoMaker.narrate(this, texts, playLang.speechTag, tmp, { makingCancelled }) { i ->
+                    show(StudyText.f("video_step_voice", i + 1, n), 60 + i * 10 / n)
+                }
+                // 3. The video.
+                val mp4 = java.io.File(tmp, "film.mp4")
+                val timing = VideoMaker.render(spoken, drawn.toList(), mp4, { makingCancelled }) { pct ->
+                    show(StudyText.f("video_step_film", pct), 70 + pct * 30 / 100)
+                }
+                // 4. All at once: the new pictures replace the old ones, and the video is kept with them.
+                val hidden = hiddenArt()
+                for (i in 0 until maxOf(n, 200)) {
+                    val old = artFile(a, i)
+                    if (i >= n && !old.exists()) continue
+                    hidden.remove(old.name)
+                    old.delete()
+                    drawn.getOrNull(i)?.let { it.copyTo(old, overwrite = true) }
+                }
+                prefs.edit().putStringSet("art_hidden", hidden).apply()
+                mp4.copyTo(filmFile(a), overwrite = true)
+                filmTimingFile(a).writeText(timing.toString())
+                n - failed
+            } catch (e: Exception) { e }
+            tmp.deleteRecursively()
+            runOnUiThread {
+                try { dialog.dismiss() } catch (_: Exception) {}
+                when (result) {
+                    is Int -> {
+                        toast(StudyText.f("video_made", result))
+                        if (art === a) {
+                            artHolders.forEachIndexed { i, h -> h?.let { showSavedArt(i, it) } }
+                            if (video != null) { closeVideo(); openVideo() }
+                        }
+                    }
+                    is VideoMaker.Cancelled -> {}
+                    is Exception -> android.app.AlertDialog.Builder(this)
+                        .setMessage(StudyText.f("video_failed", result.message ?: ""))
+                        .setPositiveButton(I18n.t("close"), null).show().also { Ui.watch(it) }
+                }
+            }
+        }
     }
 
     private fun goBack(): Boolean = closeVideo() || closeLesson() || closeBook()

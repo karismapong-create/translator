@@ -396,7 +396,11 @@ object BookStore {
     /** Removes a made part (and its pictures, which belong to its sentences) so it can be made again. */
     fun deleteLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, withArt: Boolean) {
         lessonFile(ctx, id, sec, lang, level).delete()
-        if (withArt) File(dir(ctx), "art").listFiles()?.filter { it.name.startsWith("${id}_${sec}_${lang}_${level}_") }?.forEach { it.delete() }
+        if (withArt) {
+            File(dir(ctx), "art").listFiles()?.filter { it.name.startsWith("${id}_${sec}_${lang}_${level}_") }?.forEach { it.delete() }
+            videoFile(ctx, id, sec, lang, level).delete()
+            videoTiming(ctx, id, sec, lang, level).delete()
+        }
     }
 
     /* ---------------- Lessons ---------------- */
@@ -407,6 +411,13 @@ object BookStore {
     /** Picture drawn for one sentence of a part's lesson. */
     fun artFile(ctx: Context, id: Int, sec: Int, lang: String, level: Int, sentence: Int) =
         File(File(dir(ctx), "art").apply { mkdirs() }, "${id}_${sec}_${lang}_${level}_$sentence.jpg")
+
+    /** A part's video (its pictures read aloud), and the time of each sentence and word in it. */
+    fun videoFile(ctx: Context, id: Int, sec: Int, lang: String, level: Int) =
+        File(File(dir(ctx), "video").apply { mkdirs() }, "${id}_${sec}_${lang}_$level.mp4")
+
+    fun videoTiming(ctx: Context, id: Int, sec: Int, lang: String, level: Int) =
+        File(File(dir(ctx), "video").apply { mkdirs() }, "${id}_${sec}_${lang}_$level.json")
 
     fun saveLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, o: JSONObject) =
         lessonFile(ctx, id, sec, lang, level).writeText(o.toString())
