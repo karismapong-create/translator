@@ -94,6 +94,35 @@ object MacStudio {
      * and the book's character sheet on the Mac keeps the characters the same). Waits for it: a picture
      * takes minutes, longer if the Mac is busy with a video. Runs on a background thread.
      */
+    /** The id Owl Studio gives a part's job (same rule as owl_studio.py submit()). */
+    fun jobId(key: String, sentences: List<String>): String {
+        val kept = sentences.filter { it.isNotBlank() }
+        val sha = java.security.MessageDigest.getInstance("SHA-1").digest(kept.joinToString("\n").toByteArray())
+        val digest = sha.joinToString("") { "%02x".format(it) }.take(10)
+        return "${key}_$digest".replace(Regex("[^A-Za-z0-9_-]"), "_")
+    }
+
+    /**
+     * Sentence [index]'s picture from the part's video job on the Mac, if that job has it or is still
+     * drawing it (then this waits for it); null when there is no such job or it gave up on that picture.
+     */
+    fun fromPart(prefs: SharedPreferences, partKey: String, sentences: List<String>, index: Int): ByteArray? {
+        val id = jobId(partKey, sentences)
+        var st = try { poll(prefs, id) } catch (_: Exception) { return null }
+        var misses = 0
+        val until = System.currentTimeMillis() + 3 * 60 * 60_000L
+        while (System.currentTimeMillis() < until) {
+            if (index in st.done) {
+                val f = File.createTempFile("mac", ".jpg")
+                try { return if (fetch(prefs, id, index, f)) f.readBytes() else null } finally { f.delete() }
+            }
+            if (index in st.failed || st.state !in setOf("queued", "working")) return null
+            Thread.sleep(4000)
+            st = try { poll(prefs, id).also { misses = 0 } } catch (_: Exception) { if (++misses > 40) return null; st }
+        }
+        return null
+    }
+
     fun drawOne(prefs: SharedPreferences, key: String, bookId: Int, title: String, author: String, chapter: String,
                 sentence: String, before: String, after: String, again: Boolean, status: ((String) -> Unit)? = null): ByteArray {
         var (id, st) = submit(prefs, key, bookId, title, author, chapter, listOf(sentence), again, before, after)

@@ -1929,7 +1929,11 @@ class NewsActivity : Activity() {
             // one continuous story: the book's character sheet goes into every request, and the
             // nearest earlier picture of this part is the reference.
             val result: Any = try {
-                if (onMac) {
+                val partKey = "${a.book.id}_${a.section.index}_${a.lang}_${a.level}"
+                // A picture the Mac already drew (or is drawing) for this part's video is used as it is.
+                val fromVideo = if (onMac && !again) MacStudio.fromPart(prefs, partKey, texts, i) else null
+                if (fromVideo != null) fromVideo
+                else if (onMac) {
                     MacStudio.drawOne(prefs, "${a.book.id}_${a.section.index}_${a.lang}_${a.level}_s$i", a.book.id, a.book.title,
                         a.book.author, a.section.chapter, texts[i], texts.getOrNull(i - 1).orEmpty(), texts.getOrNull(i + 1).orEmpty(), again)
                 } else {
@@ -2394,6 +2398,9 @@ class NewsActivity : Activity() {
                 val f = java.io.File(tmp, "$i.jpg")
                 if (MacStudio.fetch(prefs, id, i, f)) {
                     drawn[i] = f
+                    // Each picture shows in the book right away, not only when the whole video is done.
+                    try { f.copyTo(artFile(a, i), overwrite = true); setHidden(artFile(a, i).name, false) } catch (_: Exception) {}
+                    runOnUiThread { if (art === a && !isDestroyed) artHolders.getOrNull(i)?.let { showSavedArt(i, it) } }
                     decodeFit(f, 900)?.let { bmp -> runOnUiThread { preview.setImageBitmap(bmp); preview.visibility = View.VISIBLE } }
                 }
             }
