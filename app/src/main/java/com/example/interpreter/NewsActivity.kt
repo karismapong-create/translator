@@ -1899,7 +1899,9 @@ class NewsActivity : Activity() {
     private fun paint(i: Int, holder: LinearLayout?, again: Boolean) {
         val a = art ?: return
         holder ?: return
-        if (!ImageGen.available(prefs)) {
+        // "MacBook local Qwen" draws single pictures on the Mac too, not with the other engines.
+        val onMac = ImageGen.engine(prefs) == "mac" && MacStudio.configured(prefs)
+        if (!onMac && !ImageGen.available(prefs)) {
             android.app.AlertDialog.Builder(this).setMessage(StudyText.t("art_need_key")).setPositiveButton(I18n.t("close"), null)
                 .show().also { Ui.watch(it) }
             return
@@ -1926,9 +1928,15 @@ class NewsActivity : Activity() {
             // The same characters and style in every picture of the book, so a part's pictures read as
             // one continuous story: the book's character sheet goes into every request, and the
             // nearest earlier picture of this part is the reference.
-            val (prompt, visual) = artPrompts(a, texts, i, castSheet(a))
-            val ref = referenceArt(a, i)
-            val result: Any = try { ImageGen.draw(prefs, prompt, visual, ref) } catch (e: Exception) { e }
+            val result: Any = try {
+                if (onMac) {
+                    MacStudio.drawOne(prefs, "${a.book.id}_${a.section.index}_${a.lang}_${a.level}_s$i", a.book.id, a.book.title,
+                        a.book.author, a.section.chapter, texts[i], texts.getOrNull(i - 1).orEmpty(), texts.getOrNull(i + 1).orEmpty(), again)
+                } else {
+                    val (prompt, visual) = artPrompts(a, texts, i, castSheet(a))
+                    ImageGen.draw(prefs, prompt, visual, referenceArt(a, i))
+                }
+            } catch (e: Exception) { e }
             val bytes = result as? ByteArray
             if (bytes != null) try { f.writeBytes(bytes); setHidden(f.name, false) } catch (_: Exception) {}
             val bmp = bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
@@ -2420,6 +2428,12 @@ class NewsActivity : Activity() {
 
     private fun confirmMakeFilm() {
         val a = art ?: return
+        if (FilmService.running) { toast(StudyText.t("video_busy")); return }
+        // The progress notification while the video is made in the background.
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 78)
+        }
         val onMac = ImageGen.engine(prefs) == "mac" && MacStudio.configured(prefs)
         if (!onMac && !ImageGen.available(prefs)) {
             android.app.AlertDialog.Builder(this).setMessage(StudyText.t("art_need_key")).setPositiveButton(I18n.t("close"), null)
@@ -2455,9 +2469,20 @@ class NewsActivity : Activity() {
             .setTitle(Ui.plain("🎬 " + StudyText.t("video_make")))
             .setView(box)
             .setCancelable(false)
+            // The work goes on with the dialog closed, the app in the background or the screen off:
+            // FilmService keeps the phone awake and shows the progress in a notification.
+            .setPositiveButton(StudyText.t("video_background"), null)
             .setNegativeButton(StudyText.t("video_cancel")) { _, _ -> makingCancelled = true }
             .show().also { Ui.watch(it) }
-        fun show(text: String, pct: Int) = runOnUiThread { status.text = text; bar.progress = pct }
+        val app = applicationContext
+        FilmService.start(app, StudyText.t("video_make"))
+        FilmService.onStop = { makingCancelled = true }
+        var lastNote = 0L
+        fun show(text: String, pct: Int) {
+            runOnUiThread { status.text = text; bar.progress = pct }
+            val now = System.currentTimeMillis()
+            if (now - lastNote > 1500) { lastNote = now; FilmService.update(app, a.book.title + "\n" + text, pct) }
+        }
         val texts = sentTexts.toList()
         val n = texts.size
         val tmp = java.io.File(cacheDir, "film_${a.book.id}_${a.section.index}").apply { deleteRecursively(); mkdirs() }
@@ -2520,8 +2545,15 @@ class NewsActivity : Activity() {
                 n - failed
             } catch (e: Exception) { e }
             tmp.deleteRecursively()
+            FilmService.finish(app, when (result) {
+                is Int -> a.book.title + "\n" + StudyText.f("video_made", result)
+                is VideoMaker.Cancelled -> ""
+                is Exception -> a.book.title + "\n" + StudyText.f("video_failed", result.message ?: "")
+                else -> ""
+            })
             runOnUiThread {
                 try { dialog.dismiss() } catch (_: Exception) {}
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 when (result) {
                     is Int -> {
                         toast(StudyText.f("video_made", result))

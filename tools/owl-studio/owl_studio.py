@@ -138,8 +138,8 @@ def visual(job, i, cast):
             "is for understanding only. No text in the picture. Answer with the description only.",
             f'Book: "{job["title"]}" by {job["author"]}' + (f' ({job["chapter"]})' if job.get("chapter") else "") +
             (f"\nCharacter sheet: {cast}" if cast else "") +
-            f"\nContext before: {s[i - 1] if i > 0 else ''}\nScene sentence: {scene}\n"
-            f"Context after: {s[i + 1] if i + 1 < len(s) else ''}", 300)
+            f"\nContext before: {s[i - 1] if i > 0 else job.get('before', '')}\nScene sentence: {scene}\n"
+            f"Context after: {s[i + 1] if i + 1 < len(s) else job.get('after', '')}", 300)
         return f"{STYLE} {d}" if len(d) >= 20 else plain
     except Exception as e:
         log("visual prompt failed, using the plain one:", e)
@@ -272,6 +272,8 @@ def submit(body):
         d.mkdir(parents=True)
         st = {"id": jid, "state": "queued", "book_id": book_id, "title": body.get("title", ""),
               "author": body.get("author", ""), "chapter": body.get("chapter", ""), "sentences": sentences,
+              # One sentence's picture comes as a one-sentence job with its neighbours as context.
+              "before": str(body.get("before", "")), "after": str(body.get("after", "")),
               "cast": body.get("cast", ""), "done": [], "failed": [], "current": -1, "error": "", "last_error": "",
               "created": time.time()}
         write_state(jid, st)

@@ -65,9 +65,10 @@ object MacStudio {
 
     /** Starts (or resumes) the part's job; returns its id and status. [restart] draws everything again. */
     fun submit(prefs: SharedPreferences, key: String, bookId: Int, title: String, author: String, chapter: String,
-               sentences: List<String>, restart: Boolean): Pair<String, Status> {
+               sentences: List<String>, restart: Boolean, before: String = "", after: String = ""): Pair<String, Status> {
         val body = JSONObject().put("id", key).put("book_id", bookId.toString()).put("title", title).put("author", author)
             .put("chapter", chapter).put("sentences", JSONArray(sentences)).put("restart", restart)
+            .put("before", before).put("after", after)
         val (code, b) = call(url(prefs), token(prefs), "POST", "/jobs", body.toString())
         if (code == 401) throw IllegalStateException("Owl Studio: token")
         if (code !in 200..299) throw IllegalStateException("Owl Studio: HTTP $code " + String(b).take(160))
@@ -86,6 +87,36 @@ object MacStudio {
         if (code !in 200..299 || b.isEmpty()) return false
         to.writeBytes(b)
         return true
+    }
+
+    /**
+     * One sentence's picture, drawn on the Mac as a one-sentence job (its neighbours go along as context,
+     * and the book's character sheet on the Mac keeps the characters the same). Waits for it: a picture
+     * takes minutes, longer if the Mac is busy with a video. Runs on a background thread.
+     */
+    fun drawOne(prefs: SharedPreferences, key: String, bookId: Int, title: String, author: String, chapter: String,
+                sentence: String, before: String, after: String, again: Boolean, status: ((String) -> Unit)? = null): ByteArray {
+        var (id, st) = submit(prefs, key, bookId, title, author, chapter, listOf(sentence), again, before, after)
+        var misses = 0
+        val until = System.currentTimeMillis() + 3 * 60 * 60_000L
+        while (System.currentTimeMillis() < until) {
+            when {
+                0 in st.done -> {
+                    val f = File.createTempFile("mac", ".jpg")
+                    try { if (fetch(prefs, id, 0, f)) return f.readBytes() } finally { f.delete() }
+                }
+                st.state == "done" -> throw IllegalStateException("Owl Studio: " + st.lastError.ifBlank { "no picture" }.take(200))
+                st.state == "error" -> throw IllegalStateException("Owl Studio: " + st.error.ifBlank { st.lastError }.take(200))
+                st.state == "cancelled" -> throw IllegalStateException("Owl Studio: cancelled")
+            }
+            status?.invoke(if (st.queue > 1) StudyText.f("mac_waiting", st.queue - 1) else StudyText.f("video_step_mac", 1, 1))
+            Thread.sleep(4000)
+            st = try { poll(prefs, id).also { misses = 0 } } catch (e: Exception) {
+                if (++misses > 40) throw IllegalStateException(StudyText.f("mac_offline", e.message ?: ""))
+                st
+            }
+        }
+        throw IllegalStateException("Owl Studio: timeout")
     }
 
     fun cancel(prefs: SharedPreferences, id: String) {
