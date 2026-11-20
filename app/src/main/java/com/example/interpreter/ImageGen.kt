@@ -24,8 +24,26 @@ object ImageGen {
     fun cfToken(prefs: SharedPreferences) = prefs.getString("cf_token", "").orEmpty().trim()
     fun pollKey(prefs: SharedPreferences) = prefs.getString("poll_key", "").orEmpty().trim()
 
+    private val hex32 = Regex("^[0-9a-fA-F]{32}$")
+    fun validAccount(id: String) = hex32.matches(id)
+
+    // The account ID the token belongs to (32 hex characters), looked up from the token when the field
+    // is empty or holds something else (an email, say), and kept for next time.
+    private fun cfAccountFor(prefs: SharedPreferences, token: String): String {
+        val given = cfAccount(prefs)
+        if (validAccount(given)) return given
+        val (code, body) = call("https://api.cloudflare.com/client/v4/accounts", "GET", mapOf("Authorization" to "Bearer $token"), null)
+        val id = if (code in 200..299) try { JSONObject(body).optJSONArray("result")?.optJSONObject(0)?.optString("id") } catch (_: Exception) { null } else null
+        if (id.isNullOrEmpty() || !validAccount(id)) {
+            throw Failed("Cloudflare: " + (if (given.isNotEmpty()) "계정 ID는 32자리 영문·숫자예요 (이메일 아님). " else "") +
+                "Workers AI 화면의 Account ID를 넣어 주세요" + (if (code !in 200..299) " (" + cfError(code, body) + ")" else ""))
+        }
+        prefs.edit().putString("cf_account", id).apply()
+        return id
+    }
+
     fun available(prefs: SharedPreferences) =
-        (cfAccount(prefs).isNotEmpty() && cfToken(prefs).isNotEmpty()) || pollKey(prefs).isNotEmpty() ||
+        cfToken(prefs).isNotEmpty() || pollKey(prefs).isNotEmpty() ||
             Providers.key(prefs, "gemini").isNotEmpty() || Providers.key(prefs, "openai").isNotEmpty()
 
     // After a quota or billing refusal, that service gets no picture requests for a while (the others
@@ -62,7 +80,7 @@ object ImageGen {
         val o = Providers.key(prefs, "openai")
         val nano = engine(prefs) != "auto"
         if (nano && g.isNotEmpty()) tries += "gemini" to { gemini(prefs, g, prompt, ref) }
-        if (cfA.isNotEmpty() && cfT.isNotEmpty()) tries += "cloudflare" to { cloudflare(cfA, cfT, visual, ref) }
+        if (cfT.isNotEmpty()) tries += "cloudflare" to { cloudflare(cfAccountFor(prefs, cfT), cfT, visual, ref) }
         if (pk.isNotEmpty()) tries += "pollinations" to { pollinations(pk, visual) }
         if (!nano && g.isNotEmpty()) tries += "gemini" to { gemini(prefs, g, prompt, ref) }
         if (o.isNotEmpty()) tries += "openai" to { openai(o, prompt) }
