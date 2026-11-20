@@ -620,6 +620,7 @@ class MainActivity : Activity() {
             I18n.f("m_silent", I18n.t(if (silent) "on" else "off")),
             pronLabel() + ": " + I18n.t(if (Pronunciation.enabled(this)) "on" else "off"),
             artGestureLabel(),
+            ArtKeys.label(),
             StudyText.t("pack_title"),
             StudyText.t("sit_title"),
             "⏩ " + speedLabel(),
@@ -648,18 +649,19 @@ class MainActivity : Activity() {
                         prefs.edit().putBoolean("art_throw", !prefs.getBoolean("art_throw", false)).apply()
                         toast(artGestureLabel())
                     }
-                    9 -> PackUi.menu(this)
-                    10 -> PackUi.situationsMenu(this)
-                    11 -> {
+                    9 -> ArtKeys.show(this)
+                    10 -> PackUi.menu(this)
+                    11 -> PackUi.situationsMenu(this)
+                    12 -> {
                         val r = SpeechOut.RATES
                         val i = r.indexOfFirst { Math.abs(it - SpeechOut.rate) < 0.01f }
                         SpeechOut.setRate(this, r[(i + 1) % r.size])
                         toast(Ui.plain(speedLabel()))
                     }
-                    12 -> showFixes()
-                    13 -> ReportUi.show(this)
-                    14 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
-                    15 -> showLicenses()
+                    13 -> showFixes()
+                    14 -> ReportUi.show(this)
+                    15 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL)))
+                    16 -> showLicenses()
                     else -> Pro.showPaywall(this)
                 }
             }
