@@ -56,6 +56,27 @@ object ArtKeys {
             "句子插图优先使用下面的免费服务，填一个即可，都不需要绑定信用卡。",
             "Sentence pictures are drawn with these free services first. One is enough; neither needs a card."))
 
+        text(t("그림 엔진", "絵のエンジン", "绘图引擎", "Picture engine"), 16f, true)
+        val engines = listOf(
+            "auto" to t("자동 — 무료 서비스 먼저", "自動 — 無料サービスを先に", "自动 — 先用免费服务", "Auto — free services first"),
+            "nano" to t("나노 바나나 먼저 (Gemini 키, 장당 약 50원)", "Nano Banana を先に（Geminiキー、1枚約5円）", "先用 Nano Banana（Gemini 密钥，每张约 0.04 美元）", "Nano Banana first (Gemini key, about 4¢ a picture)"),
+            "pro" to t("나노 바나나 Pro 먼저 (가장 좋음, 장당 약 200원)", "Nano Banana Pro を先に（最高品質、1枚約20円）", "先用 Nano Banana Pro（最佳，每张约 0.15 美元）", "Nano Banana Pro first (best, about 15¢ a picture)"))
+        val group = android.widget.RadioGroup(a)
+        val current = ImageGen.engine(prefs)
+        engines.forEachIndexed { k, (id, name) ->
+            group.addView(android.widget.RadioButton(a).apply {
+                this.id = 1000 + k
+                this.text = name
+                textSize = 14f
+                isChecked = id == current
+            })
+        }
+        box.addView(group)
+        text(t("나노 바나나는 이전 그림을 참고해서 인물과 화풍을 이어 그리는 힘이 가장 좋아요. 설정 → AI 엔진에 결제가 켜진 Gemini 키가 필요해요.",
+            "Nano Banana は前の絵を参考に人物と画風をつなげるのが最も得意です。設定→AIエンジンに課金設定済みのGeminiキーが必要です。",
+            "Nano Banana 参考上一张图延续人物与画风的能力最强，需要在设置→AI 引擎中填写已开通付费的 Gemini 密钥。",
+            "Nano Banana is best at keeping characters and style from the previous picture. It needs a Gemini key with billing in Settings → AI engine."), 12f)
+
         text("Cloudflare Workers AI", 16f, true)
         text(t("하루 무료 사용량 안에서 100장 넘게 그릴 수 있어요 (매일 오전 9시에 다시 채워져요).\n" +
                 "① 아래 버튼으로 Cloudflare를 열고 이메일로 가입·로그인하세요.\n" +
@@ -103,6 +124,7 @@ object ArtKeys {
             .setView(ScrollView(a).apply { addView(box) })
             .setPositiveButton(t("저장", "保存", "保存", "Save")) { _, _ ->
                 prefs.edit()
+                    .putString("art_engine", engines.getOrNull(group.checkedRadioButtonId - 1000)?.first ?: "auto")
                     .putString("cf_account", cfAccount.text.toString().trim())
                     .putString("cf_token", cfToken.text.toString().trim())
                     .putString("poll_key", poll.text.toString().trim())
