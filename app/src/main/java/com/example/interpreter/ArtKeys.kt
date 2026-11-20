@@ -57,19 +57,19 @@ object ArtKeys {
             "Sentence pictures are drawn with these free services first. One is enough; neither needs a card."))
 
         text("Cloudflare Workers AI", 16f, true)
-        text(t("하루 무료 사용량 안에서 150장 정도 그릴 수 있어요 (매일 오전 9시에 다시 채워져요).\n" +
+        text(t("하루 무료 사용량 안에서 100장 넘게 그릴 수 있어요 (매일 오전 9시에 다시 채워져요).\n" +
                 "① 아래 버튼으로 Cloudflare를 열고 이메일로 가입·로그인하세요.\n" +
                 "② 메뉴에서 AI → Workers AI로 가서 'REST API 사용'을 누르세요.\n" +
                 "③ 'Workers AI API 토큰 만들기'로 토큰을 만들고, 그 화면의 계정 ID와 토큰을 아래에 붙여넣으세요.",
-            "1日の無料枠で約150枚描けます（毎日9時（韓国時間）にリセット）。\n" +
+            "1日の無料枠で100枚以上描けます（毎日9時（韓国時間）にリセット）。\n" +
                 "① 下のボタンでCloudflareを開き、メールで登録・ログイン。\n" +
                 "② メニューの AI → Workers AI で「REST APIを使用」を押します。\n" +
                 "③「Workers AI APIトークンを作成」でトークンを作り、アカウントIDとトークンを下に貼り付けます。",
-            "每天的免费额度约可画 150 张（每天 UTC 0 点重置）。\n" +
+            "每天的免费额度可画 100 多张（每天 UTC 0 点重置）。\n" +
                 "① 用下面的按钮打开 Cloudflare，用邮箱注册并登录。\n" +
                 "② 在菜单 AI → Workers AI 中点“使用 REST API”。\n" +
                 "③ 点“创建 Workers AI API 令牌”，把页面上的账户 ID 和令牌粘贴到下面。",
-            "About 150 pictures a day within the free allowance (resets daily at 00:00 UTC).\n" +
+            "Over 100 pictures a day within the free allowance (resets daily at 00:00 UTC).\n" +
                 "① Open Cloudflare with the button below and sign up with your email.\n" +
                 "② In the menu go to AI → Workers AI and tap 'Use REST API'.\n" +
                 "③ Tap 'Create a Workers AI API Token', then paste the account ID and the token below."))

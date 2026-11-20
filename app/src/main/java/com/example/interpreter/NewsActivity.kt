@@ -1477,6 +1477,29 @@ class NewsActivity : Activity() {
     private var lessonToken = 0
     private val making = java.util.Collections.synchronizedSet(HashSet<String>())
 
+    private val artStyle = "Gentle hand-painted watercolor storybook illustration, warm soft colors, delicate ink lines, " +
+        "detailed and expressive faces, soft natural light, cinematic composition. No text, letters or speech bubbles."
+
+    // A short picture description for the free image models, which draw from what is written, not what
+    // is meant: my AI engine turns the sentence and its context into one concrete moment (who, what
+    // they look like and wear, what they do, where, light, framing). Without an engine: a plain version.
+    private fun visualPrompt(a: Art, scene: String, before: String, after: String): String {
+        val plain = "$artStyle Scene from \"${a.book.title}\" by ${a.book.author}, in the book's era: $scene"
+        val engine = RemoteTranslate.engine(prefs) ?: return plain
+        return try {
+            val sys = "You write prompts for an image generation model. Describe ONE moment as a single concrete picture, " +
+                "in English, 40 to 80 words: the characters (age, look, period clothing, expression), what they are doing, " +
+                "the setting and era, time of day and light, and the camera framing. Keep characters true to the book. " +
+                "Draw only what the scene sentence shows; the context is for understanding only. " +
+                "No names of real artists, no text in the picture. Answer with the description only."
+            val user = "Book: \"${a.book.title}\" by ${a.book.author}" +
+                (a.section.chapter.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") +
+                "\nContext before: $before\nScene sentence: $scene\nContext after: $after"
+            val d = RemoteTranslate.ask(prefs, engine, sys, user, 300).trim().trim('"')
+            if (d.length < 20) plain else "$artStyle $d"
+        } catch (_: Exception) { plain }
+    }
+
     // Sentence meanings in the polite register (Korean 존댓말, Japanese です・ます), narration and dialogue alike;
     // without this the engines fall back to the plain written style (한다체, 반말).
     private fun politeRule(): String = when (home.code) {
@@ -1847,7 +1870,7 @@ class NewsActivity : Activity() {
             "Style: gentle hand-painted watercolor storybook illustration, warm soft colors, period-appropriate costumes and " +
             "settings, consistent with the book's era. Absolutely no text, letters, captions, signatures or speech bubbles."
         artNet.execute {
-            val result: Any = try { ImageGen.draw(prefs, prompt) } catch (e: Exception) { e }
+            val result: Any = try { ImageGen.draw(prefs, prompt, visualPrompt(a, scene, before, after)) } catch (e: Exception) { e }
             val bytes = result as? ByteArray
             if (bytes != null) try { f.writeBytes(bytes); setHidden(f.name, false) } catch (_: Exception) {}
             val bmp = bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
