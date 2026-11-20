@@ -96,6 +96,26 @@ object OnDevice {
         return out
     }
 
+    // Checks a translation made by another engine and returns a corrected one. Background thread; throws on failure.
+    fun review(text: String, meaning: String, source: String, target: String): String {
+        val m = model ?: throw IllegalStateException("Gemini Nano unavailable")
+        val s = Languages.byCode(source).english
+        val t = Languages.byCode(target).english
+        val prompt = buildString {
+            append("You are a careful translation editor. Below is a $s sentence and a draft $t translation. ")
+            append("If the draft is wrong, unnatural, incomplete, or mixes in other languages or scripts, rewrite it ")
+            append("as a faithful, natural $t translation. If it is already good, repeat it unchanged. ")
+            append("Reply with the final $t translation only, with no notes, quotes or romanization.\n")
+            append("\n$s sentence:\n$text\n\nDraft $t translation:\n$meaning\n\nFinal $t translation:")
+        }
+        val response = runBlocking {
+            m.generateContent(generateContentRequest(TextPart(prompt)) { temperature = 0.1f })
+        }
+        val out = clean(response.candidates.firstOrNull()?.text.orEmpty())
+        if (out.isBlank()) throw IllegalStateException("empty")
+        return out
+    }
+
     /* ---------- Settings window ---------- */
 
     // Shows what this engine is, the supported phones, and whether it works on this phone.

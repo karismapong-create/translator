@@ -68,8 +68,22 @@ class EngineSettings(
             .show().also { Ui.watch(it) }
     }
 
+    // A short, readable reason first; the server's own message after it.
     fun describe(e: Exception): String = when (e) {
-        is Providers.HttpException -> "HTTP ${e.code}\n${e.body.take(300)}"
+        is Providers.HttpException -> {
+            val msg = Regex("\"message\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").find(e.body)?.groupValues?.get(1)
+                ?.replace("\\n", " ")?.trim()?.take(220) ?: e.body.take(220)
+            val why = when (e.code) {
+                400 -> I18n.t("err_400")
+                401, 403 -> I18n.t("err_key")
+                402 -> I18n.t("err_402")
+                404 -> I18n.t("err_404")
+                429 -> I18n.t("err_429")
+                in 500..599 -> I18n.t("err_5xx")
+                else -> ""
+            }
+            listOf("HTTP ${e.code}", why, msg).filter { it.isNotBlank() }.joinToString("\n")
+        }
         is java.net.SocketTimeoutException -> I18n.t("err_timeout")
         is java.net.ConnectException, is java.net.UnknownHostException, is java.net.NoRouteToHostException ->
             I18n.t("err_connect")
@@ -102,7 +116,23 @@ class EngineSettings(
         }
         val box = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        // Help and test results live inside the one scrolling area, so a long error never hides
+        // the fields below it.
+        val status = TextView(activity).apply {
+            text = help
+            textSize = 15f
+            setTextColor(Color.DKGRAY)
+            setTextIsSelectable(true)
+            visibility = if (help.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+        }
+        box.addView(status)
+        val scroll = ScrollView(activity).apply { addView(box) }
+        fun say(msg: String) {
+            status.text = msg
+            status.visibility = android.view.View.VISIBLE
+            scroll.post { scroll.smoothScrollTo(0, 0) }
         }
         fun field(label: String, value: String, hintText: String): EditText {
             box.addView(TextView(activity).apply {
@@ -159,8 +189,7 @@ class EngineSettings(
 
         val dialog = AlertDialog.Builder(activity)
             .setTitle(label(id))
-            .setMessage(help.ifEmpty { " " })
-            .setView(ScrollView(activity).apply { addView(box) })
+            .setView(scroll)
             .setPositiveButton(I18n.t("e_save")) { _, _ -> store(); onUse(id) }
             .setNeutralButton(I18n.t("e_test"), null)
             .setNegativeButton(I18n.t("cancel"), null)
@@ -168,11 +197,11 @@ class EngineSettings(
 
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
             store()
-            dialog.setMessage(I18n.t("e_testing"))
+            say(I18n.t("e_testing"))
             net.execute {
                 val r: Any = try { test(id) } catch (ex: Exception) { ex }
                 activity.runOnUiThread {
-                    dialog.setMessage(
+                    say(
                         if (r is String) I18n.f("e_ok", r) else I18n.f("e_fail", describe(r as Exception))
                     )
                 }
@@ -181,7 +210,7 @@ class EngineSettings(
 
         listButton?.setOnClickListener {
             store()
-            dialog.setMessage(I18n.t("e_loading"))
+            say(I18n.t("e_loading"))
             net.execute {
                 val r: Any = try { Providers.fetchModels(prefs, id) } catch (ex: Exception) { ex }
                 activity.runOnUiThread {
@@ -191,14 +220,14 @@ class EngineSettings(
                         Providers.geminiNote(n).let { if (it.isEmpty()) n else "$n\n   $it" }
                     } else names
                     if (names.isEmpty()) {
-                        dialog.setMessage(I18n.t("e_models_fail") + ((r as? Exception)?.let { "\n" + describe(it) } ?: ""))
+                        say(I18n.t("e_models_fail") + ((r as? Exception)?.let { "\n" + describe(it) } ?: ""))
                     } else {
-                        dialog.setMessage(I18n.f("e_found", names.size))
+                        say(I18n.f("e_found", names.size))
                         AlertDialog.Builder(activity)
                             .setTitle(I18n.t("e_pick"))
                             .setItems(shown.toTypedArray()) { _, w ->
                                 modelEd?.setText(names[w])
-                                dialog.setMessage(I18n.f("e_selected", names[w]))
+                                say(I18n.f("e_selected", names[w]))
                             }
                             .show().also { Ui.watch(it) }
                     }
