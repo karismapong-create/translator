@@ -1477,23 +1477,51 @@ class NewsActivity : Activity() {
     private var lessonToken = 0
     private val making = java.util.Collections.synchronizedSet(HashSet<String>())
 
+    // The book's character sheet: written once by my AI engine (each main character's fixed look, the
+    // setting and palette) and kept with the book's pictures, so every picture, part and level agrees.
+    private fun castSheet(a: Art): String {
+        val f = java.io.File(BookStore.artFile(this, a.book.id, 0, "x", 0, 0).parentFile, "cast_${a.book.id}.txt")
+        if (f.exists()) return f.readText().trim()
+        val engine = RemoteTranslate.engine(prefs) ?: return ""
+        return try {
+            val sys = "You are the art director of an illustrated edition. Write a character and style sheet in English, at most " +
+                "160 words: for each main character (up to 6), name followed by fixed age, face, hair, build and clothing with " +
+                "colours; then one line on the setting and era and one on the colour palette. Plain text, no lists of rules."
+            val text = RemoteTranslate.ask(prefs, engine, sys, "Book: \"${a.book.title}\" by ${a.book.author}", 500).trim()
+            if (text.length > 40) { f.writeText(text); text } else ""
+        } catch (_: Exception) { "" }
+    }
+
+    // The nearest picture already drawn in this part (earlier first) as the reference for the next one.
+    private fun referenceArt(a: Art, i: Int): ByteArray? {
+        val order = (i - 1 downTo maxOf(0, i - 8)) + ((i + 1)..(i + 8))
+        for (j in order) {
+            val f = artFile(a, j)
+            if (f.exists() && f.length() > 0) return try { f.readBytes() } catch (_: Exception) { null }
+        }
+        return null
+    }
+
     private val artStyle = "Gentle hand-painted watercolor storybook illustration, warm soft colors, delicate ink lines, " +
         "detailed and expressive faces, soft natural light, cinematic composition. No text, letters or speech bubbles."
 
     // A short picture description for the free image models, which draw from what is written, not what
     // is meant: my AI engine turns the sentence and its context into one concrete moment (who, what
     // they look like and wear, what they do, where, light, framing). Without an engine: a plain version.
-    private fun visualPrompt(a: Art, scene: String, before: String, after: String): String {
-        val plain = "$artStyle Scene from \"${a.book.title}\" by ${a.book.author}, in the book's era: $scene"
+    private fun visualPrompt(a: Art, scene: String, before: String, after: String, cast: String): String {
+        val castLine = if (cast.isNotEmpty()) " Characters: $cast" else ""
+        val plain = "$artStyle Scene from \"${a.book.title}\" by ${a.book.author}, in the book's era: $scene$castLine"
         val engine = RemoteTranslate.engine(prefs) ?: return plain
         return try {
             val sys = "You write prompts for an image generation model. Describe ONE moment as a single concrete picture, " +
                 "in English, 40 to 80 words: the characters (age, look, period clothing, expression), what they are doing, " +
                 "the setting and era, time of day and light, and the camera framing. Keep characters true to the book. " +
                 "Draw only what the scene sentence shows; the context is for understanding only. " +
+                "Describe every character who appears exactly as the character sheet says, word for word for their look. " +
                 "No names of real artists, no text in the picture. Answer with the description only."
             val user = "Book: \"${a.book.title}\" by ${a.book.author}" +
                 (a.section.chapter.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") +
+                (if (cast.isNotEmpty()) "\nCharacter sheet: $cast" else "") +
                 "\nContext before: $before\nScene sentence: $scene\nContext after: $after"
             val d = RemoteTranslate.ask(prefs, engine, sys, user, 300).trim().trim('"')
             if (d.length < 20) plain else "$artStyle $d"
@@ -1864,13 +1892,20 @@ class NewsActivity : Activity() {
         val scene = sentTexts.getOrNull(i).orEmpty()
         val before = sentTexts.getOrNull(i - 1).orEmpty()
         val after = sentTexts.getOrNull(i + 1).orEmpty()
-        val prompt = "A single illustration for a scene in the classic public-domain book \"${a.book.title}\" by ${a.book.author}" +
-            (a.section.chapter.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") + ". " +
-            "Scene to draw: $scene\nContext before: $before\nContext after: $after\n" +
-            "Style: gentle hand-painted watercolor storybook illustration, warm soft colors, period-appropriate costumes and " +
-            "settings, consistent with the book's era. Absolutely no text, letters, captions, signatures or speech bubbles."
         artNet.execute {
-            val result: Any = try { ImageGen.draw(prefs, prompt, visualPrompt(a, scene, before, after)) } catch (e: Exception) { e }
+            // The same characters and style in every picture of the book, so a part's pictures read as
+            // one continuous story (and can later become a video): the book's character sheet goes
+            // into every request, and the nearest earlier picture of this part is the reference.
+            val cast = castSheet(a)
+            val prompt = "A single illustration for a scene in the classic public-domain book \"${a.book.title}\" by ${a.book.author}" +
+                (a.section.chapter.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") + ". " +
+                "Scene to draw: $scene\nContext before: $before\nContext after: $after\n" +
+                (if (cast.isNotEmpty()) "Characters and style, always exactly like this: $cast\n" else "") +
+                "Style: gentle hand-painted watercolor storybook illustration, warm soft colors, period-appropriate costumes and " +
+                "settings, consistent with the book's era. Absolutely no text, letters, captions, signatures or speech bubbles."
+            val ref = referenceArt(a, i)
+            val visual = visualPrompt(a, scene, before, after, cast)
+            val result: Any = try { ImageGen.draw(prefs, prompt, visual, ref) } catch (e: Exception) { e }
             val bytes = result as? ByteArray
             if (bytes != null) try { f.writeBytes(bytes); setHidden(f.name, false) } catch (_: Exception) {}
             val bmp = bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
