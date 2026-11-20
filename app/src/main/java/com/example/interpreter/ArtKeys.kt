@@ -98,7 +98,7 @@ object ArtKeys {
         text(t("하루 무료 사용량 안에서 100장 넘게 그릴 수 있어요 (매일 오전 9시에 다시 채워져요).\n" +
                 "① 아래 버튼으로 Cloudflare를 열고 이메일로 가입·로그인하세요.\n" +
                 "② 메뉴에서 AI → Workers AI로 가서 'REST API 사용'을 누르세요.\n" +
-                "③ 'Workers AI API 토큰 만들기'로 토큰을 만들고, 그 화면의 계정 ID와 토큰을 아래에 붙여넣으세요.",
+                "③ 'Workers AI API 토큰 만들기'로 토큰을 만들어 아래에 붙여넣으세요. 계정 ID(32자리 영문·숫자, 이메일 아님)는 비워 두면 자동으로 찾아요.",
             "1日の無料枠で100枚以上描けます（毎日9時（韓国時間）にリセット）。\n" +
                 "① 下のボタンでCloudflareを開き、メールで登録・ログイン。\n" +
                 "② メニューの AI → Workers AI で「REST APIを使用」を押します。\n" +
@@ -112,7 +112,7 @@ object ArtKeys {
                 "② In the menu go to AI → Workers AI and tap 'Use REST API'.\n" +
                 "③ Tap 'Create a Workers AI API Token', then paste the account ID and the token below."))
         link(t("Cloudflare 열기", "Cloudflareを開く", "打开 Cloudflare", "Open Cloudflare"), "https://dash.cloudflare.com/?to=/:account/ai/workers-ai")
-        val cfAccount = field(t("계정 ID (Account ID)", "アカウントID", "账户 ID", "Account ID"), ImageGen.cfAccount(prefs))
+        val cfAccount = field(t("계정 ID (32자리, 비워 두면 자동)", "アカウントID（32桁、空欄で自動）", "账户 ID（32 位，留空自动）", "Account ID (32 characters; blank = automatic)"), ImageGen.cfAccount(prefs))
         val cfToken = field(t("API 토큰", "APIトークン", "API 令牌", "API token"), ImageGen.cfToken(prefs))
 
         text("Pollinations", 16f, true)
@@ -147,7 +147,17 @@ object ArtKeys {
                     .putString("poll_key", poll.text.toString().trim())
                     .putString("gemini_key", gemini.text.toString().trim())
                     .apply()
-                Toast.makeText(a, t("저장했어요", "保存しました", "已保存", "Saved"), Toast.LENGTH_SHORT).show()
+                val acc = cfAccount.text.toString().trim()
+                if (acc.isNotEmpty() && !ImageGen.validAccount(acc)) {
+                    // An email or name in the account field: cleared, so the token finds the account itself.
+                    prefs.edit().putString("cf_account", "").apply()
+                    Toast.makeText(a, t("계정 ID는 이메일이 아니라 32자리 영문·숫자예요. 비워 두고 토큰으로 자동으로 찾을게요.",
+                        "アカウントIDはメールではなく32桁の英数字です。トークンから自動で探します。",
+                        "账户 ID 不是邮箱，而是 32 位字母数字。将通过令牌自动查找。",
+                        "The account ID is 32 letters and digits, not an email. It will be found from the token."), Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(a, t("저장했어요", "保存しました", "已保存", "Saved"), Toast.LENGTH_SHORT).show()
+                }
             }
             .setNegativeButton(I18n.t("close"), null)
             .show().also { Ui.watch(it) }
