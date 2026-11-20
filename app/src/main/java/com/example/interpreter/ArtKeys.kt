@@ -77,6 +77,23 @@ object ArtKeys {
             "Nano Banana 参考上一张图延续人物与画风的能力最强，需要在设置→AI 引擎中填写已开通付费的 Gemini 密钥。",
             "Nano Banana is best at keeping characters and style from the previous picture. It needs a Gemini key with billing in Settings → AI engine."), 12f)
 
+        // Nano Banana runs on a Gemini API key (the same key as the Gemini AI engine).
+        text(t("나노 바나나 (Gemini) 키", "Nano Banana（Gemini）キー", "Nano Banana（Gemini）密钥", "Nano Banana (Gemini) key"), 16f, true)
+        text(t("① 아래 버튼으로 Google AI Studio를 열고 'API 키 만들기'를 누르세요.\n" +
+                "② 그림을 그리려면 그 키의 프로젝트에 결제를 켜야 해요 (AI Studio의 '결제 설정'). 무료 키는 그림 한도가 0이에요.\n" +
+                "③ 키를 복사해 아래에 붙여넣으세요. AI 엔진의 Gemini 키와 같은 키예요.",
+            "① 下のボタンでGoogle AI Studioを開き「APIキーを作成」を押します。\n" +
+                "② 絵を描くには、そのキーのプロジェクトで課金を有効にする必要があります。無料キーは絵の枠が0です。\n" +
+                "③ キーを下に貼り付けます（AIエンジンのGeminiキーと同じです）。",
+            "① 用下面的按钮打开 Google AI Studio，点“创建 API 密钥”。\n" +
+                "② 绘图需要为该密钥的项目开通结算，免费密钥的绘图额度为 0。\n" +
+                "③ 把密钥粘贴到下面（与 AI 引擎的 Gemini 密钥相同）。",
+            "① Open Google AI Studio with the button below and tap 'Create API key'.\n" +
+                "② Drawing needs billing turned on for the key's project; free keys can't draw pictures.\n" +
+                "③ Paste the key below (the same key as the Gemini AI engine)."))
+        link(t("Google AI Studio 열기", "Google AI Studioを開く", "打开 Google AI Studio", "Open Google AI Studio"), "https://aistudio.google.com/apikey")
+        val gemini = field(t("Gemini API 키 (AIza…)", "Gemini APIキー（AIza…）", "Gemini API 密钥（AIza…）", "Gemini API key (AIza…)"), Providers.key(prefs, "gemini"))
+
         text("Cloudflare Workers AI", 16f, true)
         text(t("하루 무료 사용량 안에서 100장 넘게 그릴 수 있어요 (매일 오전 9시에 다시 채워져요).\n" +
                 "① 아래 버튼으로 Cloudflare를 열고 이메일로 가입·로그인하세요.\n" +
@@ -128,6 +145,7 @@ object ArtKeys {
                     .putString("cf_account", cfAccount.text.toString().trim())
                     .putString("cf_token", cfToken.text.toString().trim())
                     .putString("poll_key", poll.text.toString().trim())
+                    .putString("gemini_key", gemini.text.toString().trim())
                     .apply()
                 Toast.makeText(a, t("저장했어요", "保存しました", "已保存", "Saved"), Toast.LENGTH_SHORT).show()
             }

@@ -2369,6 +2369,7 @@ class NewsActivity : Activity() {
     /* ---------- Making the video: the whole part drawn again in one go, then the MP4 ---------- */
 
     @Volatile private var makingCancelled = false
+    @Volatile private var lastArtError = ""
     private val makeNet = Executors.newSingleThreadExecutor()
 
     private fun confirmMakeFilm() {
@@ -2415,17 +2416,23 @@ class NewsActivity : Activity() {
                 var failed = 0
                 for (i in 0 until n) {
                     if (makingCancelled) throw VideoMaker.Cancelled()
-                    show(StudyText.f("video_step_art", i + 1, n), i * 60 / n)
+                    val step = StudyText.f("video_step_art", i + 1, n)
+                    show(step, i * 60 / n)
                     val (prompt, visual) = artPrompts(a, texts, i, cast)
                     var bytes: ByteArray? = null
+                    // The engine being tried and its last error show under the step, so a slow or
+                    // refusing service is visible instead of a silent wait.
                     for (attempt in 0..1) {
-                        bytes = try { ImageGen.draw(prefs, prompt, visual, ref) } catch (_: Exception) { null }
+                        if (makingCancelled) throw VideoMaker.Cancelled()
+                        bytes = try {
+                            ImageGen.draw(prefs, prompt, visual, ref) { what -> show("$step\n· ${what.take(140)}", i * 60 / n) }
+                        } catch (e: Exception) { lastArtError = e.message.orEmpty(); null }
                         if (bytes != null) break
-                        Thread.sleep(2500)
+                        Thread.sleep(1500)
                     }
                     if (bytes == null) {
                         failed++
-                        if (i < 3 && failed > 2) throw IllegalStateException(StudyText.t("video_no_art"))
+                        if (i < 3 && failed > 2) throw IllegalStateException(StudyText.t("video_no_art") + "\n" + lastArtError.take(200))
                         continue
                     }
                     val f = java.io.File(tmp, "$i.jpg").apply { writeBytes(bytes) }
