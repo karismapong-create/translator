@@ -1476,7 +1476,7 @@ class NewsActivity : Activity() {
             .setView(LinearLayout(this).apply { setPadding(dp(20), 0, dp(20), 0); addView(withArt) })
             .setPositiveButton(StudyText.t("books_delete_go")) { _, _ ->
                 BookStore.deleteLesson(this, b.id, s.index, lang.code, level, withArt.isChecked)
-                openSection(b, s.index)
+                openSection(b, s.index, fresh = true)
             }
             .setNegativeButton(I18n.t("close"), null)
             .show().also { Ui.watch(it) }
@@ -1496,7 +1496,7 @@ class NewsActivity : Activity() {
         if (BookStore.lesson(this, b.id, s.index, lang.code, level) == null && RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) {
             lessonBox.addView(Button(this).apply {
                 text = StudyText.t("books_retry")
-                setOnClickListener { openSection(b, s.index) }
+                setOnClickListener { openSection(b, s.index, fresh = true) }
             })
         }
         lessonBox.addView(note(StudyText.t("books_source")))
@@ -1652,7 +1652,8 @@ class NewsActivity : Activity() {
     private val prefetchNet = Executors.newSingleThreadExecutor()
 
     // A section as a lesson in my language and level (AI), or the text with phone translation (offline).
-    private fun openSection(b: BookStore.Book, index: Int) {
+    // [fresh]: asks the AI again even when the part was shown before with the phone's translation.
+    private fun openSection(b: BookStore.Book, index: Int, fresh: Boolean = false) {
         val s = BookStore.sections(this, b.id).getOrNull(index) ?: return
         stopPlay()
         popup?.dismiss()
@@ -1672,6 +1673,15 @@ class NewsActivity : Activity() {
         if (cached != null) {
             renderLesson(cached, l, bookHeader(b, s)) { bookFooter(b, s) }
             prefetch(b, index + 1, l, lv)
+            return
+        }
+        // Shown before with the phone's translation (the AI lesson failed, for example a local model that
+        // timed out): opens the same way again, with its pictures and video, instead of making it again
+        // every time. "Make it with AI again" at the bottom asks the AI.
+        if (!fresh) BookStore.plainLesson(this, b.id, index, l.code, lv)?.let { plain ->
+            lessonSaver = { o -> BookStore.savePlainLesson(this, b.id, index, l.code, lv, o) }
+            lessonBox.addView(note(StudyText.t("books_plain")))
+            renderLesson(plain, l, bookHeader(b, s)) { bookFooter(b, s) }
             return
         }
         val passage = BookStore.sectionText(this, b.id, s)
@@ -1711,7 +1721,7 @@ class NewsActivity : Activity() {
         lessonBox.addView(note(StudyText.t("need_ai")))
         if (RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) lessonBox.addView(Button(this).apply {
             text = StudyText.t("books_retry")
-            setOnClickListener { openSection(b, s.index) }
+            setOnClickListener { openSection(b, s.index, fresh = true) }
         })
         val it = java.text.BreakIterator.getSentenceInstance(java.util.Locale.ENGLISH)
         it.setText(passage)
@@ -1736,6 +1746,10 @@ class NewsActivity : Activity() {
                         val o = JSONObject().put("title", s.chapter)
                             .put("sentences", JSONArray().apply { out.forEach { x -> if (x != null) put(x) } })
                             .put("words", JSONArray())
+                        // Kept, so the part opens this way again (with what is drawn for these sentences).
+                        art?.takeIf { it.book.id == b.id && it.section.index == s.index && it.lang == l.code }?.let { a ->
+                            try { BookStore.savePlainLesson(this, b.id, s.index, a.lang, a.level, o) } catch (_: Exception) {}
+                        }
                         lessonBox.removeAllViews()
                         renderLesson(o, l, bookHeader(b, s)) { bookFooter(b, s) }
                     }
