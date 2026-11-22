@@ -34,8 +34,9 @@ class FilmService : Service() {
         /** Set by the film thread; the notification's stop button calls it. */
         @Volatile var onStop: (() -> Unit)? = null
 
-        private fun send(ctx: Context, action: String?, text: String, pct: Int, first: Boolean) {
+        private fun send(ctx: Context, action: String?, text: String, pct: Int, first: Boolean, book: Int = -1, part: Int = -1) {
             val i = Intent(ctx, FilmService::class.java).setAction(action).putExtra("text", text).putExtra("pct", pct)
+                .putExtra("book", book).putExtra("part", part)
             try {
                 if (first && Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
             } catch (_: Exception) {}
@@ -43,10 +44,10 @@ class FilmService : Service() {
 
         fun start(ctx: Context, text: String) { running = true; send(ctx, null, text, 0, true) }
         fun update(ctx: Context, text: String, pct: Int) { if (running) send(ctx, ACTION_UPDATE, text, pct, false) }
-        /** [text] empty: no "done" notification (cancelled). */
-        fun finish(ctx: Context, text: String) {
+        /** [text] empty: no "done" notification (cancelled). A tap on it opens the book's part [part]. */
+        fun finish(ctx: Context, text: String, book: Int = -1, part: Int = -1) {
             onStop = null
-            if (running) send(ctx, ACTION_DONE, text, 100, false)
+            if (running) send(ctx, ACTION_DONE, text, 100, false, book, part)
             running = false
         }
     }
@@ -62,7 +63,7 @@ class FilmService : Service() {
         when (intent?.action) {
             ACTION_STOP -> { onStop?.invoke(); update(StudyText.t("video_cancel") + "…", pct) }
             ACTION_UPDATE -> update(text, pct)
-            ACTION_DONE -> finish(text)
+            ACTION_DONE -> finish(text, intent.getIntExtra("book", -1), intent.getIntExtra("part", -1))
             else -> { goForeground(text); acquire() }
         }
         return START_NOT_STICKY
@@ -125,7 +126,15 @@ class FilmService : Service() {
         }
     }
 
-    private fun finish(text: String) {
+    // The made part itself, with its pictures and video (the app's start screen if unknown).
+    private fun openPart(book: Int, part: Int): PendingIntent? {
+        if (book < 0) return openApp()
+        val open = Intent(this, NewsActivity::class.java).putExtra("books", true).putExtra("book", book).putExtra("part", part)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        return PendingIntent.getActivity(this, 2, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    }
+
+    private fun finish(text: String, book: Int = -1, part: Int = -1) {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -135,7 +144,7 @@ class FilmService : Service() {
                 .setContentTitle(Ui.plain("🎬 " + StudyText.t("video_make")))
                 .setContentText(Ui.plain(text))
                 .setStyle(Notification.BigTextStyle().bigText(Ui.plain(text)))
-                .setContentIntent(openApp())
+                .setContentIntent(openPart(book, part))
                 .setAutoCancel(true)
                 .build())
         }
