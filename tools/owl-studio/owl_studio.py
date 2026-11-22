@@ -7,6 +7,10 @@ Owl Studio: draws a book part's pictures on your Mac with local Qwen models, for
 - mflux draws every picture with Qwen-Image from the same character sheet and seed, so characters and
   style carry through the whole part. (Optionally, "use_edit" draws each next one with
   Qwen-Image-Edit from the picture before it.)
+- A local vision model (Qwen-VL in Ollama) looks at every finished picture and checks it against the scene
+  and the character sheet: one species per body (no deer body with a hyena face), the right number of
+  legs, eyes and fingers, characters as the sheet describes them. A picture that fails is drawn again
+  with another seed, a few times at most, and the best one is kept.
 - The app sends a job, then fetches each picture as soon as it is ready; the job goes on if the
   phone sleeps, and sending the same part again picks it up where it is. The phone records the
   narration and makes the video itself.
@@ -44,6 +48,13 @@ DEFAULTS = {
     # With it off every picture is drawn fresh from the same character sheet and seed, which kept the
     # characters recognisable.
     "use_edit": False,
+    # Self-check: after each picture a local vision model scores it 0-10 against the scene and character sheet.
+    # Below check_min_score it is drawn again with another seed, at most check_retries more times, and the
+    # best-scoring try is kept. Each check takes about 10-30 s; each redraw costs a full picture (~5-6 min).
+    "check": True,
+    "vlm": "qwen3-vl:8b",              # an Ollama vision model; install.sh picks one you have
+    "check_retries": 2,
+    "check_min_score": 7,
     # {model} {prompt} {out} {ref} {width} {height} {steps} {seed} are filled in for each picture.
     "gen_model": "OsaurusAI/Qwen-Image-mflux-6bit",
     "edit_model": "OsaurusAI/Qwen-Image-Edit-mflux-q6",
@@ -102,6 +113,46 @@ def ask_llm(system, user, max_tokens=400):
     # Markdown bold/headings only add noise to an image prompt.
     text = re.sub(r"\*\*|__|^#+\s*", "", text, flags=re.M)
     return text.strip().strip('"')
+
+
+# ---------------- Self-check (local vision model) ----------------
+
+ANATOMY = ("Anatomically correct: every person and animal has the head, face and body of one and the same species, "
+           "the right number of legs, arms, eyes and fingers, and no merged, missing or extra body parts.")
+
+
+def check_picture(img, scene, cast):
+    """Ask the local vision model what is wrong with the picture. Returns {"score": 0-10, "problems": [...]}."""
+    import base64
+    system = ("You are a strict quality inspector for children's storybook illustrations. Look at the picture very "
+              "carefully, one figure at a time: its head, face, ears, body, legs, tail, hands. Report real defects only.")
+    user = ("Intended scene: " + scene + ("\nCharacter sheet: " + cast if cast else "") + "\n\n"
+            "Check:\n"
+            "1. Every person and animal has the head, face and body of ONE species (for example a deer must have a "
+            "deer's head, not a hyena's or a dog's face; a human body must not have an animal head unless the scene "
+            "says so).\n"
+            "2. Correct number of legs, arms, eyes, ears, fingers; no fused, missing, floating or extra body parts; "
+            "no two figures melted together.\n"
+            "3. The characters match the character sheet (species, age, clothing, colours) and the scene.\n"
+            "4. No text, letters or speech bubbles.\n\n"
+            'Answer with JSON only: {"score": <0-10>, "problems": ["<short defect>", ...]}. '
+            "10 means no defect. Any species mix or wrong body part is 4 or lower.")
+    body = json.dumps({
+        "model": CFG["vlm"], "stream": False, "think": False, "format": "json",
+        "options": {"num_predict": 300, "temperature": 0.1},
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": user, "images": [base64.b64encode(Path(img).read_bytes()).decode()]}],
+    }).encode()
+    req = urllib.request.Request(CFG["ollama"].rstrip("/") + "/api/chat", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        text = json.loads(r.read().decode())["message"]["content"]
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    m = re.search(r"\{.*\}", text, flags=re.S)
+    res = json.loads(m.group(0) if m else text)
+    score = max(0.0, min(10.0, float(res.get("score", 0))))
+    problems = [str(x)[:200] for x in (res.get("problems") or []) if str(x).strip()][:6]
+    return {"score": score, "problems": problems}
 
 
 def cast_sheet(book_id, title, author):
@@ -164,6 +215,60 @@ def run_draw(cmd_key, model, prompt, out_png, ref, seed):
         raise RuntimeError(" | ".join(tail)[-500:] or f"exit {p.returncode}")
 
 
+def draw_checked(jid, st, i, prompt, cast, seed, png, jpg, prev):
+    """Draw picture i, let the vision model check it, and draw again with another seed while it fails."""
+    d = job_dir(jid)
+    scene = prompt[len(STYLE):].strip() if prompt.startswith(STYLE) else prompt
+    tries = 1 + (max(0, int(CFG.get("check_retries", 0))) if CFG.get("check") else 0)
+    best = None                                   # (score, png, jpg, try)
+    history = []
+    for t in range(tries):
+        if t > 0 and jid in CANCEL:
+            break
+        p_png, p_jpg = (png, jpg) if tries == 1 else (d / f"{i}.try{t}.png", d / f"{i}.try{t}.jpg")
+        s = seed if t == 0 else seed + 7919 * t
+        p = prompt if t == 0 else f"{prompt} {ANATOMY}"
+        st["attempt"] = t + 1
+        write_state(jid, st)
+        try:
+            if prev is None or not CFG.get("use_edit"):
+                run_draw("gen_cmd", CFG["gen_model"], p, p_png, None, s)
+            else:
+                edit = ("The picture is the previous illustration of this story. Keep exactly the same characters "
+                        "(faces, hair, age, clothing), art style, colours and setting where they continue. "
+                        "Draw this new moment: " + p)
+                run_draw("edit_cmd", CFG["edit_model"], edit, p_png, prev, s)
+            to_jpeg(p_png, p_jpg)
+        except Exception as e:
+            if best is None:
+                raise
+            log(f"picture {i} redraw {t + 1} failed, keeping the best so far:", e)
+            break
+        if tries == 1:
+            return
+        try:
+            c = check_picture(p_jpg, scene, cast)
+        except Exception as e:
+            # No vision model (or it failed): keep the picture rather than hold the job up.
+            log(f"picture {i}: check unavailable, keeping it:", e)
+            best = (10.0, p_png, p_jpg, t)
+            history.append({"try": t + 1, "seed": s, "error": str(e)[:200]})
+            break
+        history.append({"try": t + 1, "seed": s, "score": c["score"], "problems": c["problems"]})
+        log(f"picture {i} try {t + 1}: score {c['score']:g}", "; ".join(c["problems"]))
+        if best is None or c["score"] > best[0]:
+            best = (c["score"], p_png, p_jpg, t)
+        if c["score"] >= float(CFG.get("check_min_score", 7)):
+            break
+    if best is None:
+        raise RuntimeError("cancelled")
+    best[1].replace(png)
+    best[2].replace(jpg)
+    for f in d.glob(f"{i}.try*"):
+        f.unlink(missing_ok=True)
+    st.setdefault("checks", {})[str(i)] = {"kept": best[3] + 1, "tries": history}
+
+
 def to_jpeg(png, jpg):
     # sips comes with macOS: longest side 1024, JPEG.
     subprocess.run(["sips", "-Z", "1024", "-s", "format", "jpeg", "-s", "formatOptions", "85", str(png), "--out", str(jpg)],
@@ -216,14 +321,7 @@ def work(jid):
         write_state(jid, st)
         prompt = visual(st, i, cast)
         try:
-            if prev is None or not CFG.get("use_edit"):
-                run_draw("gen_cmd", CFG["gen_model"], prompt, png, None, seed)
-            else:
-                edit = ("The picture is the previous illustration of this story. Keep exactly the same characters "
-                        "(faces, hair, age, clothing), art style, colours and setting where they continue. "
-                        "Draw this new moment: " + prompt)
-                run_draw("edit_cmd", CFG["edit_model"], edit, png, prev, seed)
-            to_jpeg(png, jpg)
+            draw_checked(jid, st, i, prompt, cast, seed, png, jpg, prev)
             prev = png
             st["done"] = sorted(set(st.get("done", [])) | {i})
             st["last_error"] = ""
@@ -295,6 +393,7 @@ def status(jid):
         pos = QUEUE.index(jid) + 1 if jid in QUEUE else 0
     return {"id": jid, "state": st["state"], "total": len(st["sentences"]), "done": st.get("done", []),
             "failed": st.get("failed", []), "current": st.get("current", -1), "queue": pos,
+            "attempt": st.get("attempt", 1), "checks": st.get("checks", {}),
             "error": st.get("error", ""), "last_error": st.get("last_error", "")}
 
 
@@ -325,6 +424,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if parts == ["health"]:
             return self._json(200, {"ok": True, "app": "owl-studio", "llm": CFG["llm"],
                                     "gen_model": CFG["gen_model"], "edit_model": CFG["edit_model"],
+                                    "check": bool(CFG.get("check")), "vlm": CFG.get("vlm", ""),
                                     "size": [CFG["width"], CFG["height"]], "steps": CFG["steps"]})
         if len(parts) == 2 and parts[0] == "jobs":
             s = status(parts[1])
@@ -378,6 +478,13 @@ def selftest():
     t = time.time()
     run_draw("gen_cmd", CFG["gen_model"], STYLE + " A small owl reading a book under a lamp.", out, None, 7)
     print("Qwen-Image OK in", int(time.time() - t), "s ->", out)
+    if CFG.get("check"):
+        t = time.time()
+        try:
+            print("Self-check (" + CFG["vlm"] + "):", check_picture(out, "A small owl reading a book under a lamp.", ""),
+                  "in", int(time.time() - t), "s")
+        except Exception as e:
+            print("Self-check FAILED (pictures will be kept unchecked):", e)
     out1 = DATA / "selftest-2.png"
     out1.unlink(missing_ok=True)
     t = time.time()

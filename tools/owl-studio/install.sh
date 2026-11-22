@@ -39,6 +39,18 @@ else
 fi
 echo "Text model: $LLM"
 
+# A local vision model in Ollama that checks every picture (wrong species mixes, extra legs, ...).
+VLM="qwen3-vl:8b"
+if command -v ollama >/dev/null 2>&1; then
+  HAVE=$(ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -iE '^qwen[0-9.]*-?vl' | head -1 || true)
+  if [ -n "$HAVE" ]; then VLM="$HAVE"
+  else
+    echo "Pulling $VLM (picture self-check)..."
+    ollama pull "$VLM" || { VLM="qwen2.5vl:7b"; echo "Pulling $VLM instead..."; ollama pull "$VLM" || true; }
+  fi
+fi
+echo "Vision model (self-check): $VLM"
+
 # Picture models by memory: 6-bit with room to spare, 4-bit editing on 32-63 GB.
 if [ "$MEM_GB" -ge 64 ]; then EDIT="OsaurusAI/Qwen-Image-Edit-mflux-q6"; W=1024; H=768
 else EDIT="OsaurusAI/Qwen-Image-Edit-mflux-q4"; W=896; H=672; fi
@@ -51,6 +63,7 @@ if [ ! -f config.json ]; then
   "port": 8765,
   "token": "$TOKEN",
   "llm": "$LLM",
+  "vlm": "$VLM",
   "gen_model": "$GEN",
   "edit_model": "$EDIT",
   "width": $W,
@@ -59,6 +72,16 @@ if [ ! -f config.json ]; then
 }
 EOF
   echo "config.json written."
+else
+  # An older config.json: add the self-check model if it has none.
+  /usr/bin/python3 - "$VLM" <<'PY'
+import json, sys
+c = json.load(open("config.json"))
+if "vlm" not in c:
+    c["vlm"] = sys.argv[1]
+    json.dump(c, open("config.json", "w"), indent=2)
+    print("config.json: added vlm", sys.argv[1])
+PY
 fi
 
 # Start at login and keep running (launchd).

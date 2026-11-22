@@ -5,6 +5,7 @@
 - Ollama의 로컬 Qwen(텍스트)이 책의 인물 설정표와 문장별 장면 묘사를 씁니다.
 - mflux의 **Qwen-Image**가 모든 그림을 같은 인물 설정표와 같은 시드로 그려서 인물과 화풍이 이어집니다.
   (`use_edit`을 켜면 다음 그림부터 Qwen-Image-Edit가 앞 그림을 고쳐 그리지만, 실제로 돌려 보니 앞 그림을 거의 그대로 베끼고 3배 느려서 기본은 꺼 두었습니다.)
+- **자체 검수**: 그림이 한 장 나올 때마다 로컬 비전 모델(Ollama의 Qwen-VL)이 장면 묘사·인물 설정표와 비교해 0~10점을 매깁니다. 사슴 몸에 하이에나 얼굴 같은 종 섞임, 다리·눈·손가락 개수 오류, 붙어 버린 몸, 설정표와 다른 인물, 글자를 잡아냅니다. 기준(기본 7점) 아래면 다른 시드로 다시 그리고(기본 최대 2번 더), 그중 가장 점수 높은 그림을 남깁니다.
 - 앱은 작업을 보낸 뒤 그림이 한 장씩 완성될 때마다 바로 받아 보여 줍니다. 폰을 꺼도 맥북은 계속 그리고, 다시 누르면 이어서 받습니다.
 - 낭독 녹음과 MP4 합치기는 폰이 합니다(단어별 자막 타이밍 때문에).
 
@@ -19,6 +20,7 @@
 - 새로 그리기(Qwen-Image 6비트): 한 장에 약 5분, 메모리 최대 약 32GB.
 - 이어 그리기(`use_edit` 켰을 때, Qwen-Image-Edit 6비트): 한 장에 약 14분.
 - 문장 하나당 장면 묘사(Ollama qwen3:32b): 수십 초. 파트 첫 작업은 인물 설정표 때문에 1~2분 더.
+- 자체 검수(qwen3-vl:8b): 한 장에 10~30초. 통과 못 하면 다시 그리므로 그 그림은 5분씩 더 걸립니다(최악 한 장에 약 15~18분).
 - 모델 다운로드: Qwen-Image 약 20GB (Edit까지 받으면 약 40GB).
 - 더 빨리 그리려면 `config.json`의 `steps`를 낮추거나(예: 12) 크기를 줄이세요.
 
@@ -47,6 +49,10 @@ bash install.sh --test
 |---|---|
 | `llm` | Ollama 모델 이름 (예: `qwen3:8b`, `qwen3:14b`) |
 | `gen_model`, `edit_model` | mflux 모델 (Hugging Face 이름 또는 폴더) |
+| `check` | `false`면 자체 검수를 끔 (기본 `true`) |
+| `vlm` | 검수용 Ollama 비전 모델 (예: `qwen3-vl:8b`, 더 꼼꼼하게는 `qwen3-vl:32b`) |
+| `check_retries` | 검수에 떨어졌을 때 다시 그리는 최대 횟수 (기본 `2`, `0`이면 점수만 기록) |
+| `check_min_score` | 통과 점수 (기본 `7`) |
 | `use_edit` | `true`면 다음 그림부터 앞 그림을 Qwen-Image-Edit로 고쳐 그림 (기본 `false`) |
 | `width`, `height` | 그림 크기 |
 | `steps` | 단계 수 (낮추면 빠르고 거칠어짐) |
@@ -58,5 +64,7 @@ bash install.sh --test
 launchctl unload ~/Library/LaunchAgents/com.owlinterpreter.studio.plist
 launchctl load ~/Library/LaunchAgents/com.owlinterpreter.studio.plist
 ```
+
+검수 결과는 로그(`picture 3 try 1: score 4 deer has a hyena head` 같은 줄)와 각 작업의 `state.json`의 `checks`에 남습니다.
 
 로그: `~/owl-studio/studio.log` · 작업과 그림: `~/owl-studio/jobs/`
