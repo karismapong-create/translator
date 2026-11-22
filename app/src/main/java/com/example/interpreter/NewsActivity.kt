@@ -49,7 +49,10 @@ class NewsActivity : Activity() {
     private var currentBook: BookStore.Book? = null
 
     // Set while a book part is on screen: sentences get a 🎨 button that draws the scene.
-    private class Art(val book: BookStore.Book, val section: BookStore.Section, val lang: String, val level: Int)
+    private class Art(val book: BookStore.Book, val section: BookStore.Section, val lang: String, val level: Int) {
+        /** The same part, language and level (a part opened again gets a new Art). */
+        fun same(o: Art?) = o != null && o.book.id == book.id && o.section.index == section.index && o.lang == lang && o.level == level
+    }
     private var art: Art? = null
     private val artNet = Executors.newFixedThreadPool(2)
     private val translators = HashMap<String, Translator>()
@@ -174,12 +177,25 @@ class NewsActivity : Activity() {
         if (books) {
             row1.visibility = View.GONE
             showShelf()
-            val fromNote = intent.getIntExtra("book", -1)
-            BookStore.shelf(this).firstOrNull { it.id == fromNote }?.let { openBook(it) }
+            // From a notification (a book downloaded, a video made), or the screen made again by Android
+            // (turned, dark mode, back after a long time in the background): back to the book and the
+            // part that was open, with its saved lesson and pictures, instead of the shelf.
+            val bookId = savedInstanceState?.getInt("open_book", -1)?.takeIf { it >= 0 } ?: intent.getIntExtra("book", -1)
+            val part = savedInstanceState?.getInt("open_part", -1)?.takeIf { it >= 0 } ?: intent.getIntExtra("part", -1)
+            BookStore.shelf(this).firstOrNull { it.id == bookId }?.let { b ->
+                openBook(b)
+                if (part >= 0 && BookStore.has(this, b.id) && part < BookStore.sections(this, b.id).size) openSection(b, part)
+            }
         } else {
             loadDates()
             update()
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        currentBook?.let { outState.putInt("open_book", it.id) }
+        art?.takeIf { lessonPage.visibility == View.VISIBLE && it.book.id == currentBook?.id }?.let { outState.putInt("open_part", it.section.index) }
     }
 
     private fun picked(f: (Int) -> Unit) = object : AdapterView.OnItemSelectedListener {
@@ -1398,8 +1414,15 @@ class NewsActivity : Activity() {
             list.addView(note(StudyText.t("books_empty")))
             return
         }
-        val next = if (read.isEmpty()) 0 else (secs.indices.firstOrNull { it > BookStore.last(this, b.id, lang.code, level) && it !in read }
-            ?: secs.indices.firstOrNull { it !in read } ?: 0)
+        // "Continue" opens the part I was on last: a part counts as read the moment it opens, so going on
+        // to the next unread one skipped the part I had just left (with its pictures and video) and made a
+        // new lesson instead. "Next" at the bottom of the part goes on from there.
+        val last = BookStore.last(this, b.id, lang.code, level)
+        val next = when {
+            read.isEmpty() -> 0
+            last in secs.indices -> last
+            else -> secs.indices.firstOrNull { it !in read } ?: 0
+        }
         list.addView(Button(this).apply {
             text = StudyText.f(if (read.isEmpty()) "books_start" else "books_continue", next + 1)
             Ui.primary(this)
@@ -1658,9 +1681,14 @@ class NewsActivity : Activity() {
         }
         lessonBox.addView(note(StudyText.f("books_making", StudyText.t("level$lv"))))
         val key = "${b.id}_${index}_${l.code}_$lv"
-        making.add(key)
-        net.execute {
-            val result = try { makeBookLesson(b, index, l, lv) } finally { making.remove(key) }
+        // Already being made (made ahead in the background, or I left while it was being made and came
+        // back): wait for that one instead of asking the AI a second time.
+        val mine = making.add(key)
+        val work = Runnable {
+            if (!mine) while (key in making && token == lessonToken && !isDestroyed) Thread.sleep(500)
+            if (!mine && token != lessonToken) return@Runnable
+            // Saved by the other one by now; if that one failed, made here.
+            val result = try { makeBookLesson(b, index, l, lv) } finally { if (mine) making.remove(key) }
             runOnUiThread {
                 if (token != lessonToken || lessonPage.visibility != View.VISIBLE) return@runOnUiThread
                 lessonBox.removeAllViews()
@@ -1674,6 +1702,7 @@ class NewsActivity : Activity() {
                 prefetch(b, index + 1, l, lv)
             }
         }
+        if (mine) net.execute(work) else Thread(work).start()
     }
 
     // Without an AI engine: the original sentences (translated on the phone for other languages).
@@ -1793,10 +1822,15 @@ class NewsActivity : Activity() {
     private fun showSavedArt(i: Int, holder: LinearLayout) {
         val a = art ?: return
         val f = artFile(a, i)
+        // Still being drawn (I left the part and came back): the note shows until it arrives.
+        if (f.name in artBusy) {
+            if (holder.childCount == 0) holder.addView(note(StudyText.t("art_drawing")))
+            return
+        }
         if (f.name in hiddenArt()) return
         if (f.exists()) artNet.execute {
             val bmp = android.graphics.BitmapFactory.decodeFile(f.path)
-            runOnUiThread { if (bmp != null && art === a) putPicture(i, holder, bmp) }
+            runOnUiThread { if (bmp != null && a.same(art) && artHolders.getOrNull(i) === holder) putPicture(i, holder, bmp) }
         }
     }
 
@@ -1942,17 +1976,20 @@ class NewsActivity : Activity() {
             val bmp = bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
             artBusy.remove(key)
             runOnUiThread {
-                if (art !== a) return@runOnUiThread
-                if (bmp != null) putPicture(i, holder, bmp)
+                // The part may have been left and opened again meanwhile: the picture goes to the holder
+                // on screen now.
+                if (!a.same(art)) return@runOnUiThread
+                val h = artHolders.getOrNull(i) ?: return@runOnUiThread
+                if (bmp != null) putPicture(i, h, bmp)
                 else {
-                    holder.removeAllViews()
+                    h.removeAllViews()
                     // The failure note shows for 5 seconds, then fades away (a tap removes it at once).
                     val msg = note(StudyText.f("art_failed", (result as? Exception)?.message ?: "")).apply {
-                        setOnClickListener { holder.removeView(this) }
+                        setOnClickListener { h.removeView(this) }
                     }
-                    holder.addView(msg)
+                    h.addView(msg)
                     msg.postDelayed({
-                        msg.animate().alpha(0f).setDuration(400).withEndAction { holder.removeView(msg) }.start()
+                        msg.animate().alpha(0f).setDuration(400).withEndAction { h.removeView(msg) }.start()
                     }, 5000)
                 }
             }
@@ -2550,14 +2587,14 @@ class NewsActivity : Activity() {
                 is VideoMaker.Cancelled -> ""
                 is Exception -> a.book.title + "\n" + StudyText.f("video_failed", result.message ?: "")
                 else -> ""
-            })
+            }, a.book.id, a.section.index)
             runOnUiThread {
                 try { dialog.dismiss() } catch (_: Exception) {}
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 when (result) {
                     is Int -> {
                         toast(StudyText.f("video_made", result))
-                        if (art === a) {
+                        if (a.same(art)) {
                             artHolders.forEachIndexed { i, h -> h?.let { showSavedArt(i, it) } }
                             if (video != null) { closeVideo(); openVideo() }
                         }
