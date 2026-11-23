@@ -44,14 +44,14 @@ object RemoteTranslate {
         clean(Providers.complete(prefs, id, system, listOf("user" to user), maxTokens, 20000))
 
     /**
-     * [ask] with the chosen engine, then, if it fails (credits used up, a wrong key, busy, the Mac's
-     * local model off), every other AI set up in settings in turn. [ok] decides whether an answer is
+     * [ask] with the chosen engine, then, if it fails (credits used up, a wrong key, busy), the Mac's
+     * local LLM, only when one is set up (no other paid service is asked on its own). [ok] decides whether an answer is
      * usable (for example JSON with sentences); an unusable one also moves on. Returns the first usable
      * answer, or throws the chosen engine's error.
      */
     fun <T> askAny(prefs: SharedPreferences, first: String, system: String, user: String, maxTokens: Int,
                    ok: (String) -> T?): T {
-        val order = listOf(first) + Providers.llms.map { it.id }.filter { it != first && Providers.ready(prefs, it) }
+        val order = listOf(first) + listOf("local").filter { it != first && Providers.ready(prefs, it) }
         var error: Exception? = null
         for (id in order) {
             try {

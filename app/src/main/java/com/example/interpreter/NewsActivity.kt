@@ -365,7 +365,7 @@ class NewsActivity : Activity() {
         val user = "Date: $d\nTopic: ${item.topic}\nNews: ${item.text}"
         val token = ++lessonToken
         net.execute {
-            // The chosen AI first, then any other one set up (credits used up, a busy service...).
+            // The chosen AI first, then the Mac's local LLM if one is set up (credits used up, a busy service...).
             val result: Any = try {
                 RemoteTranslate.askAny(prefs, engine!!, system, user, 2500) { a ->
                     Tutor.json(a)?.takeIf { (it.optJSONArray("sentences")?.length() ?: 0) > 0 }
@@ -1626,7 +1626,7 @@ class NewsActivity : Activity() {
         for (wait in listOf(0L, 4000L, 10000L)) {
             if (wait > 0) Thread.sleep(wait)
             try {
-                // The chosen AI first, then any other one set up.
+                // The chosen AI first, then the Mac's local LLM if one is set up.
                 val o = RemoteTranslate.askAny(prefs, engine, bookSystem(b, l, lv), passage, 4000) { a ->
                     Tutor.json(a)?.takeIf { (it.optJSONArray("sentences")?.length() ?: 0) > 0 }
                 }
