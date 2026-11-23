@@ -155,6 +155,10 @@ object BookStore {
     private fun progressFile(ctx: Context) = File(dir(ctx), "progress.json")
     private fun lessonFile(ctx: Context, id: Int, sec: Int, lang: String, level: Int) =
         File(File(dir(ctx), "lessons").apply { mkdirs() }, "${id}_${sec}_${lang}_$level.json")
+    // The part as shown without the AI lesson (its own sentences, translated on the phone), kept so the
+    // part opens the same way again, with the pictures and video made for those sentences.
+    private fun plainFile(ctx: Context, id: Int, sec: Int, lang: String, level: Int) =
+        File(File(dir(ctx), "lessons").apply { mkdirs() }, "${id}_${sec}_${lang}_$level.plain.json")
 
     private fun get(url: String): String {
         val conn = URL(url).openConnection() as HttpURLConnection
@@ -396,6 +400,7 @@ object BookStore {
     /** Removes a made part (and its pictures, which belong to its sentences) so it can be made again. */
     fun deleteLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, withArt: Boolean) {
         lessonFile(ctx, id, sec, lang, level).delete()
+        plainFile(ctx, id, sec, lang, level).delete()
         if (withArt) {
             File(dir(ctx), "art").listFiles()?.filter { it.name.startsWith("${id}_${sec}_${lang}_${level}_") }?.forEach { it.delete() }
             videoFile(ctx, id, sec, lang, level).delete()
@@ -421,6 +426,12 @@ object BookStore {
 
     fun saveLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, o: JSONObject) =
         lessonFile(ctx, id, sec, lang, level).writeText(o.toString())
+
+    fun plainLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int): JSONObject? =
+        plainFile(ctx, id, sec, lang, level).takeIf { it.exists() }?.let { try { JSONObject(it.readText()) } catch (_: Exception) { null } }
+
+    fun savePlainLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, o: JSONObject) =
+        plainFile(ctx, id, sec, lang, level).writeText(o.toString())
 
     /* ---------------- Background download ---------------- */
 

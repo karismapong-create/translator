@@ -365,18 +365,18 @@ class NewsActivity : Activity() {
         val user = "Date: $d\nTopic: ${item.topic}\nNews: ${item.text}"
         val token = ++lessonToken
         net.execute {
+            // The chosen AI first, then the Mac's local LLM if one is set up (credits used up, a busy service...).
             val result: Any = try {
-                Tutor.json(RemoteTranslate.ask(prefs, engine!!, system, user, 2500))?.also { o ->
-                    if ((o.optJSONArray("sentences")?.length() ?: 0) > 0) NewsStore.saveLesson(this, d, index, l.code, lv, o)
-                } ?: IllegalStateException("format")
+                RemoteTranslate.askAny(prefs, engine!!, system, user, 2500) { a ->
+                    Tutor.json(a)?.takeIf { (it.optJSONArray("sentences")?.length() ?: 0) > 0 }
+                }.also { o -> NewsStore.saveLesson(this, d, index, l.code, lv, o) }
             } catch (e: Exception) { e }
             runOnUiThread {
                 if (lessonPage.visibility != View.VISIBLE || token != lessonToken) return@runOnUiThread
                 lessonBox.removeAllViews()
                 val o = result as? JSONObject
                 if (o == null || (o.optJSONArray("sentences")?.length() ?: 0) == 0) {
-                    lessonBox.addView(note(StudyText.f("failed", (result as? Exception)?.message ?: "")))
-                    offlineLesson(item, l)
+                    offlineLesson(item, l, RemoteTranslate.friendly(result as? Exception, engine))
                     return@runOnUiThread
                 }
                 renderLesson(o, l, newsHeader(item)) { newsFooter() }
@@ -384,9 +384,9 @@ class NewsActivity : Activity() {
         }
     }
 
-    // Without an AI engine: the item translated on the phone, no key words.
-    private fun offlineLesson(item: NewsStore.Item, l: Lang) {
-        lessonBox.addView(note(StudyText.t("need_ai")))
+    // Without an AI engine (or when it failed: [why]): the item translated on the phone, no key words.
+    private fun offlineLesson(item: NewsStore.Item, l: Lang, why: String? = null) {
+        lessonBox.addView(note(why ?: StudyText.t("need_ai")))
         translate(item.text, "en", l.code) { inLang ->
             translate(item.text, "en", home.code) { mine ->
                 if (lessonPage.visibility != View.VISIBLE) return@translate
@@ -1476,7 +1476,7 @@ class NewsActivity : Activity() {
             .setView(LinearLayout(this).apply { setPadding(dp(20), 0, dp(20), 0); addView(withArt) })
             .setPositiveButton(StudyText.t("books_delete_go")) { _, _ ->
                 BookStore.deleteLesson(this, b.id, s.index, lang.code, level, withArt.isChecked)
-                openSection(b, s.index)
+                openSection(b, s.index, fresh = true)
             }
             .setNegativeButton(I18n.t("close"), null)
             .show().also { Ui.watch(it) }
@@ -1496,7 +1496,7 @@ class NewsActivity : Activity() {
         if (BookStore.lesson(this, b.id, s.index, lang.code, level) == null && RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) {
             lessonBox.addView(Button(this).apply {
                 text = StudyText.t("books_retry")
-                setOnClickListener { openSection(b, s.index) }
+                setOnClickListener { openSection(b, s.index, fresh = true) }
             })
         }
         lessonBox.addView(note(StudyText.t("books_source")))
@@ -1626,13 +1626,17 @@ class NewsActivity : Activity() {
         for (wait in listOf(0L, 4000L, 10000L)) {
             if (wait > 0) Thread.sleep(wait)
             try {
-                val o = Tutor.json(RemoteTranslate.ask(prefs, engine, bookSystem(b, l, lv), passage, 4000))
-                if (o != null && (o.optJSONArray("sentences")?.length() ?: 0) > 0) {
-                    BookStore.saveLesson(this, b.id, index, l.code, lv, o)
-                    return o
+                // The chosen AI first, then the Mac's local LLM if one is set up.
+                val o = RemoteTranslate.askAny(prefs, engine, bookSystem(b, l, lv), passage, 4000) { a ->
+                    Tutor.json(a)?.takeIf { (it.optJSONArray("sentences")?.length() ?: 0) > 0 }
                 }
-                last = IllegalStateException("format")
-            } catch (e: Exception) { last = e }
+                BookStore.saveLesson(this, b.id, index, l.code, lv, o)
+                return o
+            } catch (e: Exception) {
+                last = e
+                // Credits used up or a wrong key: waiting won't help.
+                if ((e as? Providers.HttpException)?.code in listOf(401, 402, 403)) break
+            }
         }
         return last
     }
@@ -1652,7 +1656,8 @@ class NewsActivity : Activity() {
     private val prefetchNet = Executors.newSingleThreadExecutor()
 
     // A section as a lesson in my language and level (AI), or the text with phone translation (offline).
-    private fun openSection(b: BookStore.Book, index: Int) {
+    // [fresh]: asks the AI again even when the part was shown before with the phone's translation.
+    private fun openSection(b: BookStore.Book, index: Int, fresh: Boolean = false) {
         val s = BookStore.sections(this, b.id).getOrNull(index) ?: return
         stopPlay()
         popup?.dismiss()
@@ -1672,6 +1677,15 @@ class NewsActivity : Activity() {
         if (cached != null) {
             renderLesson(cached, l, bookHeader(b, s)) { bookFooter(b, s) }
             prefetch(b, index + 1, l, lv)
+            return
+        }
+        // Shown before with the phone's translation (the AI lesson failed, for example a local model that
+        // timed out): opens the same way again, with its pictures and video, instead of making it again
+        // every time. "Make it with AI again" at the bottom asks the AI.
+        if (!fresh) BookStore.plainLesson(this, b.id, index, l.code, lv)?.let { plain ->
+            lessonSaver = { o -> BookStore.savePlainLesson(this, b.id, index, l.code, lv, o) }
+            lessonBox.addView(note(StudyText.t("books_plain")))
+            renderLesson(plain, l, bookHeader(b, s)) { bookFooter(b, s) }
             return
         }
         val passage = BookStore.sectionText(this, b.id, s)
@@ -1694,8 +1708,7 @@ class NewsActivity : Activity() {
                 lessonBox.removeAllViews()
                 val o = result as? JSONObject
                 if (o == null) {
-                    lessonBox.addView(note(StudyText.f("failed", (result as? Exception)?.message ?: "")))
-                    offlineBookLesson(b, s, passage, l)
+                    offlineBookLesson(b, s, passage, l, RemoteTranslate.friendly(result as? Exception, RemoteTranslate.engine(prefs)))
                     return@runOnUiThread
                 }
                 renderLesson(o, l, bookHeader(b, s)) { bookFooter(b, s) }
@@ -1706,12 +1719,12 @@ class NewsActivity : Activity() {
     }
 
     // Without an AI engine: the original sentences (translated on the phone for other languages).
-    private fun offlineBookLesson(b: BookStore.Book, s: BookStore.Section, passage: String, l: Lang) {
+    private fun offlineBookLesson(b: BookStore.Book, s: BookStore.Section, passage: String, l: Lang, why: String? = null) {
         val token = lessonToken
-        lessonBox.addView(note(StudyText.t("need_ai")))
+        lessonBox.addView(note(why ?: StudyText.t("need_ai")))
         if (RemoteTranslate.canWrite(RemoteTranslate.engine(prefs))) lessonBox.addView(Button(this).apply {
             text = StudyText.t("books_retry")
-            setOnClickListener { openSection(b, s.index) }
+            setOnClickListener { openSection(b, s.index, fresh = true) }
         })
         val it = java.text.BreakIterator.getSentenceInstance(java.util.Locale.ENGLISH)
         it.setText(passage)
@@ -1736,6 +1749,10 @@ class NewsActivity : Activity() {
                         val o = JSONObject().put("title", s.chapter)
                             .put("sentences", JSONArray().apply { out.forEach { x -> if (x != null) put(x) } })
                             .put("words", JSONArray())
+                        // Kept, so the part opens this way again (with what is drawn for these sentences).
+                        art?.takeIf { it.book.id == b.id && it.section.index == s.index && it.lang == l.code }?.let { a ->
+                            try { BookStore.savePlainLesson(this, b.id, s.index, a.lang, a.level, o) } catch (_: Exception) {}
+                        }
                         lessonBox.removeAllViews()
                         renderLesson(o, l, bookHeader(b, s)) { bookFooter(b, s) }
                     }

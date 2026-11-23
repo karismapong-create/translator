@@ -43,6 +43,43 @@ object RemoteTranslate {
     fun ask(prefs: SharedPreferences, id: String, system: String, user: String, maxTokens: Int = 600): String =
         clean(Providers.complete(prefs, id, system, listOf("user" to user), maxTokens, 20000))
 
+    /**
+     * [ask] with the chosen engine, then, if it fails (credits used up, a wrong key, busy), the Mac's
+     * local LLM, only when one is set up (no other paid service is asked on its own). [ok] decides whether an answer is
+     * usable (for example JSON with sentences); an unusable one also moves on. Returns the first usable
+     * answer, or throws the chosen engine's error.
+     */
+    fun <T> askAny(prefs: SharedPreferences, first: String, system: String, user: String, maxTokens: Int,
+                   ok: (String) -> T?): T {
+        val order = listOf(first) + listOf("local").filter { it != first && Providers.ready(prefs, it) }
+        var error: Exception? = null
+        for (id in order) {
+            try {
+                ok(ask(prefs, id, system, user, maxTokens))?.let { return it }
+                if (error == null) error = IllegalStateException("format")
+            } catch (e: Exception) {
+                if (error == null) error = e
+            }
+        }
+        throw error ?: IllegalStateException("format")
+    }
+
+    /** One plain line for an AI failure, instead of the service's raw error. */
+    fun friendly(e: Throwable?, id: String?): String {
+        val name = id?.let { Providers.label(it) }.orEmpty()
+        val http = e as? Providers.HttpException
+        val body = http?.body.orEmpty().lowercase()
+        return when {
+            http != null && (http.code == 402 || "credit" in body || "quota" in body || "billing" in body ||
+                "insufficient" in body || "balance" in body) -> StudyText.f("ai_err_credit", name)
+            http != null && (http.code == 401 || http.code == 403) -> StudyText.f("ai_err_key", name)
+            http != null && (http.code == 429 || http.code >= 500) -> StudyText.f("ai_err_busy", name)
+            e is java.net.SocketTimeoutException -> StudyText.f("ai_err_timeout", name)
+            e is java.io.IOException -> StudyText.f("ai_err_offline", name)
+            else -> StudyText.f("ai_err_other", name, (e?.message ?: "").take(120))
+        }
+    }
+
     private fun systemPrompt(sl: Lang, tl: Lang, scene: String) =
         "You are a professional simultaneous interpreter. Translate the user's text from ${sl.english} " +
         "to ${tl.english}. The text may be an unfinished fragment of ongoing speech; translate it as it is " +
