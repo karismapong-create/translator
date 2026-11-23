@@ -149,7 +149,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Providers.migrate(prefs)
-        OnDevice.refresh()
+        OnDevice.refresh(this)
         Pro.init(this)
         StudyLog.app = applicationContext
         ReportUi.schedule(this)

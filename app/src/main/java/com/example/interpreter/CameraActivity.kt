@@ -96,7 +96,7 @@ class CameraActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         home = Languages.home(prefs)
         I18n.use(home.code)
-        OnDevice.refresh()
+        OnDevice.refresh(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         previewView = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
