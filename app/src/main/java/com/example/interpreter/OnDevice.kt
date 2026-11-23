@@ -2,6 +2,7 @@ package com.example.interpreter
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
@@ -16,8 +17,12 @@ import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
 import com.google.mlkit.genai.prompt.Generation
 import com.google.mlkit.genai.prompt.GenerativeModel
+import com.google.mlkit.genai.prompt.ModelPreference
+import com.google.mlkit.genai.prompt.ModelReleaseStage
 import com.google.mlkit.genai.prompt.TextPart
 import com.google.mlkit.genai.prompt.generateContentRequest
+import com.google.mlkit.genai.prompt.generationConfig
+import com.google.mlkit.genai.prompt.modelConfig
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.Executors
 
@@ -32,33 +37,112 @@ object OnDevice {
     // Error message from AICore when the check fails, e.g. "606-FEATURE_NOT_FOUND".
     @Volatile var lastError: String = ""
         private set
+    // What was checked, shown when Gemini Nano is not available: AICore version, Android version, and
+    // the answer for each model choice we tried.
+    @Volatile var diagnostics: String = ""
+        private set
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
-    private val model: GenerativeModel? by lazy {
-        try { Generation.getClient() } catch (_: Throwable) { null }
-    }
+
+    // The client we use. The default (stable model, Google's choice) is tried first. If that says
+    // UNAVAILABLE we also try the other stable model and the preview models: on some phones (e.g.
+    // Galaxy S25 with Gemini Nano 4) only one of them is offered, or only the preview one when the
+    // AICore Developer Preview is turned on.
+    @Volatile private var model: GenerativeModel? = null
+    @Volatile private var app: Context? = null
+
+    private class Choice(val name: String, val make: () -> GenerativeModel)
+
+    private val choices = listOf(
+        Choice("default") { Generation.getClient() },
+        Choice("stable/full") {
+            Generation.getClient(generationConfig {
+                modelConfig = modelConfig { releaseStage = ModelReleaseStage.STABLE; preference = ModelPreference.FULL }
+            })
+        },
+        Choice("stable/fast") {
+            Generation.getClient(generationConfig {
+                modelConfig = modelConfig { releaseStage = ModelReleaseStage.STABLE; preference = ModelPreference.FAST }
+            })
+        },
+        Choice("preview/full") {
+            Generation.getClient(generationConfig {
+                modelConfig = modelConfig { releaseStage = ModelReleaseStage.PREVIEW; preference = ModelPreference.FULL }
+            })
+        },
+        Choice("preview/fast") {
+            Generation.getClient(generationConfig {
+                modelConfig = modelConfig { releaseStage = ModelReleaseStage.PREVIEW; preference = ModelPreference.FAST }
+            })
+        },
+    )
 
     val ready: Boolean get() = status == FeatureStatus.AVAILABLE
 
     fun label(): String = NanoText.t("label")
 
-    // Runs on a background thread.
+    // Runs on a background thread. Tries each model choice and keeps the best one:
+    // AVAILABLE first, then DOWNLOADING, then DOWNLOADABLE.
     fun checkNow(): Int {
-        val m = model
         lastError = ""
-        status = if (m == null) {
-            lastError = "ML Kit GenAI client could not be created"
-            FeatureStatus.UNAVAILABLE
-        } else try {
-            runBlocking { m.checkStatus() }
-        } catch (e: Throwable) {
-            lastError = e.message ?: e.javaClass.simpleName
-            FeatureStatus.UNAVAILABLE
+        val tried = mutableListOf<String>()
+        var best: GenerativeModel? = null
+        var bestStatus = FeatureStatus.UNAVAILABLE
+        fun rank(s: Int) = when (s) {
+            FeatureStatus.AVAILABLE -> 3
+            FeatureStatus.DOWNLOADING -> 2
+            FeatureStatus.DOWNLOADABLE -> 1
+            else -> 0
         }
+        for (c in choices) {
+            val m = try { c.make() } catch (e: Throwable) {
+                tried += "${c.name}: ${e.message ?: e.javaClass.simpleName}"
+                if (lastError.isBlank()) lastError = e.message ?: e.javaClass.simpleName
+                continue
+            }
+            val s = try { runBlocking { m.checkStatus() } } catch (e: Throwable) {
+                if (lastError.isBlank()) lastError = e.message ?: e.javaClass.simpleName
+                tried += "${c.name}: ${e.message ?: e.javaClass.simpleName}"
+                try { m.close() } catch (_: Throwable) {}
+                continue
+            }
+            tried += "${c.name}: ${statusName(s)}"
+            if (rank(s) > rank(bestStatus)) {
+                best?.let { try { it.close() } catch (_: Throwable) {} }
+                best = m
+                bestStatus = s
+            } else {
+                try { m.close() } catch (_: Throwable) {}
+            }
+            if (s == FeatureStatus.AVAILABLE) break
+        }
+        // The old client is not closed here: a translation may still be using it on another thread.
+        model = best
+        diagnostics = buildString {
+            append("AICore ").append(aicoreVersion() ?: "not installed")
+            append(" · Android ").append(Build.VERSION.RELEASE).append(" (API ").append(Build.VERSION.SDK_INT).append(")")
+            append("\n").append(tried.joinToString("\n"))
+        }
+        status = bestStatus
         return status
     }
 
-    fun refresh() {
+    private fun statusName(s: Int) = when (s) {
+        FeatureStatus.AVAILABLE -> "AVAILABLE"
+        FeatureStatus.DOWNLOADABLE -> "DOWNLOADABLE"
+        FeatureStatus.DOWNLOADING -> "DOWNLOADING"
+        FeatureStatus.UNAVAILABLE -> "UNAVAILABLE"
+        else -> s.toString()
+    }
+
+    // Installed version of the Android AICore app, or null when it is missing.
+    private fun aicoreVersion(): String? = try {
+        @Suppress("DEPRECATION")
+        app!!.packageManager.getPackageInfo("com.google.android.aicore", 0).versionName ?: "?"
+    } catch (_: Throwable) { null }
+
+    fun refresh(ctx: Context) {
+        app = ctx.applicationContext
         worker.execute { checkNow() }
     }
 
@@ -100,6 +184,7 @@ object OnDevice {
 
     // Shows what this engine is, the supported phones, and whether it works on this phone.
     fun openDialog(activity: Activity, onUse: (String) -> Unit) {
+        app = activity.applicationContext
         val density = activity.resources.displayMetrics.density
         fun px(v: Int) = (v * density).toInt()
         fun text(value: String, size: Float, color: Int = Color.DKGRAY, bold: Boolean = false) = TextView(activity).apply {
@@ -118,11 +203,21 @@ object OnDevice {
             text = NanoText.t("btn_aicore")
             isAllCaps = false
             setOnClickListener {
+                // AICore is a system app: Play Store search usually doesn't show it, and on some phones
+                // the store page is hidden too. Open its app info in Settings first, where "App details
+                // in store" leads to the update. Fall back to the store link when it isn't installed.
                 val pkg = "com.google.android.aicore"
+                val uri = android.net.Uri.parse("package:$pkg")
+                val installed = aicoreVersion() != null
                 try {
-                    activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=$pkg")))
+                    if (!installed) throw IllegalStateException("not installed")
+                    activity.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri))
                 } catch (_: Exception) {
-                    activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=$pkg")))
+                    try {
+                        activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=$pkg")))
+                    } catch (_: Exception) {
+                        activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=$pkg")))
+                    }
                 }
             }
         }
@@ -155,7 +250,8 @@ object OnDevice {
             aicoreButton.visibility = if (unavailable) View.VISIBLE else View.GONE
             helpView.visibility = if (unavailable) View.VISIBLE else View.GONE
             helpView.text = NanoText.t("help_unavailable") +
-                if (lastError.isNotBlank()) "\n\n" + NanoText.f("err_detail", lastError) else ""
+                (if (lastError.isNotBlank()) "\n\n" + NanoText.f("err_detail", lastError) else "") +
+                (if (diagnostics.isNotBlank()) "\n\n" + NanoText.f("diag", diagnostics) else "")
             useButton.isEnabled = s == FeatureStatus.AVAILABLE
             testButton.isEnabled = s == FeatureStatus.AVAILABLE
         }
@@ -305,16 +401,17 @@ private object NanoText {
         "st_downloading" to m("AI 모델을 받는 중이에요. 잠시 후 다시 확인하세요.", "AIモデルをダウンロード中です。しばらくして再確認してください。", "The AI model is downloading. Check again in a while.", "Téléchargement du modèle en cours. Revérifiez plus tard.", "Descargando el modelo. Vuelve a comprobar en un rato.", "Modell wird geladen. Später erneut prüfen.", "正在下载 AI 模型，请稍后再检查。"),
         "st_unavailable" to m("✘ 지금은 이 폰에서 쓸 수 없어요", "✘ 現在この端末では使えません", "✘ Not available on this phone right now", "✘ Indisponible sur ce téléphone pour le moment", "✘ No disponible en este teléfono por ahora", "✘ Auf diesem Handy derzeit nicht verfügbar", "✘ 本机目前不可用"),
         "help_unavailable" to m(
-            "지원 폰인데 이렇게 나오면 순서대로 해보세요.\n① 아래 버튼으로 Play 스토어의 'Android AICore'를 최신으로 업데이트하세요.\n② 와이파이에 연결한 채 폰을 다시 시작하세요. AICore가 설정을 받는 데 몇 분에서 몇 시간 걸릴 수 있어요.\n③ 그래도 안 되면 이 앱을 지우고 다시 설치하세요(오류 번호 601일 때).\n④ 잠금 해제된(루팅·부트로더 해제) 폰에서는 쓸 수 없어요.",
-            "対応機種なのにこう表示される場合は、順に試してください。\n① 下のボタンでPlayストアの「Android AICore」を最新に更新します。\n② Wi-Fiにつないだまま端末を再起動します。AICoreの設定取得には数分〜数時間かかることがあります。\n③ それでもだめならこのアプリを再インストールします(エラー601の場合)。\n④ ブートローダーがアンロックされた端末では使えません。",
-            "If your phone is on the list, try these in order:\n① Update “Android AICore” in the Play Store with the button below.\n② Restart the phone while on Wi-Fi. AICore can take a few minutes to a few hours to get its settings.\n③ If it still fails, reinstall this app (for error 601).\n④ Phones with an unlocked bootloader are not supported.",
-            "Si votre téléphone est dans la liste, essayez dans l'ordre :\n① Mettez à jour « Android AICore » sur le Play Store avec le bouton ci-dessous.\n② Redémarrez le téléphone en Wi-Fi. AICore peut mettre de quelques minutes à quelques heures.\n③ Sinon, réinstallez cette appli (erreur 601).\n④ Les téléphones au bootloader déverrouillé ne sont pas pris en charge.",
-            "Si tu teléfono está en la lista, prueba en orden:\n① Actualiza «Android AICore» en Play Store con el botón de abajo.\n② Reinicia el teléfono con Wi-Fi. AICore puede tardar de minutos a horas.\n③ Si sigue fallando, reinstala esta app (error 601).\n④ No funciona con el bootloader desbloqueado.",
-            "Steht dein Handy auf der Liste, versuche der Reihe nach:\n① „Android AICore“ im Play Store über den Button unten aktualisieren.\n② Handy im WLAN neu starten. AICore braucht Minuten bis Stunden.\n③ Sonst diese App neu installieren (Fehler 601).\n④ Mit entsperrtem Bootloader nicht unterstützt.",
-            "如果机型在列表中，请依次尝试：\n① 用下方按钮在 Play 商店更新“Android AICore”。\n② 连接 Wi-Fi 并重启手机。AICore 获取配置可能需要几分钟到几小时。\n③ 仍不行时重新安装本应用(错误 601)。\n④ 已解锁 bootloader 的手机不受支持。"
+            "지원 폰인데 이렇게 나오면 순서대로 해보세요.\n① AICore는 시스템 앱이라 Play 스토어에서 검색해도 안 나와요. 아래 버튼으로 AICore 앱 정보를 열고, 맨 아래 '스토어의 앱 세부정보'를 눌러 업데이트가 있으면 받으세요. 그 링크가 없으면 설정 → 소프트웨어 업데이트와 Google Play 시스템 업데이트를 최신으로 해 주세요.\n② 와이파이에 연결한 채 폰을 다시 시작하세요. AICore가 설정을 받는 데 몇 분에서 몇 시간 걸릴 수 있어요. VPN은 잠시 꺼 두세요.\n③ 그래도 안 되면 AICore 미리보기를 켜 보세요: 설정 → 휴대전화 정보 → 소프트웨어 정보 → '빌드번호'를 7번 눌러 개발자 옵션을 켜고, 개발자 옵션의 'AICore 설정'에서 'Enable AICore Developer Preview'를 켠 뒤 폰을 다시 시작하고 '다시 확인'을 누르세요. 이 앱은 미리보기 모델도 자동으로 찾아요.\n④ 오류 번호 601이면 이 앱을 지우고 다시 설치하세요.\n⑤ 잠금 해제된(루팅·부트로더 해제) 폰에서는 쓸 수 없어요.",
+            "対応機種なのにこう表示される場合は、順に試してください。\n① AICoreはシステムアプリのためPlayストアの検索に出ません。下のボタンでアプリ情報を開き、「ストアのアプリの詳細」から更新します。\n② Wi-Fiにつないだまま端末を再起動します。AICoreの設定取得には数分〜数時間かかることがあります。VPNは一時的にオフにしてください。\n③ それでもだめなら、開発者オプション(ビルド番号を7回タップ)の「AICore設定」で「Enable AICore Developer Preview」をオンにし、再起動して再確認します。このアプリはプレビューモデルも自動で探します。\n④ エラー601の場合はこのアプリを再インストールします。\n⑤ ブートローダーがアンロックされた端末では使えません。",
+            "If your phone is on the list, try these in order:\n① AICore is a system app, so Play Store search won't show it. Open its app info with the button below and tap “App details in store” to update it.\n② Restart the phone while on Wi-Fi. AICore can take a few minutes to a few hours to get its settings. Turn off any VPN for a while.\n③ If it still fails, turn on Developer options (tap Build number 7 times), open “AICore Settings” there, turn on “Enable AICore Developer Preview”, restart and check again. This app also looks for the preview models.\n④ For error 601, reinstall this app.\n⑤ Phones with an unlocked bootloader are not supported.",
+            "Si votre téléphone est dans la liste, essayez dans l'ordre :\n① AICore est une appli système, absente de la recherche du Play Store. Ouvrez ses infos avec le bouton ci-dessous, puis « Détails de l'appli dans le Store ».\n② Redémarrez le téléphone en Wi-Fi. AICore peut mettre de quelques minutes à quelques heures. Coupez un éventuel VPN.\n③ Sinon, dans les options pour les développeurs, ouvrez « AICore Settings », activez « Enable AICore Developer Preview », redémarrez et revérifiez.\n④ Erreur 601 : réinstallez cette appli.\n⑤ Les téléphones au bootloader déverrouillé ne sont pas pris en charge.",
+            "Si tu teléfono está en la lista, prueba en orden:\n① AICore es una app del sistema y no aparece al buscar en Play Store. Abre su información con el botón de abajo y toca «Detalles de la app en la tienda».\n② Reinicia el teléfono con Wi-Fi. AICore puede tardar de minutos a horas. Desactiva la VPN un rato.\n③ Si sigue fallando, en Opciones de desarrollador abre «AICore Settings», activa «Enable AICore Developer Preview», reinicia y comprueba de nuevo.\n④ Error 601: reinstala esta app.\n⑤ No funciona con el bootloader desbloqueado.",
+            "Steht dein Handy auf der Liste, versuche der Reihe nach:\n① AICore ist eine System-App und erscheint nicht in der Play-Store-Suche. App-Info über den Button unten öffnen und „App-Details im Store“ antippen.\n② Handy im WLAN neu starten. AICore braucht Minuten bis Stunden. VPN kurz ausschalten.\n③ Sonst in den Entwickleroptionen „AICore Settings“ öffnen, „Enable AICore Developer Preview“ einschalten, neu starten und erneut prüfen.\n④ Bei Fehler 601 diese App neu installieren.\n⑤ Mit entsperrtem Bootloader nicht unterstützt.",
+            "如果机型在列表中，请依次尝试：\n① AICore 是系统应用，在 Play 商店搜不到。用下方按钮打开应用信息，点“商店中的应用详情”更新。\n② 连接 Wi-Fi 并重启手机。AICore 获取配置可能需要几分钟到几小时。请暂时关闭 VPN。\n③ 仍不行时，在开发者选项中打开“AICore Settings”，开启“Enable AICore Developer Preview”，重启后重新检查。\n④ 错误 601 时重新安装本应用。\n⑤ 已解锁 bootloader 的手机不受支持。"
         ),
+        "diag" to m("확인한 내용:\n%s", "確認内容:\n%s", "What was checked:\n%s", "Vérifications :\n%s", "Comprobado:\n%s", "Geprüft:\n%s", "检查内容：\n%s"),
         "err_detail" to m("오류 내용: %s", "エラー内容: %s", "Error: %s", "Erreur : %s", "Error: %s", "Fehler: %s", "错误：%s"),
-        "btn_aicore" to m("Android AICore 업데이트 (Play 스토어)", "Android AICoreを更新 (Playストア)", "Update Android AICore (Play Store)", "Mettre à jour Android AICore (Play Store)", "Actualizar Android AICore (Play Store)", "Android AICore aktualisieren (Play Store)", "更新 Android AICore (Play 商店)"),
+        "btn_aicore" to m("Android AICore 앱 정보 열기", "Android AICoreのアプリ情報を開く", "Open Android AICore app info", "Ouvrir les infos d'Android AICore", "Abrir información de Android AICore", "Android AICore App-Info öffnen", "打开 Android AICore 应用信息"),
         "btn_check" to m("다시 확인", "再確認", "Check again", "Revérifier", "Comprobar de nuevo", "Erneut prüfen", "重新检查"),
         "btn_download" to m("⬇ AI 모델 받기", "⬇ AIモデルをダウンロード", "⬇ Download AI model", "⬇ Télécharger le modèle", "⬇ Descargar modelo", "⬇ KI-Modell laden", "⬇ 下载 AI 模型"),
         "btn_use" to m("이 엔진 사용", "このエンジンを使う", "Use this engine", "Utiliser ce moteur", "Usar este motor", "Diese Engine nutzen", "使用此引擎"),
