@@ -1596,7 +1596,9 @@ class NewsActivity : Activity() {
         val spec = when {
             lv == 0 -> "beginner graded reader: retell the passage in 6 to 8 short, simple sentences with very common words"
             lv == 1 -> "intermediate graded reader: retell the passage in 10 to 12 sentences with everyday words, keeping the important dialogue"
-            l.code == "en" -> "advanced: keep the original English wording exactly, only split it into sentences"
+            l.code == "en" -> "advanced: keep the original English wording exactly, only split it into sentences " +
+                "(a sentence ends only where the book's sentence ends: never after Mr., Mrs., Dr., St. or an initial, " +
+                "and a quotation stays with its 'she said')"
             else -> "advanced: translate the passage faithfully into natural ${l.english}, sentence by sentence"
         }
         val keyWords = when (lv) { 0 -> 5; 1 -> 7; else -> 10 }
@@ -1628,6 +1630,7 @@ class NewsActivity : Activity() {
             try {
                 val o = Tutor.json(RemoteTranslate.ask(prefs, engine, bookSystem(b, l, lv), passage, 4000))
                 if (o != null && (o.optJSONArray("sentences")?.length() ?: 0) > 0) {
+                    Sentences.mend(o, l.code)
                     BookStore.saveLesson(this, b.id, index, l.code, lv, o)
                     return o
                 }
@@ -1670,6 +1673,9 @@ class NewsActivity : Activity() {
         lessonSaver = { o -> BookStore.saveLesson(this, b.id, index, l.code, lv, o) }
         val cached = BookStore.lesson(this, b.id, index, l.code, lv)
         if (cached != null) {
+            // Made before sentences were split carefully: pieces cut at "Mrs." are joined again.
+            val hidden = hiddenArt()
+            if (BookStore.mendLesson(this, b.id, index, l.code, lv, cached, hidden)) prefs.edit().putStringSet("art_hidden", hidden).apply()
             renderLesson(cached, l, bookHeader(b, s)) { bookFooter(b, s) }
             prefetch(b, index + 1, l, lv)
             return
@@ -1713,17 +1719,7 @@ class NewsActivity : Activity() {
             text = StudyText.t("books_retry")
             setOnClickListener { openSection(b, s.index) }
         })
-        val it = java.text.BreakIterator.getSentenceInstance(java.util.Locale.ENGLISH)
-        it.setText(passage)
-        val sents = ArrayList<String>()
-        var a = it.first()
-        var e = it.next()
-        while (e != java.text.BreakIterator.DONE) {
-            passage.substring(a, e).trim().takeIf { t -> t.isNotEmpty() }?.let { t -> sents += t }
-            a = e
-            e = it.next()
-        }
-        val items = sents.take(30)
+        val items = Sentences.split(passage).take(30)
         val out = arrayOfNulls<JSONObject>(items.size)
         var left = items.size
         if (left == 0) return
