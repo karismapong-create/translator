@@ -422,6 +422,57 @@ object BookStore {
     fun saveLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, o: JSONObject) =
         lessonFile(ctx, id, sec, lang, level).writeText(o.toString())
 
+    /**
+     * Joins sentences of a saved lesson that were cut in the middle (at "Mrs.", an initial...), and
+     * moves its pictures, hidden-picture names and video timing along so each stays with its
+     * sentence (a joined sentence keeps the first picture of its pieces). Returns true if it changed.
+     */
+    fun mendLesson(ctx: Context, id: Int, sec: Int, lang: String, level: Int, o: JSONObject, hidden: MutableSet<String>): Boolean {
+        val oldTexts = o.optJSONArray("sentences")?.let { a -> (0 until a.length()).map { a.optJSONObject(it)?.optString("text").orEmpty() } }
+            ?: return false
+        val groups = Sentences.mend(o, lang) ?: return false
+        saveLesson(ctx, id, sec, lang, level, o)
+        // Pictures: first to temporary names, then to their new numbers.
+        val moving = ArrayList<Pair<File, File>>()
+        groups.forEachIndexed { k, g ->
+            val src = g.map { artFile(ctx, id, sec, lang, level, it) }.firstOrNull { it.exists() }
+            val wasHidden = src != null && src.name in hidden
+            g.forEach { hidden.remove(artFile(ctx, id, sec, lang, level, it).name) }
+            if (src != null) {
+                val tmp = File(src.parentFile, src.name + ".mend")
+                if (src.renameTo(tmp)) moving += tmp to artFile(ctx, id, sec, lang, level, k)
+                if (wasHidden) hidden.add(artFile(ctx, id, sec, lang, level, k).name)
+            }
+            g.forEach { artFile(ctx, id, sec, lang, level, it).takeIf { f -> f.exists() && f != src }?.delete() }
+        }
+        moving.forEach { (tmp, dest) -> dest.delete(); tmp.renameTo(dest) }
+        // Video timing: the pieces' times and words become one sentence's.
+        val tf = videoTiming(ctx, id, sec, lang, level)
+        try {
+            val t = JSONObject(tf.readText())
+            val old = t.optJSONArray("sentences")
+            if (old != null && old.length() == oldTexts.size) {
+                val out = JSONArray()
+                for (g in groups) {
+                    val words = JSONArray()
+                    var shift = 0
+                    for (i in g) {
+                        old.optJSONObject(i)?.optJSONArray("words")?.let { ws ->
+                            for (w in 0 until ws.length()) ws.optJSONArray(w)?.let { r ->
+                                words.put(JSONArray().put(r.optInt(0) + shift).put(r.optInt(1) + shift).put(r.optLong(2)))
+                            }
+                        }
+                        shift += oldTexts[i].trim().length + 1
+                    }
+                    out.put(JSONObject().put("start", old.optJSONObject(g.first)?.optLong("start") ?: 0L)
+                        .put("end", old.optJSONObject(g.last)?.optLong("end") ?: 0L).put("words", words))
+                }
+                tf.writeText(t.put("sentences", out).toString())
+            }
+        } catch (_: Exception) { }
+        return true
+    }
+
     /* ---------------- Background download ---------------- */
 
     private const val JOB_ID = 7311
