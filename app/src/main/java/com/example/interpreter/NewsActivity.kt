@@ -489,7 +489,11 @@ class NewsActivity : Activity() {
             lessonBox.addView(tv)
         }
         val sentences = o.optJSONArray("sentences") ?: JSONArray()
+        // Books: the part's first picture on top, like a cover.
+        if (art != null) lessonBox.addView(coverView(sentences.length()))
         sentViews.clear()
+        sentBlocks.clear()
+        meaningViews.clear()
         artHolders.clear()
         sentTexts.clear()
         wordStarts.clear()
@@ -530,6 +534,14 @@ class NewsActivity : Activity() {
             background = Ui.card(context)
         }
         lessonBox.addView(note(StudyText.t("press_hint")))
+        // How the translation sits: under each sentence, over it, or hidden to read the original alone.
+        lessonBox.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }.also { viewChips = it })
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(6); bottomMargin = dp(2)
+        })
+        renderViewChips()
         if (art != null) lessonBox.addView(TextView(this).apply {
             textSize = 14f
             setTextColor(Ui.PRIMARY)
@@ -550,8 +562,13 @@ class NewsActivity : Activity() {
             }
             sentViews.add(tv)
             attachInspector(tv, index, l)
+            // One block per sentence (sentence, reading aid, translation, picture), so the translation
+            // can move over or under its sentence without drawing the lesson again.
+            val block = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            body.addView(block)
+            sentBlocks.add(block)
             // Each paragraph has its own play button.
-            body.addView(LinearLayout(this).apply {
+            block.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.TOP
                 addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -573,9 +590,9 @@ class NewsActivity : Activity() {
                     setOnClickListener { artButton(index) }
                 })
             })
-            Pronunciation.attach(this, body, tv, text, l.code, home.code)
-            s.optString("meaning").takeIf { it.isNotBlank() }?.let {
-                body.addView(TextView(this).apply {
+            Pronunciation.attach(this, block, tv, text, l.code, home.code)
+            meaningViews.add(s.optString("meaning").takeIf { it.isNotBlank() }?.let {
+                TextView(this).apply {
                     this.text = Corrections.apply(context, home.code, it)
                     textSize = 14f
                     setTextColor(Ui.PRIMARY)
@@ -583,12 +600,12 @@ class NewsActivity : Activity() {
                     // A tap pauses or goes on, as on the white space; a long press corrects the meaning.
                     setOnClickListener { togglePlay() }
                     setOnLongClickListener { editMeaning(index, this); true }
-                })
-            }
+                }.also { m -> block.addView(m) }
+            })
             // Room for the scene's picture; one drawn before shows again at once.
             if (art != null) {
                 val holder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                body.addView(holder)
+                block.addView(holder)
                 while (artHolders.size < index) artHolders.add(null)
                 artHolders.add(holder)
                 showSavedArt(index, holder)
@@ -597,6 +614,7 @@ class NewsActivity : Activity() {
         lessonBox.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(4)
         })
+        placeMeanings()
         loadSentUnits(l, o)
 
         val words = o.optJSONArray("words") ?: JSONArray()
@@ -628,6 +646,112 @@ class NewsActivity : Activity() {
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)).apply { topMargin = dp(10) })
         }
         footer()
+    }
+
+    /* ---------- Translation over, under or hidden ---------- */
+
+    // 0 = translation over each sentence (as in a bilingual reader), 1 = under it, 2 = original only.
+    private val VIEW_ABOVE = 0
+    private val VIEW_BELOW = 1
+    private val VIEW_ORIGINAL = 2
+    private var viewMode: Int
+        get() = prefs.getInt("lesson_view", VIEW_ABOVE)
+        set(v) { prefs.edit().putInt("lesson_view", v).apply() }
+    private val sentBlocks = ArrayList<LinearLayout>()
+    private val meaningViews = ArrayList<TextView?>()
+    private var viewChips: LinearLayout? = null
+
+    private fun renderViewChips() {
+        val row = viewChips ?: return
+        row.removeAllViews()
+        fun chip(label: String, mode: Int) = TextView(this).apply {
+            val on = viewMode == mode
+            textSize = 13.5f
+            setTextColor(if (on) Color.WHITE else Ui.PRIMARY_DARK)
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = Ui.pressable(context, if (on) Ui.PRIMARY else Ui.PRIMARY_SOFT, 18, 0)
+            text = label
+            Ui.iconize(this)
+            setOnClickListener {
+                if (viewMode == mode) return@setOnClickListener
+                viewMode = mode
+                renderViewChips()
+                placeMeanings()
+                current.takeIf { it >= 0 }?.let { c -> sentViews.getOrNull(c)?.let { v -> lessonPage.post { followSentence(v) } } }
+            }
+        }
+        row.addView(chip(StudyText.t("view_above"), VIEW_ABOVE), chipParams())
+        row.addView(chip(StudyText.t("view_below"), VIEW_BELOW), chipParams())
+        row.addView(chip(StudyText.t("view_original"), VIEW_ORIGINAL), chipParams())
+    }
+
+    // Puts each translation over or under its sentence (before the picture), or hides it.
+    private fun placeMeanings() {
+        val mode = viewMode
+        sentBlocks.forEachIndexed { i, block ->
+            val m = meaningViews.getOrNull(i)
+            if (m != null) {
+                block.removeView(m)
+                m.visibility = if (mode == VIEW_ORIGINAL) View.GONE else View.VISIBLE
+                if (mode == VIEW_ABOVE) {
+                    block.addView(m, 0)
+                    m.setPadding(dp(6), dp(14), dp(6), 0)
+                } else {
+                    val holder = artHolders.getOrNull(i)?.takeIf { it.parent === block }
+                    block.addView(m, if (holder != null) block.indexOfChild(holder) else block.childCount)
+                    m.setPadding(dp(6), 0, dp(6), dp(4))
+                }
+            }
+        }
+    }
+
+    /* ---------- Cover picture ---------- */
+
+    // The first picture drawn for this part, wide across the top with the book's title on it.
+    // Nothing is shown until a picture exists.
+    private fun coverView(count: Int): View {
+        val a = art!!
+        val frame = android.widget.FrameLayout(this).apply { visibility = View.GONE }
+        val hidden = hiddenArt()
+        artNet.execute {
+            val f = (0 until count).asSequence().map { artFile(a, it) }
+                .firstOrNull { it.exists() && it.length() > 0 && it.name !in hidden }
+            val bmp = f?.let { decodeFit(it, 1280) }
+            runOnUiThread {
+                if (bmp == null || !a.same(art)) return@runOnUiThread
+                frame.addView(android.widget.ImageView(this).apply {
+                    setImageBitmap(bmp)
+                    scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                }, android.widget.FrameLayout.LayoutParams(-1, -1))
+                // Dark fade at the bottom so the title reads on any picture.
+                frame.addView(View(this).apply {
+                    background = android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP,
+                        intArrayOf(Color.argb(170, 0, 0, 0), Color.TRANSPARENT))
+                }, android.widget.FrameLayout.LayoutParams(-1, dp(110), Gravity.BOTTOM))
+                frame.addView(TextView(this).apply {
+                    text = a.book.title
+                    textSize = 22f
+                    setTextColor(Color.WHITE)
+                    Ui.bold(this)
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setShadowLayer(dp(4).toFloat(), 0f, dp(1).toFloat(), Color.argb(160, 0, 0, 0))
+                    setPadding(dp(16), 0, dp(16), dp(14))
+                }, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+                frame.visibility = View.VISIBLE
+            }
+        }
+        frame.clipToOutline = true
+        frame.outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, dp(18).toFloat())
+            }
+        }
+        frame.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(190)).apply {
+            topMargin = dp(8); bottomMargin = dp(4)
+        }
+        return frame
     }
 
     private fun saveWord(w: JSONObject, l: Lang): Boolean {
